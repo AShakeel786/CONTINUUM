@@ -12,6 +12,7 @@
 import { createPrompt, noopOutput } from "../../auth/prompt.js";
 import { spawnCli } from "../../launcher/spawn.js";
 import { NoAuthenticatedAgentError, NoProjectError, ProviderNotAuthenticatedError } from "../../launcher/errors.js";
+import { listRecentSessions } from "../../launcher/session-list.js";
 import { suggestHandoffOnPeakEvent } from "../../pricing/handoff-suggestion.js";
 import type { PricingAwarenessService } from "../../pricing/service.js";
 import type { HandoffManager } from "../../handoff/manager.js";
@@ -95,17 +96,32 @@ export async function runLaunchCommand(args: readonly string[], io: CliIo): Prom
 export async function runResumeCommand(args: readonly string[], io: CliIo): Promise<number> {
   const out = io.out ?? noopOutput();
   const sessionId = args.find((a) => !a.startsWith("-"));
-  if (!sessionId) {
-    out("Usage: continuum resume <sessionId>\n");
+  const providerId = opt(args, "--provider", "-p");
+  // `--recent N` resumes the Nth most-recent session (no id to memorize).
+  const recentN = Number(opt(args, "--recent") ?? "nan");
+
+  const prompt = createPrompt();
+  const { launcher, sessionManager } = await buildLauncherContext({ prompt });
+
+  let targetSessionId = sessionId;
+  if (!targetSessionId && Number.isFinite(recentN)) {
+    const sessions = await listRecentSessions(sessionManager, recentN);
+    targetSessionId = sessions[recentN - 1]?.sessionId;
+  }
+  if (!targetSessionId) {
+    out("Usage: continuum resume <sessionId> [--provider X] | --recent N\n");
     return 2;
   }
-  const { launcher } = await buildLauncherContext({ prompt: createPrompt() });
+
   try {
-    const prep = await launcher.prepareLaunch({ sessionId }, { permissionMode: "safe" });
+    const prep = await launcher.prepareLaunch(
+      { sessionId: targetSessionId, ...(providerId ? { providerId } : {}) },
+      { permissionMode: "safe" },
+    );
     if (prep.stale) {
       out(`⚠️  Stale state detected:\n${prep.staleReasons.map((r) => `  - ${r}`).join("\n")}\n`);
     }
-    if (prep.session) out(`Resuming session: ${prep.session.sessionId}\n`);
+    if (prep.session) out(`Resuming session: ${prep.session.sessionId} [${prep.plan.providerId}]\n`);
     const result = await spawnCli(prep.plan);
     return result.exitCode ?? 0;
   } catch (err) {

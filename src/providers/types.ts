@@ -189,6 +189,14 @@ export interface CliLaunchContext {
     readonly agentId?: string;
     readonly taskId?: string;
   };
+  /**
+   * Inject an env-map for resolving launch secrets (e.g. a proxy user key
+   * stored in a credential backend), instead of the process environment.
+   * Falls back to `process.env` for any var not present here. This is what
+   * lets the launcher source deepseek's proxy key from CredentialManager
+   * rather than requiring a manual `export`.
+   */
+  readonly secrets?: Readonly<Record<string, string>>;
 }
 
 /** A fully-resolved plan for launching a coding-agent CLI against this provider. */

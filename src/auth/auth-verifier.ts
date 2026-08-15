@@ -58,6 +58,23 @@ export class AuthVerifier {
     return { providerId: metadata.providerId, outcome: "ok", detail: `credential present (${credentialName}); resolves via ${metadata.api.envVar} at activation` };
   }
 
+  /** Verifies a proxy-routed provider's proxy user key is stored and non-empty. */
+  async verifyProxyUserKey(metadata: ProviderAuthMetadata): Promise<AuthVerifyResult> {
+    if (!metadata.proxyUserKey?.supported) {
+      return { providerId: metadata.providerId, outcome: "not-supported", detail: "no proxy user key declared for this provider" };
+    }
+    const { credentialManager } = this.options;
+    const has = await credentialManager.hasCredential(metadata.providerId, metadata.proxyUserKey.credentialName);
+    if (!has) {
+      return { providerId: metadata.providerId, outcome: "missing", detail: `no stored proxy user key (${metadata.proxyUserKey.credentialName})` };
+    }
+    const value = await credentialManager.getCredential(metadata.providerId, metadata.proxyUserKey.credentialName);
+    if (!value || value.trim().length === 0) {
+      return { providerId: metadata.providerId, outcome: "invalid", detail: `stored proxy user key is empty` };
+    }
+    return { providerId: metadata.providerId, outcome: "ok", detail: `proxy user key present (${metadata.proxyUserKey.credentialName})` };
+  }
+
   async verifyCli(metadata: ProviderAuthMetadata): Promise<AuthVerifyResult> {
     if (!metadata.cli.supported) {
       return { providerId: metadata.providerId, outcome: "not-supported", detail: "no CLI auth is declared for this provider" };

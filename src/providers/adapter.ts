@@ -18,6 +18,14 @@ import type {
   ProviderProfile,
 } from "./types.js";
 
+function resolveSecretFromCtx(providerId: string, ref: { readonly envVar: string }, ctx?: CliLaunchContext): string {
+  // Prefer the caller-injected secret env (credential backend), falling back
+  // to process.env — so a launcher can source the proxy key from
+  // CredentialManager without a manual export, while a bare adapter still
+  // reads the environment exactly as before.
+  return resolveSecret(providerId, ref, ctx?.secrets ?? process.env);
+}
+
 export function createProviderAdapter(profile: ProviderProfile): ProviderAdapter {
   return new DataDrivenProviderAdapter(profile);
 }
@@ -83,7 +91,7 @@ class DataDrivenProviderAdapter implements ProviderAdapter {
       case "proxy-routed": {
         let token: string;
         try {
-          token = resolveSecret(this.profile.id, launch.proxyUserKeySecret);
+          token = resolveSecretFromCtx(this.profile.id, launch.proxyUserKeySecret, ctx);
         } catch (err) {
           // Re-surface as ProviderAuthError here specifically: at CLI-launch
           // time (unlike a direct API call), a missing proxy key means the

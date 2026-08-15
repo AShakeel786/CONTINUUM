@@ -94,6 +94,11 @@ async function buildDeps(opts: {
   } else {
     await credentialManager.setCredential("deepseek", "api-key", "sk-test");
   }
+  // deepseek is proxy-routed; it also needs a proxy user key to be "usable".
+  // Only set it when deepseek is not explicitly marked unauthenticated.
+  if (status.deepseek !== false) {
+    await credentialManager.setCredential("deepseek", "proxy-user-key", "sk-proxy-test");
+  }
 
   const authMetadata = createDefaultProviderAuthMetadata();
   const authVerifier = new AuthVerifier({ credentialManager, cliAuthManager });

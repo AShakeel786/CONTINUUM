@@ -87,6 +87,24 @@ export class ProviderSetup {
   }
 
   /**
+   * Store a proxy user key (masked prompt) for a proxy-routed provider. A
+   * distinct credential from the provider's own API key — the proxy holds the
+   * upstream key server-side; this key authenticates CONTINUUM to the proxy.
+   * Returns the stored `credential://` reference, or undefined if blank.
+   */
+  async setupProxyUserKey(metadata: ProviderAuthMetadata): Promise<string | undefined> {
+    if (!metadata.proxyUserKey?.supported) {
+      throw new Error(`provider "${metadata.providerId}" does not declare a proxy user key`);
+    }
+    const { credentialManager, prompt } = this.deps;
+    const label = `Proxy user key for ${metadata.providerId} (env var ${metadata.proxyUserKey.envVar})`;
+    const value = await prompt.askSecret(label);
+    const trimmed = value.trim();
+    if (!trimmed) return undefined;
+    return credentialManager.setCredential(metadata.providerId, metadata.proxyUserKey.credentialName, trimmed);
+  }
+
+  /**
    * Remove a provider's stored credential (API) and/or nothing for CLI
    * (CLI logout is surfaced separately via the adapter, not here — removing
    * the config entry is the durable "forget" for CLI auth).
@@ -94,6 +112,9 @@ export class ProviderSetup {
   async remove(metadata: ProviderAuthMetadata): Promise<void> {
     if (metadata.api.supported) {
       await this.deps.credentialManager.deleteCredential(metadata.providerId, API_KEY_CREDENTIAL_NAME);
+    }
+    if (metadata.proxyUserKey?.supported) {
+      await this.deps.credentialManager.deleteCredential(metadata.providerId, metadata.proxyUserKey.credentialName);
     }
   }
 

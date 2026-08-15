@@ -74,10 +74,31 @@ export interface CliAuthUnsupported {
 }
 export type CliAuthDescriptor = CliAuthCapability | CliAuthUnsupported;
 
+/**
+ * A provider whose CLI launch routes through a proxy (e.g. DeepSeek via the
+ * Tencent MemoryProxy) needs a *proxy-local* user key in addition to (or
+ * instead of) its upstream API key. This mirrors the same shape as
+ * `ApiAuthCapability` but names a distinct credential, so it's stored/verified
+ * independently and never conflated with the provider's own API key.
+ */
+export interface ProxyUserKeyCapability {
+  readonly supported: true;
+  /** The env var the proxy-routed launch path expects (matches `ProviderProfile.cliLaunch.proxyUserKeySecret.envVar`). */
+  readonly envVar: string;
+  /** Credential name under the provider id in the credential store. Defaults to "proxy-user-key". */
+  readonly credentialName: string;
+}
+
+export interface ProxyUserKeyUnsupported {
+  readonly supported: false;
+}
+export type ProxyUserKeyDescriptor = ProxyUserKeyCapability | ProxyUserKeyUnsupported;
+
 export interface ProviderAuthMetadata {
   readonly providerId: string;
   readonly api: ApiAuthDescriptor;
   readonly cli: CliAuthDescriptor;
+  readonly proxyUserKey?: ProxyUserKeyDescriptor;
 }
 
 // ── CLI auth behavior ────────────────────────────────────────────────────

@@ -11,4 +11,8 @@ export const deepseekAuthMetadata: ProviderAuthMetadata = {
   providerId: "deepseek",
   api: { supported: true, envVar: "DEEPSEEK_API_KEY" },
   cli: { supported: false },
+  // DeepSeek CLI sessions route through the Tencent MemoryProxy, which needs
+  // a proxy-local user key (distinct from DeepSeek's own API key). Stored as
+  // its own credential so `auth deepseek` can set both without conflating them.
+  proxyUserKey: { supported: true, envVar: "CONTINUUM_TENCENT_PROXY_USER_KEY", credentialName: "proxy-user-key" },
 };

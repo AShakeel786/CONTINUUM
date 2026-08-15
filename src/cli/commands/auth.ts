@@ -49,6 +49,14 @@ export async function runAuthCommand(args: readonly string[], io: CliIo): Promis
     }
     await ctx.configStore.save(setup.applyConfigEntry(config, providerId, result.method, result.credentialUri));
     out(`✓ ${providerId} configured via ${result.method}.\n`);
+
+    // Proxy-routed providers (deepseek) also need the proxy user key, set
+    // through the same masked prompt + secure backend — never a manual env.
+    if (metadata.proxyUserKey?.supported) {
+      const proxyUri = await setup.setupProxyUserKey(metadata);
+      if (proxyUri) out(`✓ ${providerId} proxy user key stored (${metadata.proxyUserKey.credentialName}).\n`);
+      else out(`(no proxy user key provided for ${providerId}; it can be set later)\n`);
+    }
     return 0;
   } catch (err) {
     if (err instanceof UnknownProviderError) {

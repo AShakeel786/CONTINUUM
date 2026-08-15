@@ -65,6 +65,16 @@ export class SessionManager {
     return this.store.load(sessionId);
   }
 
+  /** All session ids on disk (no ordering guarantee — sort by `updatedAt` yourself). */
+  async listSessionIds(): Promise<string[]> {
+    return this.store.listSessionIds();
+  }
+
+  /** Permanently remove a session (used by archive/cleanup). */
+  async deleteSession(sessionId: string): Promise<void> {
+    return this.store.delete(sessionId);
+  }
+
   private async update(sessionId: string, mutate: (session: TaskSession) => TaskSession): Promise<TaskSession> {
     const current = await this.store.load(sessionId);
     const next: TaskSession = { ...mutate(current), revision: current.revision + 1, updatedAt: now() };

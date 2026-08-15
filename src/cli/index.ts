@@ -22,6 +22,7 @@ import { runAuthCommand } from "./commands/auth.js";
 import { runDoctorCommand } from "./commands/doctor.js";
 import { runProjectCommand } from "./commands/project.js";
 import { runLaunchCommand, runResumeCommand, runHandoffCommand } from "./commands/launch.js";
+import { runSessionsCommand } from "./commands/sessions.js";
 import type { PromptOutput } from "../auth/prompt.js";
 
 export interface CliIo {
@@ -63,6 +64,8 @@ export async function main(argv: readonly string[]): Promise<number> {
       return runResumeCommand(rest, io);
     case "handoff":
       return runHandoffCommand(rest, io);
+    case "sessions":
+      return runSessionsCommand(rest, io);
     default:
       io.out?.(`Unknown command "${command}".\n`);
       printHelp(io);
@@ -86,6 +89,7 @@ function printHelp(io: CliIo): void {
       "  launch [<proj>]   Launch a task (resolve project → provider → session)",
       "  resume <session>  Resume an existing session (stale-worktree safe)",
       "  handoff <session> Hand off to an authenticated agent (never auto-selects)",
+      "  sessions          List/archive recent sessions",
       "  --version         Print the version",
       "  --help            Show this help",
       "",

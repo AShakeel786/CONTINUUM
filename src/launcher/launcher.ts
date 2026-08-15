@@ -111,6 +111,14 @@ export class Launcher {
     if (metadata.api.supported) {
       const has = await this.deps.credentialManager.hasCredential(adapter.profile.id, "api-key");
       if (!has) return { usable: false, reason: `${adapter.profile.id} has no stored API key` };
+      // Proxy-routed providers additionally need the proxy user key (unless an
+      // env var already provides it).
+      if (metadata.proxyUserKey?.supported) {
+        const hasProxy =
+          (await this.deps.credentialManager.hasCredential(adapter.profile.id, metadata.proxyUserKey.credentialName)) ||
+          !!process.env[metadata.proxyUserKey.envVar];
+        if (!hasProxy) return { usable: false, reason: `${adapter.profile.id} has no proxy user key (run "continuum auth ${adapter.profile.id}")` };
+      }
       return { usable: true };
     }
     return { usable: false, reason: `${adapter.profile.id} declares no usable auth` };
@@ -138,10 +146,17 @@ export class Launcher {
 
     // Resume: keep the session's active provider unless an explicit override
     // is given (e.g. a handoff to a different agent).
-    const providerId =
+    let providerId =
       target.providerId ??
       existingSession?.activeProvider.providerId ??
       project.defaultProvider;
+
+    // First-launch with no explicit provider and no default: prompt from the
+    // *configured + authenticated* providers (never auto-select).
+    if (!providerId && !existingSession) {
+      providerId = await this.promptForProvider();
+      if (!providerId) throw new NoAuthenticatedAgentError([]);
+    }
     if (!providerId) throw new NoAuthenticatedAgentError([]); // no default + none chosen
     const adapter = this.adapterFor(providerId);
     const metadata = this.deps.authMetadata.get(providerId);
@@ -168,6 +183,22 @@ export class Launcher {
         const cmp = compareGitFingerprints(session.git, currentGit);
         stale = cmp.stale;
         staleReasons = cmp.reasons;
+      }
+      // Provider-change-on-resume: route through normal handoff semantics —
+      // record the transition metadata and update activeProvider, exactly the
+      // same state HandoffManager writes, so it never looks like a fresh task
+      // and the receipt agent sees a "continue, don't re-audit" prompt. A
+      // same-provider resume is a no-op (no fake handoff).
+      if (target.providerId && target.providerId !== session.activeProvider.providerId) {
+        const from = session.activeProvider;
+        const to: ProviderRef = { providerId, model };
+        await this.deps.sessionManager.recordHandoff(session.sessionId, {
+          handoffId: randomUUID(),
+          fromProvider: from,
+          toProvider: to,
+          at: new Date().toISOString(),
+        });
+        session = await this.deps.sessionManager.setActiveProvider(session.sessionId, to);
       }
     } else {
       const goal = target.taskGoal ?? "(no explicit goal supplied)";
@@ -214,7 +245,10 @@ export class Launcher {
     const rendered = renderContextForProvider(budget.envelope, adapter);
 
     // Build the CLI launch plan (auth/env/session identity), merging resolved credentials.
-    const basePlan = adapter.buildCliLaunchPlan({ workingDir: project.path, modelAlias: project.defaultModel });
+    // Proxy user key (deepseek proxy-routed path) is sourced from the credential
+    // backend, not a manual env var — see ctx.secrets below.
+    const launchCtx = await this.buildLaunchContext(adapter, metadata, project.defaultModel, project.path);
+    const basePlan = adapter.buildCliLaunchPlan(launchCtx);
     const authEnv = metadata.api.supported ? await this.resolveAuthEnvSafely(adapter, metadata) : {};
 
     const plan: LaunchPlan = {
@@ -246,6 +280,12 @@ export class Launcher {
     // rely on their own login and inject nothing.
     const envVar = metadata.api.supported ? metadata.api.envVar : undefined;
     if (!envVar) return {};
+    // Proxy-routed launches do NOT consume the upstream API key — the proxy
+    // holds it server-side. Injecting it into the child env would leak it
+    // unnecessarily (and it's the one credential that must stay out of a
+    // proxy CLI launch). Only the proxy user key (handled separately via
+    // ctx.secrets) belongs in a proxy launch.
+    if (adapter.profile.cliLaunch.kind === "proxy-routed") return {};
     try {
       return await resolveProviderAuthEnv(adapter, this.deps.credentialManager);
     } catch {
@@ -253,10 +293,47 @@ export class Launcher {
     }
   }
 
+  /**
+   * Builds the `CliLaunchContext` for a provider, resolving any launch secret
+   * (the deepseek proxy user key) from the credential backend into
+   * `ctx.secrets`, so `buildCliLaunchPlan` never depends on a manual env var.
+   * Falls back to `process.env` for any secret not in the store (which keeps
+   * backward compatibility with an explicitly-exported key).
+   */
+  private async buildLaunchContext(adapter: ProviderAdapter, metadata: ProviderAuthMetadata, modelAlias: string | undefined, workingDir: string): Promise<import("../providers/types.js").CliLaunchContext> {
+    const secrets: Record<string, string> = {};
+    const launch = adapter.profile.cliLaunch;
+    if (launch.kind === "proxy-routed") {
+      const envVar = launch.proxyUserKeySecret.envVar;
+      const credentialName = metadata.proxyUserKey?.supported ? metadata.proxyUserKey.credentialName : "proxy-user-key";
+      // Try the credential store first (provider-scoped), then process.env.
+      const stored = await this.deps.credentialManager.getCredential(adapter.profile.id, credentialName).catch(() => undefined);
+      if (stored) secrets[envVar] = stored;
+      else if (process.env[envVar]) secrets[envVar] = process.env[envVar]!;
+    }
+    return { workingDir, modelAlias, secrets };
+  }
+
   private async detectProjectOrThrow(cwd?: string): Promise<import("../registry/types.js").ProjectRecord> {
     const dir = cwd ?? process.cwd();
     const detected = await this.deps.projects.detect(dir);
     if (!detected) throw new NoProjectError();
     return detected;
+  }
+
+  /**
+   * Interactive provider selection for first-launch: offers the set of
+   * providers that are both configured and authenticated. Never auto-selects:
+   * a single available provider is still surfaced explicitly (returned only
+   * when it's the sole option and confirmed by the caller is overkill here —
+   * the prompt's answer is what resolves it).
+   */
+  private async promptForProvider(): Promise<string | undefined> {
+    const available = await this.listAuthenticatedProviders();
+    const ids = available.map((a) => a.providerId);
+    if (ids.length === 0) return undefined;
+    if (ids.length === 1) return ids[0];
+    const choice = await this.deps.prompt.ask(`Choose a provider: [${ids.join("/")}]`);
+    return ids.find((id) => id === choice.trim()) ?? ids[0];
   }
 }
