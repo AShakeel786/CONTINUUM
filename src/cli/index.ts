@@ -20,6 +20,8 @@ import { runSetupCommand } from "./commands/setup.js";
 import { runProvidersCommand } from "./commands/providers.js";
 import { runAuthCommand } from "./commands/auth.js";
 import { runDoctorCommand } from "./commands/doctor.js";
+import { runProjectCommand } from "./commands/project.js";
+import { runLaunchCommand, runResumeCommand, runHandoffCommand } from "./commands/launch.js";
 import type { PromptOutput } from "../auth/prompt.js";
 
 export interface CliIo {
@@ -52,6 +54,15 @@ export async function main(argv: readonly string[]): Promise<number> {
       return runAuthCommand(rest, io);
     case "doctor":
       return runDoctorCommand(rest, io);
+    case "project":
+      return runProjectCommand(rest, io);
+    case "launch":
+    case "run":
+      return runLaunchCommand(rest, io);
+    case "resume":
+      return runResumeCommand(rest, io);
+    case "handoff":
+      return runHandoffCommand(rest, io);
     default:
       io.out?.(`Unknown command "${command}".\n`);
       printHelp(io);
@@ -71,6 +82,10 @@ function printHelp(io: CliIo): void {
       "  providers         List providers and their auth state",
       "  auth <provider>   (Re)authenticate one provider  [--remove]",
       "  doctor            Read-only health report",
+      "  project <sub>     Manage projects (add/remove/list/show)",
+      "  launch [<proj>]   Launch a task (resolve project → provider → session)",
+      "  resume <session>  Resume an existing session (stale-worktree safe)",
+      "  handoff <session> Hand off to an authenticated agent (never auto-selects)",
       "  --version         Print the version",
       "  --help            Show this help",
       "",
@@ -79,5 +94,5 @@ function printHelp(io: CliIo): void {
 }
 
 function printVersion(io: CliIo): void {
-  io.out?.("continuum 0.1.0 (Phase 6)\n");
+  io.out?.("continuum 0.1.0 (Phase 7)\n");
 }

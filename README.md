@@ -2,25 +2,40 @@
 
 A multi-agent development runtime: orchestration across agents, seamless mid-task handoff, shared persistent memory, project isolation, prompt/context-caching optimization, and support for Claude Code, DeepSeek, Gemini, and local models — through a common provider and tool layer.
 
-## Status: Phase 6 complete (onboarding & auth)
+## Status: Phase 7 complete (cross-platform launcher)
 
-**Phase 6 turns CONTINUUM into a tool a fresh machine can adopt** — a `continuum` CLI (`setup` / `providers` / `auth` / `doctor`) that walks a new user through credential onboarding, stores secrets in an OS-native backend (macOS Keychain / Windows DPAPI / Linux Secret Service, with an AES-256-GCM encrypted-file fallback) and records only `credential://` references in config — never values. Auth is data-driven (Claude: API + CLI; DeepSeek: API via masked prompt), no provider-specific switches, no manual `.env`/YAML editing, no Windows paths or Tencent project-registry assumptions. See `docs/PHASE_6_ONBOARDING_ARCHITECTURE.md`, `docs/PHASE_6_SECURITY_REPORT.md`, `docs/PHASE_6_VERIFICATION.md`, and `docs/PHASE_7_ENTRY_CRITERIA.md`.
+**Phase 7 makes `continuum` the daily launcher.** A project registry
+(`continuum project add/remove/list/show` — aliases, CWD detection, default
+provider/model) plus a launch flow (`launch` / `resume` / `handoff`) that wires
+the Phase 3–6 systems together without duplicating them: provider + auth,
+Context Manager (+ MemoryCore when available, degraded clearly when not),
+durable session state (with stale-worktree protection on resume), handoff (asks
+which authenticated agent takes over — never auto-selects — and preserves the
+task), and peak-pricing handoff prompts. Cross-platform, no legacy `.ps1`
+launcher, safe permissions by default. See `docs/PHASE_7_LAUNCHER_ARCHITECTURE.md`,
+`docs/PHASE_7_VERIFICATION.md`, and `docs/PHASE_8_ENTRY_CRITERIA.md`.
 
 ## Quick start
 
 ```bash
 npm ci            # install dev + runtime deps
 npm run build     # compile to dist/
-node dist/cli/bin.js setup       # first-run onboarding (masked key entry, backend selection)
-node dist/cli/bin.js providers   # list providers + auth state (never a secret)
-node dist/cli/bin.js auth deepseek  # (re)authenticate one provider; --remove forgets it
-node dist/cli/bin.js doctor      # read-only health report (exit 0 healthy / 1 unhealthy)
+node dist/cli/bin.js setup            # first-run onboarding (masked key entry, backend selection)
+node dist/cli/bin.js project add <name> <path> --provider claude   # register a project
+node dist/cli/bin.js launch [<proj>]  # resolve project → provider → session → spawn
+node dist/cli/bin.js resume <session> # resume (stale-worktree safe)
+node dist/cli/bin.js handoff <session># hand off to an authenticated agent (never auto-selects)
+node dist/cli/bin.js doctor           # read-only health report (exit 0 healthy / 1 unhealthy)
 ```
 
-Credentials live in `~/.continuum/` (or `$CONTINUUM_HOME`); config stores
-references only. On macOS the native Keychain backend is used automatically
-(read `PHASE_6_SECURITY_REPORT.md` for the one documented `security`-CLI
-argv limitation).
+Credentials live in `~/.continuum/` (or `$CONTINUUM_HOME`); config and project
+registry store references only. On macOS the native Keychain backend is used
+automatically (read `PHASE_6_SECURITY_REPORT.md` for the one documented
+`security`-CLI argv limitation).
+
+## Status: Phase 6 complete (onboarding & auth)
+
+**Phase 6 turns CONTINUUM into a tool a fresh machine can adopt** — a `continuum` CLI (`setup` / `providers` / `auth` / `doctor`) that walks a new user through credential onboarding, stores secrets in an OS-native backend (macOS Keychain / Windows DPAPI / Linux Secret Service, with an AES-256-GCM encrypted-file fallback) and records only `credential://` references in config — never values. Auth is data-driven (Claude: API + CLI; DeepSeek: API via masked prompt), no provider-specific switches, no manual `.env`/YAML editing, no Windows paths or Tencent project-registry assumptions. See `docs/PHASE_6_ONBOARDING_ARCHITECTURE.md`, `docs/PHASE_6_SECURITY_REPORT.md`, `docs/PHASE_6_VERIFICATION.md`, and `docs/PHASE_7_ENTRY_CRITERIA.md`.
 
 ## Status: Phase 5 complete (durable session state + agent handoff prototype)
 
@@ -60,6 +75,9 @@ Read the docs:
 | [`docs/PHASE_6_SECURITY_REPORT.md`](docs/PHASE_6_SECURITY_REPORT.md) | Phase 6 security posture — every protection and limit stated plainly, including the one macOS `security`-CLI argv exception. |
 | [`docs/PHASE_6_VERIFICATION.md`](docs/PHASE_6_VERIFICATION.md) | Every test the brief required, what covers it, the live macOS Keychain disposable check, and what was NOT (and why). |
 | [`docs/PHASE_7_ENTRY_CRITERIA.md`](docs/PHASE_7_ENTRY_CRITERIA.md) | What Phase 6 revealed but deliberately didn't build, decisions needed from you, and the recommended Phase 7 starting point. |
+| [`docs/PHASE_7_LAUNCHER_ARCHITECTURE.md`](docs/PHASE_7_LAUNCHER_ARCHITECTURE.md) | The cross-platform launcher design: project registry, launch/resume/handoff flow, safe-by-default permissions, MemoryCore degrade, and the one documented DeepSeek-proxy-key seam. |
+| [`docs/PHASE_7_VERIFICATION.md`](docs/PHASE_7_VERIFICATION.md) | Every test the brief required, what covers it, the CLI smoke test, and what was NOT (and why). |
+| [`docs/PHASE_8_ENTRY_CRITERIA.md`](docs/PHASE_8_ENTRY_CRITERIA.md) | What Phase 7 revealed but deliberately didn't build, decisions needed from you, and the recommended Phase 8 starting point (MCP wrapper). |
 | [`docs/PRICING_AWARENESS.md`](docs/PRICING_AWARENESS.md) | The Phase 5 addendum: config-driven peak/off-peak pricing windows, a real boundary bug found and fixed via testing, deduplicated notifications, and the non-automatic handoff-suggestion hook. |
 
 ## Relationship to Tencent
