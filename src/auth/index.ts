@@ -1,0 +1,18 @@
+export * from "./types.js";
+export * from "./errors.js";
+export { CredentialManager, credentialKeyFor, credentialUriFor, parseCredentialUri } from "./credential-manager.js";
+export * from "./backends/detect.js";
+export { MacosKeychainCredentialBackend } from "./backends/macos-keychain.js";
+export { WindowsDpapiCredentialBackend } from "./backends/windows-dpapi.js";
+export { LinuxSecretServiceCredentialBackend } from "./backends/linux-secret-service.js";
+export { EncryptedFileCredentialBackend } from "./backends/encrypted-file.js";
+export { createCliAuthAdapter } from "./cli-auth-adapter.js";
+export { CliAuthManager } from "./cli-auth-manager.js";
+export { createDefaultProviderAuthMetadata, createDefaultCliAuthManager } from "./provider-auth/index.js";
+export { envVarForProviderAuth, resolveProviderAuthEnv } from "./activation.js";
+export { ProviderSetup } from "./provider-setup.js";
+export { AuthVerifier } from "./auth-verifier.js";
+export { SetupWizard } from "./setup-wizard.js";
+export { Doctor } from "./doctor.js";
+export { createPrompt, noopOutput } from "./prompt.js";
+export type { Prompt, PromptOutput } from "./prompt.js";

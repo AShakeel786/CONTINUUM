@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "description": "CONTINUUM: multi-agent development runtime — Phase 3 provider-adapter foundation.",
+  "bin": {
+    "continuum": "./dist/cli/bin.js"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",

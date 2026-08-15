@@ -2,6 +2,26 @@
 
 A multi-agent development runtime: orchestration across agents, seamless mid-task handoff, shared persistent memory, project isolation, prompt/context-caching optimization, and support for Claude Code, DeepSeek, Gemini, and local models — through a common provider and tool layer.
 
+## Status: Phase 6 complete (onboarding & auth)
+
+**Phase 6 turns CONTINUUM into a tool a fresh machine can adopt** — a `continuum` CLI (`setup` / `providers` / `auth` / `doctor`) that walks a new user through credential onboarding, stores secrets in an OS-native backend (macOS Keychain / Windows DPAPI / Linux Secret Service, with an AES-256-GCM encrypted-file fallback) and records only `credential://` references in config — never values. Auth is data-driven (Claude: API + CLI; DeepSeek: API via masked prompt), no provider-specific switches, no manual `.env`/YAML editing, no Windows paths or Tencent project-registry assumptions. See `docs/PHASE_6_ONBOARDING_ARCHITECTURE.md`, `docs/PHASE_6_SECURITY_REPORT.md`, `docs/PHASE_6_VERIFICATION.md`, and `docs/PHASE_7_ENTRY_CRITERIA.md`.
+
+## Quick start
+
+```bash
+npm ci            # install dev + runtime deps
+npm run build     # compile to dist/
+node dist/cli/bin.js setup       # first-run onboarding (masked key entry, backend selection)
+node dist/cli/bin.js providers   # list providers + auth state (never a secret)
+node dist/cli/bin.js auth deepseek  # (re)authenticate one provider; --remove forgets it
+node dist/cli/bin.js doctor      # read-only health report (exit 0 healthy / 1 unhealthy)
+```
+
+Credentials live in `~/.continuum/` (or `$CONTINUUM_HOME`); config stores
+references only. On macOS the native Keychain backend is used automatically
+(read `PHASE_6_SECURITY_REPORT.md` for the one documented `security`-CLI
+argv limitation).
+
 ## Status: Phase 5 complete (durable session state + agent handoff prototype)
 
 Phase 1 audited the existing [TencentDB Agent Memory](https://github.com/Tencent/TencentDB-Agent-Memory) deployment at `C:\Users\arsla\Documents\Ai-tools\TencentDB-Agent-Memory` — the system currently used to launch Claude Code / DeepSeek / Codex sessions for 8 real projects — to determine what becomes CONTINUUM's memory/context infrastructure layer, what needs refactoring, and what's missing entirely. Phase 2 (+ 2.1) then closed the security/stability findings that audit surfaced, rebuilt and redeployed the affected Docker images, and verified the real live deployment still works with zero regressions. Phase 3 built the provider registry (`src/providers/`), proven with Claude and DeepSeek. Phase 4 built the context pipeline (`src/context/`, `src/token/`, `src/cache/`, `src/rendering/`) everything else depends on, plus a tested harness proving native Claude can receive real Tencent Memory (`src/native-claude/`).
@@ -36,6 +56,10 @@ Read the docs:
 | [`docs/PHASE_5_HANDOFF_REPORT.md`](docs/PHASE_5_HANDOFF_REPORT.md) | The handoff flow end to end — synchronous flush semantics, what's in a `HandoffPackage`, why the resume block is un-droppable "for free," and the no-auto-pick provider selection guarantee. |
 | [`docs/PHASE_5_VERIFICATION.md`](docs/PHASE_5_VERIFICATION.md) | Every test the brief required, what covers it, the Phase 4 baseline commit detail, and the Tencent regression check. |
 | [`docs/PHASE_6_ENTRY_CRITERIA.md`](docs/PHASE_6_ENTRY_CRITERIA.md) | What Phase 5 revealed but deliberately didn't build, decisions needed from you, and the recommended Phase 6 starting point (MCP wrapper). |
+| [`docs/PHASE_6_ONBOARDING_ARCHITECTURE.md`](docs/PHASE_6_ONBOARDING_ARCHITECTURE.md) | The onboarding/auth design: credential backends, `credential://` references, masked prompts, the `continuum` CLI, and the fresh-machine guarantee. |
+| [`docs/PHASE_6_SECURITY_REPORT.md`](docs/PHASE_6_SECURITY_REPORT.md) | Phase 6 security posture — every protection and limit stated plainly, including the one macOS `security`-CLI argv exception. |
+| [`docs/PHASE_6_VERIFICATION.md`](docs/PHASE_6_VERIFICATION.md) | Every test the brief required, what covers it, the live macOS Keychain disposable check, and what was NOT (and why). |
+| [`docs/PHASE_7_ENTRY_CRITERIA.md`](docs/PHASE_7_ENTRY_CRITERIA.md) | What Phase 6 revealed but deliberately didn't build, decisions needed from you, and the recommended Phase 7 starting point. |
 | [`docs/PRICING_AWARENESS.md`](docs/PRICING_AWARENESS.md) | The Phase 5 addendum: config-driven peak/off-peak pricing windows, a real boundary bug found and fixed via testing, deduplicated notifications, and the non-automatic handoff-suggestion hook. |
 
 ## Relationship to Tencent
