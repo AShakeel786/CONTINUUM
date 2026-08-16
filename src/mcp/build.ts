@@ -65,6 +65,7 @@ function buildRetrievalTools(): RegisteredTool[] {
         description: "Retrieve the complete original output previously retained by the tool-output optimizer, addressed by a tool-output://<id> reference.",
         inputSchema: { type: "object", properties: { id: { type: "string", description: "The raw-output id (from a tool-output://<id> reference)." } }, required: ["id"], additionalProperties: false },
         access: "read",
+        cacheScope: "global",
       },
       handler: async (args) => {
         const id = typeof args.id === "string" ? args.id : "";

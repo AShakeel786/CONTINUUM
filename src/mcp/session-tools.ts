@@ -32,6 +32,7 @@ export function buildSessionTools(deps: SessionToolDeps): RegisteredTool[] {
       definition: {
         name: "session_state",
         description: "Get the current state of a CONTINUUM task session by id: goal, status, active provider, completed/remaining work, decisions, relevant files, and stale-worktree info. Read-only.",
+        cacheScope: "session" as const,
         inputSchema: {
           type: "object",
           properties: { sessionId: { type: "string", description: "The task session id." } },
@@ -84,6 +85,7 @@ export function buildSessionTools(deps: SessionToolDeps): RegisteredTool[] {
       definition: {
         name: "project_state",
         description: "Get a registered project's metadata: name, path, aliases, default provider/model. Read-only.",
+        cacheScope: "project" as const,
         inputSchema: {
           type: "object",
           properties: { project: { type: "string", description: "Project name, alias, or id." } },
@@ -107,6 +109,7 @@ export function buildSessionTools(deps: SessionToolDeps): RegisteredTool[] {
       definition: {
         name: "project_list",
         description: "List all registered projects (name, path, default provider). Read-only.",
+        cacheScope: "project" as const,
         inputSchema: { type: "object", properties: {}, additionalProperties: false },
         access: "read",
       },

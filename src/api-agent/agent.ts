@@ -11,6 +11,8 @@ import type { ToolRegistry } from "../mcp/tools.js";
 import type { ApiRunner } from "./runner.js";
 import { AgentLoopError, DEFAULT_AGENT_LIMITS, type AgentLoopLimits, type AgentMessage, type AgentTurnResult } from "./types.js";
 import type { OptimizedToolOutput } from "../tool-output/types.js";
+import { ToolResultCache, computeCacheKey, type ToolScopeProvider } from "../tool-cache/tool-cache.js";
+import type { ToolCacheScope } from "../mcp/tools.js";
 
 export interface AgentLoopDeps {
   readonly runner: ApiRunner;
@@ -21,6 +23,10 @@ export interface AgentLoopDeps {
   readonly onEvent?: (event: string, detail: string) => void;
   /** Optional Tool Output Optimizer; when absent, tool results pass through unchanged. */
   readonly optimizeOutput?: (toolName: string, text: string) => OptimizedToolOutput;
+  /** Optional deterministic tool-result cache; when absent, no caching. */
+  readonly cache?: ToolResultCache;
+  /** Scope-fingerprint provider for the cache (project HEAD/dirty, session revision). */
+  readonly scopeProvider?: ToolScopeProvider;
 }
 
 export interface AgentLoopResult {
@@ -54,14 +60,62 @@ export async function runAgentLoop(messages: readonly AgentMessage[], deps: Agen
     // Execute each tool call through the MCP registry; never invent results.
     for (const tc of turn.toolCalls) {
       toolCalls += 1;
-      const resultText = await executeTool(deps.tools, tc.name, tc.arguments);
-      const finalText = applyOutputOptimizer(tc.name, resultText, deps.optimizeOutput, deps.onEvent);
+      const finalText = await resolveToolText(deps, tc.name, tc.arguments);
       conversation.push({ role: "tool", toolCallId: tc.id, content: finalText });
       deps.onEvent?.("tool", `${tc.name} → ${finalText.slice(0, 120)}`);
     }
   }
 
   throw new AgentLoopError("max-iterations", `agent loop exceeded ${limits.maxIterations} iterations`);
+}
+
+/** Cache-aware tool resolution: check cache (fail-safe), else execute + optimize + store. */
+async function resolveToolText(deps: AgentLoopDeps, name: string, argsJson: string): Promise<string> {
+  const scope = deps.tools.definition(name)?.cacheScope;
+  if (deps.cache && scope && deps.scopeProvider) {
+    const fingerprint = await scopeFingerprint(scope, argsJson, deps.scopeProvider);
+    const key = computeCacheKey(name, argsJson, scope, fingerprint);
+    if (key !== undefined) {
+      const hit = deps.cache.get(key);
+      if (hit !== undefined) {
+        deps.cache.telemetry.hits += 1;
+        deps.cache.telemetry.tokensAvoided += deps.cache.tokensSavedForKey(key);
+        deps.onEvent?.("cache", `hit ${name}`);
+        return hit;
+      }
+      deps.cache.telemetry.misses += 1;
+      const raw = await executeTool(deps.tools, name, argsJson);
+      const optimized = deps.optimizeOutput ? deps.optimizeOutput(name, raw) : plain(raw);
+      const finalText = optimized.rawRef ? `${optimized.text}\n[raw output retained: ${optimized.rawRef}]` : optimized.text;
+      deps.cache.set(key, finalText, optimized.telemetry.tokensSaved);
+      deps.onEvent?.("cache", `miss ${name}`);
+      return finalText;
+    }
+  }
+  // Uncached path (unchanged).
+  const raw = await executeTool(deps.tools, name, argsJson);
+  return applyOutputOptimizer(name, raw, deps.optimizeOutput, deps.onEvent);
+}
+
+function plain(text: string): OptimizedToolOutput {
+  return { text, telemetry: { originalBytes: 0, optimizedBytes: 0, originalTokens: 0, optimizedTokens: 0, tokensSaved: 0, percentSaved: 0, optimizer: "passthrough", rawRetained: false } };
+}
+
+async function scopeFingerprint(scope: ToolCacheScope, argsJson: string, provider: ToolScopeProvider): Promise<string | undefined> {
+  if (scope === "global") return "global";
+  if (scope === "project") return provider.projectFingerprint ? await provider.projectFingerprint() : undefined;
+  if (scope === "session") {
+    let sid: string | undefined;
+    try {
+      const a = JSON.parse(argsJson) as Record<string, unknown>;
+      sid = typeof a.sessionId === "string" ? a.sessionId : undefined;
+    } catch {
+      sid = undefined;
+    }
+    if (!sid || !provider.sessionFingerprint) return undefined;
+    return await provider.sessionFingerprint(sid);
+  }
+  return undefined;
 }
 
 async function executeTool(tools: ToolRegistry, name: string, argsJson: string): Promise<string> {

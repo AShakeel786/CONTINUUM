@@ -19,7 +19,10 @@ import type { LaunchPreparation } from "../../launcher/types.js";
 import type { ProviderRegistry } from "../../providers/registry.js";
 import type { PricingAwarenessService } from "../../pricing/service.js";
 import type { HandoffManager } from "../../handoff/manager.js";
+import type { SessionManager } from "../../session/manager.js";
 import type { CliIo } from "../index.js";
+import { ToolResultCache } from "../../tool-cache/tool-cache.js";
+import { makeScopeProvider } from "../../tool-cache/scope.js";
 import { buildLauncherContext } from "./launcher-context.js";
 import { HealthDoctor } from "../../health/doctor.js";
 import { DEFAULT_OPTIONS, DEFAULT_POLICY, liveRuntime, scanStaleProviderProcesses } from "../../health/adapters.js";
@@ -107,12 +110,14 @@ async function recordNativeSessionAfterLaunch(launcher: Launcher, prep: LaunchPr
  * Carry a prepared launch: API providers run the generic CONTINUUM API agent;
  * CLI providers spawn their native binary (with native-session capture).
  */
-async function launchPrepared(ctx: { launcher: Launcher; providers: ProviderRegistry; dataDir: string }, prep: LaunchPreparation, out: (s: string) => void): Promise<number> {
+async function launchPrepared(ctx: { launcher: Launcher; providers: ProviderRegistry; sessionManager: SessionManager; dataDir: string }, prep: LaunchPreparation, out: (s: string) => void): Promise<number> {
   if (prep.runtimeKind === "api") {
     const adapter = ctx.providers.get(prep.providerRef.providerId);
     const tools = await buildToolRegistry({ dataDir: ctx.dataDir });
+    const cache = new ToolResultCache({}, join(ctx.dataDir, "tool-cache"));
+    const scopeProvider = makeScopeProvider({ projectPath: prep.project.path, sessionManager: ctx.sessionManager });
     try {
-      const result = await runApiAgent({ adapter, tools, rendered: prep.rendered, query: prep.session?.taskGoal ?? "", onOutput: out });
+      const result = await runApiAgent({ adapter, tools, rendered: prep.rendered, query: prep.session?.taskGoal ?? "", onOutput: out, cache, scopeProvider });
       if (result.finalContent) out(`\n${result.finalContent}\n`);
       return 0;
     } catch (err) {
@@ -139,7 +144,7 @@ async function ensureMcpRegistration(): Promise<void> {
 export async function runLaunchCommand(args: readonly string[], io: CliIo): Promise<number> {
   const out = io.out ?? noopOutput();
   const prompt = createPrompt();
-  const { launcher, pricing, handoffManager, providers, dataDir } = await buildLauncherContext({ prompt });
+  const { launcher, pricing, handoffManager, providers, sessionManager, dataDir } = await buildLauncherContext({ prompt });
 
   const projectKey = args.find((a) => !a.startsWith("-"));
   const providerId = opt(args, "--provider", "-p");
@@ -172,7 +177,7 @@ export async function runLaunchCommand(args: readonly string[], io: CliIo): Prom
     }
 
     await ensureMcpRegistration();
-    return launchPrepared({ launcher, providers, dataDir }, prep, out);
+    return launchPrepared({ launcher, providers, sessionManager, dataDir }, prep, out);
   } catch (err) {
     if (err instanceof NoProjectError || err instanceof ProviderNotAuthenticatedError || err instanceof NoAuthenticatedAgentError) {
       out(`${err.message}\n`);
@@ -213,7 +218,7 @@ export async function runResumeCommand(args: readonly string[], io: CliIo): Prom
     if (prep.session) out(`Resuming session: ${prep.session.sessionId} [${prep.plan.providerId}]\n`);
     if (prep.nativeResume) out(`ℹ️  Resuming ${prep.nativeResume.providerId} native session ${prep.nativeResume.nativeSessionId}\n`);
     await ensureMcpRegistration();
-    return launchPrepared({ launcher, providers, dataDir }, prep, out);
+    return launchPrepared({ launcher, providers, sessionManager, dataDir }, prep, out);
   } catch (err) {
     if (err instanceof NoAuthenticatedAgentError || err instanceof ProviderNotAuthenticatedError) {
       out(`${err.message}\n`);
@@ -256,7 +261,7 @@ export async function runHandoffCommand(args: readonly string[], io: CliIo): Pro
     // Launch the receiving agent in the same project, continuing the session.
     const prep = await launcher.prepareLaunch({ sessionId, providerId: chosenId }, { permissionMode: "safe" });
     await ensureMcpRegistration();
-    return launchPrepared({ launcher, providers, dataDir }, prep, out);
+    return launchPrepared({ launcher, providers, sessionManager, dataDir }, prep, out);
   } catch (err) {
     if (err instanceof NoAuthenticatedAgentError) {
       out(`${err.message}\n`);

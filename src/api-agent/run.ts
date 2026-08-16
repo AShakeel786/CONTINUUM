@@ -12,6 +12,7 @@ import { createApiRunner, type FetchLike } from "./runner.js";
 import { runAgentLoop } from "./agent.js";
 import { optimizeToolOutput } from "../tool-output/optimizer.js";
 import type { OptimizedToolOutput } from "../tool-output/types.js";
+import type { ToolResultCache, ToolScopeProvider } from "../tool-cache/tool-cache.js";
 import type { AgentLoopLimits, AgentMessage } from "./types.js";
 
 export interface RunApiAgentDeps {
@@ -25,6 +26,10 @@ export interface RunApiAgentDeps {
   readonly fetch?: FetchLike;
   /** Tool Output Optimizer; default applies the deterministic optimizer. Pass a no-op to disable. */
   readonly optimizeOutput?: (toolName: string, text: string) => OptimizedToolOutput;
+  /** Deterministic tool-result cache; when absent, no caching. */
+  readonly cache?: ToolResultCache;
+  /** Scope-fingerprint provider for the cache. */
+  readonly scopeProvider?: ToolScopeProvider;
 }
 
 export interface RunApiAgentResult {
@@ -57,6 +62,8 @@ export async function runApiAgent(deps: RunApiAgentDeps): Promise<RunApiAgentRes
     tools: deps.tools,
     limits: deps.limits,
     optimizeOutput,
+    cache: deps.cache,
+    scopeProvider: deps.scopeProvider,
     onEvent: (event, detail) => deps.onOutput?.(`[${event}] ${detail}\n`),
   });
   return { finalContent: result.finalContent, iterations: result.iterations, toolCalls: result.toolCalls };

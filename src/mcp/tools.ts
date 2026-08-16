@@ -9,12 +9,21 @@
 
 export type ToolAccess = "read" | "write";
 
+/**
+ * Cache eligibility for the deterministic tool-result cache. Absent = never
+ * cached. `global` = deterministic forever (keyed on args only); `project` =
+ * keyed on repo HEAD/dirty fingerprint; `session` = keyed on session revision.
+ * Write tools and mutable memory tools must never set this.
+ */
+export type ToolCacheScope = "project" | "session" | "global";
+
 export interface ToolDefinition {
   readonly name: string;
   readonly description: string;
   /** Open-world JSON Schema describing the tool's arguments (a plain object). */
   readonly inputSchema: Record<string, unknown>;
   readonly access: ToolAccess;
+  readonly cacheScope?: ToolCacheScope;
 }
 
 export interface ToolResult {
@@ -54,6 +63,11 @@ export class ToolRegistry {
     const tool = this.tools.get(name);
     if (!tool) throw new UnknownToolError(name, this.list().map((t) => t.name));
     return tool.handler(args);
+  }
+
+  /** Look up a tool's definition by name (for cache-eligibility). */
+  definition(name: string): ToolDefinition | undefined {
+    return this.tools.get(name)?.definition;
   }
 }
 
