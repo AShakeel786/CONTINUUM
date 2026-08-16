@@ -78,3 +78,28 @@ No GPL/LGPL/AGPL/MPL, no BUSL/source-available, no "no-license"/UNKNOWN upstream
 No copied/adapted third-party source exists in CONTINUUM; the single relevant upstream is MIT;
 all dependencies are permissive. Both MIT and Apache-2.0 safely cover the distribution.
 Recommendation: **MIT** (simplest, and matches the one relevant upstream's own license).
+
+---
+
+## Addendum — token-efficiency research references (no source incorporated)
+
+During the token-efficiency phases, the following open-source projects were studied as
+*references only*. Their source was **not** incorporated into CONTINUUM; the relevant ideas were
+independently reimplemented in TypeScript. They are listed for acknowledgement completeness and
+impose **no license obligations** on CONTINUUM (MIT).
+
+| Project | License | Relationship |
+|---|---|---|
+| rtk-ai/rtk | Apache-2.0 | independently reimplemented concept (tool-output compression) |
+| Aider-AI/aider | Apache-2.0 | independently reimplemented concept (repo map) |
+| headroomlabs-ai/headroom | Apache-2.0 | research/reference only |
+| zilliztech/GPTCache | MIT | research/reference only (semantic caching evaluated, rejected) |
+| open-compress/claw-compactor | MIT | research/reference only |
+| microsoft/LLMLingua | MIT | research/reference only (lossy compression evaluated, rejected) |
+| zilliztech/claude-context | MIT | research/reference only |
+| ojuschugh1/sqz | Elastic License 2.0 | research/idea reference only — **no source incorporated** |
+| Opencode-DCP/opencode-dynamic-context-pruning | AGPL-3.0 | research/idea reference only — **no source incorporated** |
+
+The two restrictive-licensed projects (`sqz` ELv2, `opencode-dcp` AGPL-3.0) were read for ideas
+only; no code or derived structure was taken, so neither imposes copyleft or source-available
+obligations on CONTINUUM's MIT distribution.

@@ -1,14 +1,67 @@
 # CONTINUUM
 
-A multi-agent development runtime. CONTINUUM lets you run several coding agents —
-Claude Code, DeepSeek, Codex, or any OpenAI/Anthropic-compatible API — from one
-interface, and hand a task from one agent to another mid-flight without losing
-context. It adds durable task/session state, a provider-independent MCP tool
-server, optional persistent memory, and a `doctor` health command on top.
+**Provider-neutral AI development continuity and token-efficiency infrastructure.**
+
+CONTINUUM lets you run several coding agents — Claude Code, DeepSeek, Codex, or any
+OpenAI/Anthropic-compatible API — from one interface, and hand a task from one agent to
+another mid-flight without losing context. You aren't restricted to the providers we use:
+CONTINUUM ships bundled providers *plus* user-defined compatible CLI/API providers, so you
+can configure Claude, Codex, DeepSeek, Grok, GLM, or other compatible systems.
+
+Major capabilities:
+
+- persistent memory / context
+- shorter repeated prompts
+- cross-provider agent handoff
+- native CLI session continuity
+- arbitrary provider manifests
+- API-agent runtime
+- MCP integration
+- health / recovery
+- repo intelligence
+- tool-output optimization
+- deterministic tool-result caching
+- reversible context pruning
+
+Measured on a representative CONTINUUM coding task: **6,167 → 4,734** estimated model input
+tokens (**−23.2%**), tool executions **16 → 10**, with **no measured fidelity regression**.
+That is a measured representative benchmark, **not** a universal savings guarantee.
 
 > **Beta.** This is `v0.1.0-beta.1`. It works on macOS (most-tested), with
 > Windows/Linux credential backends implemented but less exercised. See
 > [Beta limitations](#beta-limitations).
+
+## Why CONTINUUM exists
+
+CONTINUUM exists because we realized that many people building with AI are ultimately
+trying to solve the same problems.
+
+Across GitHub, some excellent solutions already existed — but the ideas were scattered
+across separate projects. One project approached persistent memory well, another reduced
+tool-output tokens, another improved repository context, while others explored caching,
+context pruning, prompt efficiency, or related problems.
+
+Instead of pretending those ideas did not exist, we studied them, learned from them,
+credited them, and independently implemented the concepts that made sense inside one
+common architecture.
+
+CONTINUUM is our attempt to turn those scattered ideas into one practical product: a
+provider-neutral environment where people can use the AI models and tools they prefer,
+preserve useful memory and task state, switch agents without starting over, keep prompts
+shorter, and reduce unnecessary token usage.
+
+We believe open source moves forward when good ideas are acknowledged, improved,
+combined, and shared again. The projects that influenced CONTINUUM are openly credited
+in [Projects we learned from](#projects-we-learned-from) and in our provenance documentation.
+
+The goal is simple:
+
+- Stop making AI start over.
+- Stop repeatedly explaining the same project.
+- Stop wasting tokens rebuilding context the system could have remembered.
+
+CONTINUUM's contribution is the unified product and architecture — not a claim that every
+underlying idea originated here.
 
 ## Quick start
 
@@ -110,6 +163,31 @@ one measured task, not a universal guarantee.
 ## License
 
 MIT — see [`LICENSE`](LICENSE). Third-party attributions are in [`THIRD_PARTY_NOTICES`](THIRD_PARTY_NOTICES).
+
+## Projects we learned from
+
+CONTINUUM's implementation is our own unified architecture; several open-source projects
+influenced the concepts we studied and independently reimplemented. We credit them here
+openly (the full, precise provenance analysis is in
+[`docs/THIRD_PARTY_PROVENANCE_AUDIT.md`](docs/THIRD_PARTY_PROVENANCE_AUDIT.md) and
+[`docs/LICENSE_COMPATIBILITY_MATRIX.md`](docs/LICENSE_COMPATIBILITY_MATRIX.md)).
+
+| Project | License | What we studied | Relationship |
+|---|---|---|---|
+| [TencentDB-Agent-Memory](https://github.com/Tencent/TencentDB-Agent-Memory) | MIT | persistent memory (L0–L3), the stable/dynamic context split, the `/v3` gateway wire contract | architectural inspiration / independently reimplemented concepts |
+| [rtk-ai/rtk](https://github.com/rtk-ai/rtk) | Apache-2.0 | per-command tool-output compression + honest telemetry | independently reimplemented concept |
+| [Aider-AI/aider](https://github.com/Aider-AI/aider) | Apache-2.0 | tree-sitter repo map with relevance ranking | independently reimplemented concept |
+| [headroomlabs-ai/headroom](https://github.com/headroomlabs-ai/headroom) | Apache-2.0 | reversible, content-aware context compression | research/reference only |
+| [zilliztech/GPTCache](https://github.com/zilliztech/GPTCache) | MIT | semantic LLM response caching (evaluated, then rejected for coding-agent false-positive risk) | research/reference only |
+| [open-compress/claw-compactor](https://github.com/open-compress/claw-compactor) | MIT | reversible compression + AST-aware analysis | research/reference only |
+| [microsoft/LLMLingua](https://github.com/microsoft/LLMLingua) | MIT | lossy model-based prompt compression (evaluated, then rejected for code-fidelity risk) | research/reference only |
+| [zilliztech/claude-context](https://github.com/zilliztech/claude-context) | MIT | semantic codebase indexing | research/reference only |
+| [ojuschugh1/sqz](https://github.com/ojuschugh1/sqz) | Elastic License 2.0 | lossy context compression + dedup | **research/idea reference only — no source incorporated** |
+| [Opencode-DCP/opencode-dynamic-context-pruning](https://github.com/Opencode-DCP/opencode-dynamic-context-pruning) | AGPL-3.0 | dynamic conversation context pruning | **research/idea reference only — no source incorporated** |
+
+Every implementation here is CONTINUUM's own; "independently reimplemented" means the
+*concept* was studied, not the source. `sqz` (ELv2) and `opencode-dcp` (AGPL-3.0) were read
+for ideas only — their source is not incorporated, and neither imposes obligations on CONTINUUM.
 
 ## Development docs
 
