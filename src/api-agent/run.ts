@@ -30,6 +30,8 @@ export interface RunApiAgentDeps {
   readonly cache?: ToolResultCache;
   /** Scope-fingerprint provider for the cache. */
   readonly scopeProvider?: ToolScopeProvider;
+  /** Automatic session continuity capture (tool → concise summary), after each tool execution. */
+  readonly recordToolActivity?: (tool: string, summary: string) => Promise<void>;
 }
 
 export interface RunApiAgentResult {
@@ -65,6 +67,7 @@ export async function runApiAgent(deps: RunApiAgentDeps): Promise<RunApiAgentRes
     cache: deps.cache,
     scopeProvider: deps.scopeProvider,
     onEvent: (event, detail) => deps.onOutput?.(`[${event}] ${detail}\n`),
+    onToolActivity: deps.recordToolActivity ? (tool, summary) => deps.recordToolActivity!(tool, summary) : undefined,
   });
   return { finalContent: result.finalContent, iterations: result.iterations, toolCalls: result.toolCalls };
 }

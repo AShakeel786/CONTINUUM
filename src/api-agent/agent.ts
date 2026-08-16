@@ -27,6 +27,8 @@ export interface AgentLoopDeps {
   readonly cache?: ToolResultCache;
   /** Scope-fingerprint provider for the cache (project HEAD/dirty, session revision). */
   readonly scopeProvider?: ToolScopeProvider;
+  /** Automatic continuity capture: called after each tool execution with a concise summary. */
+  readonly onToolActivity?: (tool: string, summary: string) => void | Promise<void>;
 }
 
 export interface AgentLoopResult {
@@ -63,6 +65,8 @@ export async function runAgentLoop(messages: readonly AgentMessage[], deps: Agen
       const finalText = await resolveToolText(deps, tc.name, tc.arguments);
       conversation.push({ role: "tool", toolCallId: tc.id, content: finalText });
       deps.onEvent?.("tool", `${tc.name} → ${finalText.slice(0, 120)}`);
+      const isError = finalText.startsWith("[tool error]") || finalText.startsWith("[tool failure]");
+      await deps.onToolActivity?.(tc.name, summarizeToolCall(tc.name, tc.arguments, isError));
     }
   }
 
@@ -133,6 +137,26 @@ async function executeTool(tools: ToolRegistry, name: string, argsJson: string):
     // Unknown tool or handler throw → surface, never fabricate.
     return `[tool failure] ${err instanceof Error ? err.message : String(err)}`;
   }
+}
+
+/** A concise, secret-free summary of a tool execution for continuity capture. */
+export function summarizeToolCall(tool: string, argsJson: string, isError: boolean): string {
+  let target = "";
+  try {
+    const a = JSON.parse(argsJson) as Record<string, unknown>;
+    for (const key of ["path", "file", "filePath", "project", "op", "sessionId", "query", "name", "id"]) {
+      const v = a[key];
+      if (typeof v === "string" && v.trim()) {
+        target = v.trim();
+        break;
+      }
+    }
+  } catch {
+    // malformed args → no target
+  }
+  const status = isError ? " (error)" : "";
+  const trimmed = target.length > 80 ? `${target.slice(0, 77)}…` : target;
+  return trimmed ? `${tool} ${trimmed}${status}` : `${tool}${status}`;
 }
 
 /** Apply the optimizer if configured; append a retrievable raw reference when retained. */

@@ -116,8 +116,12 @@ export async function launchPrepared(ctx: { launcher: Launcher; providers: Provi
     const tools = await buildToolRegistry({ dataDir: ctx.dataDir });
     const cache = new ToolResultCache({}, join(ctx.dataDir, "tool-cache"));
     const scopeProvider = makeScopeProvider({ projectPath: prep.project.path, sessionManager: ctx.sessionManager });
+    const sessionId = prep.session?.sessionId;
+    const recordToolActivity = sessionId
+      ? (tool: string, summary: string) => ctx.sessionManager.recordToolActivity(sessionId, tool, summary).then(() => undefined)
+      : undefined;
     try {
-      const result = await runApiAgent({ adapter, tools, rendered: prep.rendered, query: prep.session?.taskGoal ?? "", onOutput: out, cache, scopeProvider });
+      const result = await runApiAgent({ adapter, tools, rendered: prep.rendered, query: prep.session?.taskGoal ?? "", onOutput: out, cache, scopeProvider, recordToolActivity });
       if (result.finalContent) out(`\n${result.finalContent}\n`);
       return 0;
     } catch (err) {

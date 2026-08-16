@@ -11,6 +11,32 @@ import type { ContextBlock } from "../context/types.js";
 import type { FingerprintComparison } from "../session/git-fingerprint.js";
 import type { TaskSession } from "../session/types.js";
 
+/**
+ * Compact "maintain the session as you work" instruction, injected for every
+ * launch so native CLIs (Codex/Claude/DeepSeek) keep task continuity populated
+ * through the `session_update` MCP write tool — they cannot be transparently
+ * instrumented like the in-process API agent. Deliberately short (a few lines);
+ * it is NOT a reminder to be repeated per turn.
+ */
+export function buildSessionMaintenanceBlock(session: TaskSession): ContextBlock {
+  return {
+    id: "handoff:session-maintenance",
+    class: "instructions",
+    priority: 0,
+    provenance: { source: "handoff-manager", fetchedAt: new Date().toISOString() },
+    content: [
+      "<session-maintenance>",
+      `You are working inside CONTINUUM task session ${session.sessionId}.`,
+      "Record meaningful progress as you go via the `session_update` MCP tool so the next agent can continue without re-auditing:",
+      "- complete_work / add_remaining_work — one line each",
+      "- record_decision — decisions the next agent must not re-litigate",
+      "- record_relevant_file — files you materially changed or that matter now",
+      "Never put tool output, code, or secrets into the session. Only record steps that actually matter.",
+      "</session-maintenance>",
+    ].join("\n"),
+  };
+}
+
 export function buildResumeInstructionsBlock(session: TaskSession, staleness: FingerprintComparison): ContextBlock {
   const lines: string[] = [
     "<handoff-resume>",

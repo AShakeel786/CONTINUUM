@@ -26,9 +26,17 @@ import type { ContextEnvelope } from "../context/types.js";
 import type { SessionPricingState } from "../pricing/types.js";
 
 const MAX_TOOL_ACTIVITY = 20;
+const MAX_WORK_ITEMS = 50;
+const MAX_DECISIONS = 50;
+const MAX_RELEVANT_FILES = 50;
 
 function now(): string {
   return new Date().toISOString();
+}
+
+/** Case-insensitive, whitespace-trimmed identity key for dedup of free-text lists. */
+function normKey(text: string): string {
+  return text.trim().toLowerCase();
 }
 
 export class SessionManager {
@@ -95,13 +103,23 @@ export class SessionManager {
   }
 
   async addCompletedWork(sessionId: string, description: string): Promise<TaskSession> {
-    const item: WorkItem = { id: randomUUID(), description, recordedAt: now() };
-    return this.update(sessionId, (s) => ({ ...s, completedWork: [...s.completedWork, item] }));
+    const text = description.trim();
+    if (!text) return this.loadSession(sessionId);
+    return this.update(sessionId, (s) => {
+      if (s.completedWork.some((w) => normKey(w.description) === normKey(text))) return s;
+      const item: WorkItem = { id: randomUUID(), description: text, recordedAt: now() };
+      return { ...s, completedWork: [...s.completedWork, item].slice(-MAX_WORK_ITEMS) };
+    });
   }
 
   async addRemainingWork(sessionId: string, description: string): Promise<TaskSession> {
-    const item: WorkItem = { id: randomUUID(), description, recordedAt: now() };
-    return this.update(sessionId, (s) => ({ ...s, remainingWork: [...s.remainingWork, item] }));
+    const text = description.trim();
+    if (!text) return this.loadSession(sessionId);
+    return this.update(sessionId, (s) => {
+      if (s.remainingWork.some((w) => normKey(w.description) === normKey(text))) return s;
+      const item: WorkItem = { id: randomUUID(), description: text, recordedAt: now() };
+      return { ...s, remainingWork: [...s.remainingWork, item].slice(-MAX_WORK_ITEMS) };
+    });
   }
 
   /** Moves a remaining-work item to completed-work — the common "I finished the next thing" transition. */
@@ -123,16 +141,23 @@ export class SessionManager {
   }
 
   async recordDecision(sessionId: string, decision: string, rationale?: string): Promise<TaskSession> {
-    const record: DecisionRecord = { id: randomUUID(), decision, rationale, recordedAt: now() };
-    return this.update(sessionId, (s) => ({ ...s, importantDecisions: [...s.importantDecisions, record] }));
+    const text = decision.trim();
+    if (!text) return this.loadSession(sessionId);
+    return this.update(sessionId, (s) => {
+      if (s.importantDecisions.some((d) => normKey(d.decision) === normKey(text))) return s;
+      const record: DecisionRecord = { id: randomUUID(), decision: text, rationale: rationale?.trim() || undefined, recordedAt: now() };
+      return { ...s, importantDecisions: [...s.importantDecisions, record].slice(-MAX_DECISIONS) };
+    });
   }
 
   async recordRelevantFile(sessionId: string, filePath: string, note?: string): Promise<TaskSession> {
-    const record: FileRef = { path: filePath, note, recordedAt: now() };
+    const pathText = filePath.trim();
+    if (!pathText) return this.loadSession(sessionId);
+    const record: FileRef = { path: pathText, note: note?.trim() || undefined, recordedAt: now() };
     return this.update(sessionId, (s) => ({
       ...s,
       // De-dupe by path: a re-note of the same file replaces, doesn't accumulate.
-      relevantFiles: [...s.relevantFiles.filter((f) => f.path !== filePath), record],
+      relevantFiles: [...s.relevantFiles.filter((f) => f.path !== pathText), record].slice(-MAX_RELEVANT_FILES),
     }));
   }
 

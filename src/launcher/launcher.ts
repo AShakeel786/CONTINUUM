@@ -37,7 +37,7 @@ import { buildContextEnvelope } from "../context/envelope.js";
 import { fetchDynamicRecallFromMemoryCore, fetchStableFromMemoryCore, type MemoryCoreGatewayConfig } from "../context/memorycore-client.js";
 import { allocateBudget } from "../token/budget.js";
 import { renderContextForProvider } from "../rendering/render.js";
-import { buildResumeInstructionsBlock } from "../handoff/resume-block.js";
+import { buildResumeInstructionsBlock, buildSessionMaintenanceBlock } from "../handoff/resume-block.js";
 import { findRecentNativeSessionId } from "./native-session.js";
 import { repoMapBlock } from "../repo-map/repo-map.js";
 import { applyReversiblePruning } from "../context/pruning.js";
@@ -272,7 +272,10 @@ export class Launcher {
     // Context assembly: MemoryCore when available, degrade gracefully otherwise.
     const memoryCoreAvailable = !!this.deps.memoryCore;
     let memoryCoreNote: string | undefined;
-    const callerBlocks: ContextBlock[] = [buildResumeInstructionsBlock(session, { stale, reasons: staleReasons })];
+    const callerBlocks: ContextBlock[] = [
+      buildSessionMaintenanceBlock(session),
+      buildResumeInstructionsBlock(session, { stale, reasons: staleReasons }),
+    ];
     // Repo intelligence map (Token Efficiency Phase 2) — navigation-only context;
     // a build failure never blocks the launch.
     if (this.deps.repoMapBuilder) {
