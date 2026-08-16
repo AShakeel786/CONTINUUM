@@ -45,8 +45,10 @@ interface WriteResult {
   readonly data?: unknown;
 }
 
-function buildHeaders(cfg: MemoryCoreGatewayConfig): Record<string, string> {
-  const token = resolveSecret("memorycore-gateway", cfg.serviceToken);
+async function buildHeaders(cfg: MemoryCoreGatewayConfig): Promise<Record<string, string>> {
+  const token = cfg.resolveToken
+    ? await cfg.resolveToken(cfg.serviceToken)
+    : resolveSecret("memorycore-gateway", cfg.serviceToken);
   return {
     "Content-Type": "application/json",
     Authorization: `Bearer ${token}`,
@@ -72,7 +74,7 @@ async function postV3(
     const res = await fetch(`${base}${path}`, {
       method,
       signal: controller.signal,
-      headers: buildHeaders(cfg),
+      headers: await buildHeaders(cfg),
       body: JSON.stringify(body),
     });
     if (!res.ok) {
@@ -127,7 +129,7 @@ export async function captureTurn(
     const res = await fetch(`${base}/capture`, {
       method: "POST",
       signal: controller.signal,
-      headers: buildHeaders(cfg),
+      headers: await buildHeaders(cfg),
       body: JSON.stringify({
         user_content: args.userContent,
         assistant_content: args.assistantContent,

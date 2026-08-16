@@ -40,6 +40,14 @@ export async function main(argv: readonly string[]): Promise<number> {
 
   const io: CliIo = { out: (text) => process.stdout.write(text) };
 
+  // `--help` / `-h` must NEVER execute a command (the audit found
+  // `continuum launch --help` actually launched and created a session). Handled
+  // centrally before any command wiring runs, so it is side-effect free.
+  if (hasHelpFlag(rest)) {
+    printCommandHelp(command, io);
+    return 0;
+  }
+
   switch (command) {
     case undefined:
       // Bare `continuum` opens the interactive front door (project → action →
@@ -116,4 +124,70 @@ function printHelp(io: CliIo): void {
 
 function printVersion(io: CliIo): void {
   io.out?.(`continuum ${getVersion()}\n`);
+}
+
+/**
+ * Flags that take a value in the subcommands. When scanning for `--help`/`-h`,
+ * the token immediately following one of these is that flag's value, not a
+ * help request (e.g. `continuum launch --task "--help"`).
+ */
+const VALUE_FLAGS = new Set([
+  "--provider",
+  "-p",
+  "--task",
+  "-t",
+  "--recent",
+  "--name",
+  "-n",
+  "--path",
+  "--alias",
+  "-a",
+  "--model",
+  "--id",
+  "--protocol",
+  "--base-url",
+  "--auth",
+  "--env",
+  "--cli",
+  "--older-than",
+  "--limit",
+]);
+
+/** True when `args` contain a standalone `--help`/`-h` (not a value of a value-flag). */
+export function hasHelpFlag(args: readonly string[]): boolean {
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]!;
+    if (VALUE_FLAGS.has(a)) {
+      i += 1; // skip the flag's value token
+      continue;
+    }
+    if (a === "--help" || a === "-h") return true;
+  }
+  return false;
+}
+
+const COMMAND_USAGE: Readonly<Record<string, string>> = {
+  setup: "Usage: continuum setup [--memory]\n\n  First-run onboarding + provider auth.  --memory  configure the MemoryCore gateway service token.",
+  providers: "Usage: continuum providers\n\n  List providers and their auth state (references only, never a secret).",
+  auth: "Usage: continuum auth <provider> [--remove]\n\n  (Re)authenticate one provider, or remove its stored credential.",
+  doctor: "Usage: continuum doctor [--repair]\n\n  Read-only health report.  --repair  bounded recovery (cooldown + circuit breaker).",
+  project: "Usage: continuum project <add|remove|list|show>\n\n  add     continuum project add <name> <path> [--alias <a>] [--provider <id>] [--model <m>]\n  remove  continuum project remove <name|alias|id>\n  list    list registered projects\n  show    show a project (defaults to the current directory)",
+  provider: "Usage: continuum provider <add|list|show|remove|validate>\n\n  Manage user provider manifests (secret-free JSON).",
+  launch:
+    "Usage: continuum launch [<project>] [--provider <id>] [--task <goal>] [--bypass-permissions]\n\n  Resolve project → provider → session, then run the agent.",
+  run: "Usage: continuum launch [<project>] [--provider <id>] [--task <goal>]\n\n  Alias for `continuum launch`.",
+  resume: "Usage: continuum resume <sessionId> [--provider <id>] | --recent N\n\n  Resume an existing session (stale-worktree safe).",
+  handoff: "Usage: continuum handoff <sessionId>\n\n  Hand off to an authenticated agent (never auto-selects).",
+  sessions: "Usage: continuum sessions [list] [--limit N]\n       continuum sessions archive [--older-than ISO]\n\n  List/archive recent sessions.",
+  mcp: "Usage: continuum mcp\n\n  Run the MCP server (JSON-RPC over stdio).",
+  "mcp-setup": "Usage: continuum mcp-setup\n\n  Idempotently register CONTINUUM MCP with Claude/Codex.",
+};
+
+function printCommandHelp(command: string | undefined, io: CliIo): void {
+  const usage = command !== undefined ? COMMAND_USAGE[command] : undefined;
+  if (usage) {
+    io.out?.(`${usage}\n\nRun \`continuum --help\` for the full command list.\n`);
+  } else {
+    printHelp(io);
+  }
 }

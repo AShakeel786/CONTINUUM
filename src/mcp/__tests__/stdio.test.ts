@@ -51,7 +51,7 @@ describe("MCP stdio transport (real subprocess)", () => {
         '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"memory_recall","arguments":{}}}',
       ],
       2,
-      { CONTINUUM_HOME: path.join(REPO_ROOT, "node_modules", ".tmp-mcp-stdio"), CONTINUUM_MEMORY_CORE_URL: "", CONTINUUM_MEMORY_CORE_TOKEN: "" },
+      { CONTINUUM_HOME: path.join(REPO_ROOT, "node_modules", ".tmp-mcp-stdio"), CONTINUUM_MEMORY_CORE_URL: "", CONTINUUM_MEMORY_CORE_TOKEN: "", CONTINUUM_MEMORY_CORE_ENV_ONLY: "1" },
     );
     const init = JSON.parse(responses[0]!);
     expect(init.result.serverInfo.name).toBe("continuum");

@@ -10,6 +10,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { HealthRuntime } from "./types.js";
 import { resolveDataDir } from "../config/paths.js";
+import { memoryCoreBaseUrl, MEMORY_CORE_URL_ENV } from "../context/memorycore-config.js";
 
 /**
  * Canonical Tencent Mac scripts dir. Overridable via `CONTINUUM_TENCENT_MAC_DIR`
@@ -22,8 +23,8 @@ export const DEFAULT_TENCENT_MAC_DIR =
 
 export const DEFAULT_OPTIONS = {
   tencentMacDir: DEFAULT_TENCENT_MAC_DIR,
-  memoryCoreUrl: process.env.CONTINUUM_MEMORY_CORE_URL ?? "http://127.0.0.1:8420",
-  tencentConfigured: !!process.env.CONTINUUM_MEMORY_CORE_URL,
+  memoryCoreUrl: memoryCoreBaseUrl(process.env),
+  tencentConfigured: !!process.env[MEMORY_CORE_URL_ENV],
   proxyHealthUrl: process.env.CONTINUUM_MEMORY_PROXY_URL ?? "http://127.0.0.1:8096/health",
   containers: {
     memoryCore: "tdai-memory-core",

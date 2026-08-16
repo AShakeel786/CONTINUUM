@@ -58,6 +58,8 @@ export interface LauncherDeps {
   readonly output?: PromptOutput;
   /** Optional MemoryCore gateway config; when absent, launches degrade to caller-supplied context only. */
   memoryCore?: MemoryCoreGatewayConfig;
+  /** Actionable explanation surfaced when `memoryCore` is absent (config resolution failed). */
+  readonly memoryCoreReason?: string;
   readonly sessionBaseDir: string;
   /** Optional repo-map builder (Token Efficiency Phase 2); when absent, no repo map is injected. */
   readonly repoMapBuilder?: (projectPath: string, query: string, budgetTokens: number) => Promise<import("../repo-map/repo-map.js").RepoMapResult>;
@@ -303,7 +305,7 @@ export class Launcher {
       }
     } else {
       envelope = buildContextEnvelope({ sessionKey: session.sessionId, query: session.taskGoal, callerBlocks });
-      memoryCoreNote = "MemoryCore not configured — launched with local session context only.";
+      memoryCoreNote = this.deps.memoryCoreReason ?? "MemoryCore not configured — launched with local session context only.";
     }
 
     const contextWindow = adapter.getCapabilities().contextWindowTokens ?? 200_000;
@@ -405,6 +407,7 @@ export class Launcher {
     const launch = adapter.profile.cliLaunch;
     if (launch.kind === "proxy-routed") {
       const envVar = launch.proxyUserKeySecret.envVar;
+      if (envVar === undefined) throw new Error("proxy-routed provider profile is missing proxyUserKeySecret.envVar");
       const credentialName = metadata.proxyUserKey?.supported ? metadata.proxyUserKey.credentialName : "proxy-user-key";
       // Try the credential store first (provider-scoped), then process.env.
       const stored = await this.deps.credentialManager.getCredential(adapter.profile.id, credentialName).catch(() => undefined);

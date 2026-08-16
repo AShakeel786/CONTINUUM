@@ -18,29 +18,16 @@ import { ProjectRegistryStore } from "../registry/store.js";
 import { SessionManager } from "../session/manager.js";
 import { FileSessionStore } from "../session/store.js";
 import { resolveDataDir } from "../config/paths.js";
-import type { MemoryCoreGatewayConfig } from "../context/memorycore-client.js";
+import { buildDefaultCredentialManager, resolveMemoryCoreConfig } from "../context/memorycore-config.js";
+import type { CredentialManager } from "../auth/credential-manager.js";
 import path from "node:path";
-
-/** Reads MemoryCore config from env; unset = undefined (degraded, not configured). */
-export function memoryCoreFromEnv(): MemoryCoreGatewayConfig | undefined {
-  const baseUrl = process.env.CONTINUUM_MEMORY_CORE_URL;
-  const token = process.env.CONTINUUM_MEMORY_CORE_TOKEN;
-  if (!baseUrl || !token) return undefined;
-  return {
-    baseUrl,
-    serviceToken: { envVar: "CONTINUUM_MEMORY_CORE_TOKEN" },
-    serviceId: process.env.CONTINUUM_MEMORY_CORE_SERVICE_ID ?? "default",
-    teamId: process.env.CONTINUUM_MEMORY_CORE_TEAM_ID ?? "default",
-    userId: process.env.CONTINUUM_MEMORY_CORE_USER_ID ?? "default",
-    agentId: process.env.CONTINUUM_MEMORY_CORE_AGENT_ID ?? "default",
-    timeoutMs: 3000,
-  };
-}
 
 export interface BuildRegistryOptions {
   readonly dataDir?: string;
-  /** Override the memory provider (tests); defaults to env-config. */
+  /** Override the memory provider (tests); defaults to unified config resolution. */
   readonly memoryProvider?: MemoryCoreProvider;
+  /** Optional credential manager for the gateway service token; defaults to the native backend. */
+  readonly credentialManager?: CredentialManager;
 }
 
 /** Assembles the default tool registry. */
@@ -49,7 +36,9 @@ export async function buildToolRegistry(opts: BuildRegistryOptions = {}): Promis
   const projects = new ProjectRegistry(new ProjectRegistryStore(dataDir));
   const sessionManager = new SessionManager(new FileSessionStore(path.join(dataDir, "sessions")));
 
-  const memoryProvider: MemoryCoreProvider = opts.memoryProvider ?? (async () => memoryCoreFromEnv());
+  const credentialManager = opts.credentialManager ?? (await buildDefaultCredentialManager(dataDir));
+  const memoryProvider: MemoryCoreProvider =
+    opts.memoryProvider ?? (async () => (await resolveMemoryCoreConfig({ credentialManager })).config);
   const sessionDeps: SessionToolDeps = { sessionManager, projects };
 
   const registry = new ToolRegistry();

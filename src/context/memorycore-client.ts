@@ -31,6 +31,13 @@ export interface MemoryCoreGatewayConfig {
   readonly taskId?: string;
   readonly sessionId?: string;
   readonly timeoutMs?: number;
+  /**
+   * Async token resolver (env-var or credential-store shapes). When absent,
+   * resolution falls back to the sync env-only `resolveSecret`. Injected by
+   * `resolveMemoryCoreConfig` so a credential-backed token resolves via the
+   * OS credential store at call time and never leaks into a spawned CLI's env.
+   */
+  readonly resolveToken?: (ref: SecretRef) => Promise<string>;
 }
 
 export interface FetchedPersona {
@@ -63,8 +70,10 @@ export interface FetchedDynamicRecall {
 
 const DEFAULT_TIMEOUT_MS = 5000;
 
-function buildHeaders(cfg: MemoryCoreGatewayConfig, includeSession: boolean, includeTask: boolean): Record<string, string> {
-  const token = resolveSecret("memorycore-gateway", cfg.serviceToken);
+async function buildHeaders(cfg: MemoryCoreGatewayConfig, includeSession: boolean, includeTask: boolean): Promise<Record<string, string>> {
+  const token = cfg.resolveToken
+    ? await cfg.resolveToken(cfg.serviceToken)
+    : resolveSecret("memorycore-gateway", cfg.serviceToken);
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     Authorization: `Bearer ${token}`,
@@ -91,7 +100,7 @@ async function postV3<T>(
     const res = await fetch(`${base}${path}`, {
       method: "POST",
       signal: controller.signal,
-      headers: buildHeaders(cfg, opts.includeSession, opts.includeTask),
+      headers: await buildHeaders(cfg, opts.includeSession, opts.includeTask),
       body: JSON.stringify(body),
     });
     if (!res.ok) {

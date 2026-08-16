@@ -26,6 +26,7 @@ import { verifyCliContract } from "../../launcher/cli-contract.js";
 import { createProviderAdapter } from "../../providers/adapter.js";
 import { claudeProfile } from "../../providers/profiles/claude.js";
 import { codexProfile } from "../../providers/profiles/codex.js";
+import { resolveMemoryCoreConfig } from "../../context/memorycore-config.js";
 import type { CliIo } from "../index.js";
 import { buildContext } from "./common.js";
 
@@ -80,6 +81,17 @@ export async function runDoctorCommand(args: readonly string[], io: CliIo): Prom
   out(`\nRuntime stack:\n`);
   const before = await healthDoctor.diagnose();
   for (const line of HealthDoctor.formatReport(before)) out(`${line}\n`);
+
+  // CONTINUUM-side memory config: the same unified resolution the launcher and
+  // MCP use, so `doctor` agrees with them on endpoint + token availability.
+  const memoryResolution = await resolveMemoryCoreConfig({ credentialManager: ctx.credentialManager });
+  out(`\nMemory config (launch/MCP):\n`);
+  if (memoryResolution.config) {
+    const src = memoryResolution.config.serviceToken.envVar !== undefined ? `env ${memoryResolution.config.serviceToken.envVar}` : "secure credential store";
+    out(`  ok memory gateway: ${memoryResolution.config.baseUrl} (service token from ${src})\n`);
+  } else {
+    out(`  !! ${memoryResolution.reason}\n`);
+  }
 
   // Native CLI surface: MCP permission + functional health + session contract.
   out(`\nNative CLI (MCP + session contract):\n`);

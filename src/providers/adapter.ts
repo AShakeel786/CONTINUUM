@@ -9,7 +9,7 @@
  */
 
 import { ProviderAuthError, ProviderConfigError, UnknownModelAliasError } from "./errors.js";
-import { resolveSecret } from "./secrets.js";
+import { resolveSecret, type SecretRef } from "./secrets.js";
 import type {
   CliLaunchContext,
   CliLaunchDescriptor,
@@ -19,7 +19,7 @@ import type {
   ProviderProfile,
 } from "./types.js";
 
-function resolveSecretFromCtx(providerId: string, ref: { readonly envVar: string }, ctx?: CliLaunchContext): string {
+function resolveSecretFromCtx(providerId: string, ref: SecretRef, ctx?: CliLaunchContext): string {
   // Prefer the caller-injected secret env (credential backend), falling back
   // to process.env — so a launcher can source the proxy key from
   // CredentialManager without a manual export, while a bare adapter still

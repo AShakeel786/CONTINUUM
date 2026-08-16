@@ -20,7 +20,7 @@ import type { LauncherDeps } from "../../launcher/launcher.js";
 import { HandoffManager } from "../../handoff/manager.js";
 import { PricingAwarenessService } from "../../pricing/service.js";
 import { createDefaultPricingSchedules } from "../../pricing/schedules/index.js";
-import type { MemoryCoreGatewayConfig } from "../../context/memorycore-client.js";
+import { resolveMemoryCoreConfig } from "../../context/memorycore-config.js";
 import { resolveDataDir } from "../../config/paths.js";
 import type { Prompt } from "../../auth/prompt.js";
 import { buildContext } from "./common.js";
@@ -35,24 +35,8 @@ export interface LauncherContext {
   readonly sessionManager: SessionManager;
   readonly handoffManager: HandoffManager;
   readonly pricing: PricingAwarenessService;
+  readonly credentialManager: CredentialManager;
   readonly dataDir: string;
-}
-
-/** Builds a MemoryCore gateway config from env, or undefined when unconfigured. */
-function memoryCoreFromEnv(): MemoryCoreGatewayConfig | undefined {
-  const baseUrl = process.env.CONTINUUM_MEMORY_CORE_URL;
-  if (!baseUrl) return undefined;
-  const token = process.env.CONTINUUM_MEMORY_CORE_TOKEN;
-  if (!token) return undefined;
-  return {
-    baseUrl,
-    serviceToken: { envVar: "CONTINUUM_MEMORY_CORE_TOKEN" },
-    serviceId: process.env.CONTINUUM_MEMORY_CORE_SERVICE_ID ?? "default",
-    teamId: process.env.CONTINUUM_MEMORY_CORE_TEAM_ID ?? "default",
-    userId: process.env.CONTINUUM_MEMORY_CORE_USER_ID ?? "default",
-    agentId: process.env.CONTINUUM_MEMORY_CORE_AGENT_ID ?? "default",
-    timeoutMs: 3000,
-  };
 }
 
 export async function buildLauncherContext(options: { dataDir?: string; prompt: Prompt }): Promise<LauncherContext> {
@@ -71,6 +55,8 @@ export async function buildLauncherContext(options: { dataDir?: string; prompt: 
   const sessionBaseDir = path.join(dataDir, "sessions");
   const sessionManager = new SessionManager(new FileSessionStore(sessionBaseDir));
 
+  const memoryResolution = await resolveMemoryCoreConfig({ credentialManager });
+
   const repoMapCache = new FileRepoMapCache(path.join(dataDir, "repo-map"));
   const deps: LauncherDeps = {
     projects,
@@ -82,7 +68,8 @@ export async function buildLauncherContext(options: { dataDir?: string; prompt: 
     sessionManager,
     prompt: options.prompt,
     sessionBaseDir,
-    memoryCore: memoryCoreFromEnv(),
+    memoryCore: memoryResolution.config,
+    memoryCoreReason: memoryResolution.reason,
     repoMapBuilder: (projectPath, query, budgetTokens) => buildRepoMap(projectPath, query, { budgetTokens }, repoMapCache),
     pruneStore: new FilePruneStore(dataDir),
   };
@@ -90,5 +77,5 @@ export async function buildLauncherContext(options: { dataDir?: string; prompt: 
   const handoffManager = new HandoffManager(sessionManager, providers);
   const pricing = new PricingAwarenessService(sessionManager, providers, createDefaultPricingSchedules());
 
-  return { launcher: new Launcher(deps), projects, providers, sessionManager, handoffManager, pricing, dataDir };
+  return { launcher: new Launcher(deps), projects, providers, sessionManager, handoffManager, pricing, credentialManager, dataDir };
 }
