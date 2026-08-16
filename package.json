@@ -1,9 +1,13 @@
 {
   "name": "continuum",
-  "version": "0.1.0",
+  "version": "0.1.0-beta.1",
   "private": true,
   "type": "module",
-  "description": "CONTINUUM: multi-agent development runtime — Claude Code, DeepSeek, and Codex through one provider/tool layer.",
+  "license": "MIT",
+  "description": "CONTINUUM: multi-agent development runtime — Claude Code, DeepSeek, Codex, and any OpenAI/Anthropic-compatible API through one provider/tool layer.",
+  "engines": {
+    "node": ">=18"
+  },
   "bin": {
     "continuum": "./dist/cli/bin.js",
     "continuum-mcp": "./dist/mcp/bin.js"

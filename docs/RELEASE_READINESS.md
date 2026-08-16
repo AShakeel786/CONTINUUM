@@ -1,17 +1,16 @@
 # RELEASE_READINESS — Public GitHub Beta Assessment
 
 **Date:** 2026-08-16
-**State:** Phase 21 (generic API agent runtime)
+**State:** final (post token-efficiency phases 1–4)
 
 ## Verdict
 
 **Ready for a public GitHub beta**, with clearly-scoped caveats. The core loop
 (setup → project → launch → session → resume → handoff → doctor) is proven on a
-clean-room install, the full test suite passes (56 files / 383 tests), and
-typecheck/build are clean. Phases 20–21 make CONTINUUM fully provider-neutral:
-users add API/CLI providers via secret-free JSON manifests (no source edits), and
-API-only providers run as full agents through a generic, protocol-selected agent
-loop — no CLI required.
+clean-room install, the full test suite passes (60 files / 409 tests), and
+typecheck/build are clean. CONTINUUM is provider-neutral (user API/CLI providers via
+secret-free manifests; generic API agent runtime) and ships four fail-closed
+token-efficiency optimizations on by default.
 
 ## What is solid
 
@@ -27,6 +26,9 @@ loop — no CLI required.
   Codex `resume`), with safe fallback to a resume brief.
 - **MCP** — provider-independent stdio server + idempotent auto-connect + functional initialize health.
 - **Health/recovery** — `doctor` + `doctor --repair` (MemoryCore outage behind a healthy proxy).
+- **Token efficiency** — four fail-closed, independently-disableable optimizations (tool-output
+  optimizer, repo map, deterministic tool cache, reversible context pruning); a representative task
+  measured 6,167 → 4,734 input tokens (−23.2%) and tool executions 16 → 10 with no fidelity regression.
 
 ## Known limitations to state in the beta notes
 

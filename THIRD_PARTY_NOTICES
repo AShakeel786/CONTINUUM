@@ -1,0 +1,25 @@
+CONTINUUM — Third-Party Notices
+==============================
+
+This file records third-party projects CONTINUUM references or depends on,
+with their licenses, for attribution and dependency transparency.
+
+CONTINUUM does not incorporate source code copied from these projects. Where a
+project is listed as "concept/upstream reference", CONTINUUM independently
+reimplements the relevant idea in TypeScript; the license is retained here as
+factual attribution, not as evidence of copied code.
+
+TencentDB-Agent-Memory
+  https://github.com/Tencent/TencentDB-Agent-Memory
+  License: MIT
+  Copyright (C) 2026 Tencent. All rights reserved.
+  Relationship: referenced as the memory/context infrastructure upstream and as
+  the source of several independently reimplemented design concepts (the
+  stable/dynamic context split, the /v3 Gateway wire contract, and
+  subprocess-supervision patterns). No source code is copied into CONTINUUM.
+
+js-tiktoken
+  npm: js-tiktoken (1.0.21)
+  License: MIT
+  Relationship: runtime dependency used for token estimation (o200k_base BPE
+  encoding). Used via its public API; no source is vendored or modified.
