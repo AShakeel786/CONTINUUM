@@ -59,5 +59,10 @@ export const claudeProfile: ProviderProfile = {
     executable: "claude",
     configDirName: ".claude-anthropic",
     clearEnvVars: ["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"],
+    nativeResume: {
+      supported: true,
+      resume: { kind: "flag", flag: "--resume" },
+      sessionStore: { rootDir: "~/.claude/projects", extension: ".jsonl", idFrom: "basename" },
+    },
   },
 };

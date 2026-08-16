@@ -145,6 +145,8 @@ export interface NativeCliLaunch {
    * Tencent launcher's env-sanitization-before-launch pattern.
    */
   readonly clearEnvVars: readonly string[];
+  /** Native-session resume capability (declared as data — see below). */
+  readonly nativeResume?: NativeResumeDescriptor;
 }
 
 /**
@@ -163,9 +165,43 @@ export interface ProxyRoutedCliLaunch {
   readonly proxyPathSuffix: string;
   readonly proxyUserKeySecret: SecretRef;
   readonly clearEnvVars: readonly string[];
+  /** Native-session resume capability (declared as data — see below). */
+  readonly nativeResume?: NativeResumeDescriptor;
 }
 
 export type CliLaunchDescriptor = NativeCliLaunch | ProxyRoutedCliLaunch;
+
+// ── Native session resume (data, not behavior) ───────────────────────────
+//
+// A provider whose CLI keeps its own native session store can declare how to
+// resume a session *by id* and where its session files live, so a generic
+// bridge (launcher/runtime) can build resume args and (best-effort) discover
+// the most-recent native session id without ever switching on provider id.
+
+/** How a resume invocation is shaped. `flag` → `<flag> <id>`; `subcommand` → `<subcommand> <id>`. */
+export type NativeResume =
+  | { readonly kind: "flag"; readonly flag: string }
+  | { readonly kind: "subcommand"; readonly subcommand: string };
+
+/** Where a provider's native CLI persists session files (read-only, for recent-id discovery). */
+export interface NativeSessionStore {
+  /** Root directory to scan recursively for session files (may include `~`). */
+  readonly rootDir: string;
+  /** File extension marking a session file. */
+  readonly extension: string;
+  /** How to derive the native session id from a session file's basename. */
+  readonly idFrom: "basename" | "last-uuid";
+}
+
+export interface NativeResumeCapability {
+  readonly supported: true;
+  readonly resume: NativeResume;
+  readonly sessionStore: NativeSessionStore;
+}
+export interface NativeResumeUnsupported {
+  readonly supported: false;
+}
+export type NativeResumeDescriptor = NativeResumeCapability | NativeResumeUnsupported;
 
 // ── Provider profile (pure data) ────────────────────────────────────────
 
@@ -202,6 +238,8 @@ export interface CliLaunchContext {
    * rather than requiring a manual `export`.
    */
   readonly secrets?: Readonly<Record<string, string>>;
+  /** When set, resume the provider's native session with this id (builds resume args). */
+  readonly resumeNativeSessionId?: string;
 }
 
 /** A fully-resolved plan for launching a coding-agent CLI against this provider. */

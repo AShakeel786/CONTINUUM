@@ -38,6 +38,7 @@ import { fetchDynamicRecallFromMemoryCore, fetchStableFromMemoryCore, type Memor
 import { allocateBudget } from "../token/budget.js";
 import { renderContextForProvider } from "../rendering/render.js";
 import { buildResumeInstructionsBlock } from "../handoff/resume-block.js";
+import { findRecentNativeSessionId } from "./native-session.js";
 import type { Prompt, PromptOutput } from "../auth/prompt.js";
 import { NoAuthenticatedAgentError, NoProjectError, ProviderNotAuthenticatedError } from "./errors.js";
 import type { LaunchOptions, LaunchPlan, LaunchPreparation } from "./types.js";
@@ -212,6 +213,14 @@ export class Launcher {
       });
     }
 
+    // Native-session resume: only on a SAME-provider resume (not a handoff to
+    // a different provider — the target there starts a fresh native session).
+    // Uses the stored native id when present; otherwise undefined → fresh
+    // native session + resume-brief fallback. Never fabricates an id.
+    const sameProviderResume =
+      existingSession !== undefined && existingSession.activeProvider.providerId === providerId;
+    const resumeNativeSessionId = sameProviderResume ? session.nativeSessionIds?.[providerId] : undefined;
+
     // Context assembly: MemoryCore when available, degrade gracefully otherwise.
     const memoryCoreAvailable = !!this.deps.memoryCore;
     let memoryCoreNote: string | undefined;
@@ -247,7 +256,7 @@ export class Launcher {
     // Build the CLI launch plan (auth/env/session identity), merging resolved credentials.
     // Proxy user key (deepseek proxy-routed path) is sourced from the credential
     // backend, not a manual env var — see ctx.secrets below.
-    const launchCtx = await this.buildLaunchContext(adapter, metadata, project.defaultModel, project.path);
+    const launchCtx = await this.buildLaunchContext(adapter, metadata, project.defaultModel, project.path, resumeNativeSessionId);
     const basePlan = adapter.buildCliLaunchPlan(launchCtx);
     const authEnv = metadata.api.supported ? await this.resolveAuthEnvSafely(adapter, metadata) : {};
 
@@ -272,7 +281,28 @@ export class Launcher {
       staleReasons,
       memoryCoreAvailable,
       memoryCoreNote,
+      ...(resumeNativeSessionId ? { nativeResume: { providerId, nativeSessionId: resumeNativeSessionId } } : {}),
     };
+  }
+
+  /** Persist a provider-native session id after a successful launch. Never throws — a capture failure is a safe fallback, not an error. */
+  async recordNativeSessionId(sessionId: string, providerId: string, nativeSessionId: string): Promise<void> {
+    await this.deps.sessionManager.recordNativeSessionId(sessionId, providerId, nativeSessionId).catch(() => {});
+  }
+
+  /**
+   * Best-effort discovery of the provider's most-recent native session id
+   * (read-only). Returns undefined when the provider has no declared store or
+   * nothing qualifies — the launcher then falls back to the resume brief.
+   */
+  async captureNativeSessionId(providerId: string, sinceMs = 0): Promise<string | undefined> {
+    const nr = this.adapterFor(providerId).profile.cliLaunch.nativeResume;
+    if (!nr || !nr.supported) return undefined;
+    try {
+      return await findRecentNativeSessionId(nr.sessionStore, sinceMs);
+    } catch {
+      return undefined;
+    }
   }
 
   private async resolveAuthEnvSafely(adapter: ProviderAdapter, metadata: ProviderAuthMetadata): Promise<Record<string, string>> {
@@ -300,7 +330,7 @@ export class Launcher {
    * Falls back to `process.env` for any secret not in the store (which keeps
    * backward compatibility with an explicitly-exported key).
    */
-  private async buildLaunchContext(adapter: ProviderAdapter, metadata: ProviderAuthMetadata, modelAlias: string | undefined, workingDir: string): Promise<import("../providers/types.js").CliLaunchContext> {
+  private async buildLaunchContext(adapter: ProviderAdapter, metadata: ProviderAuthMetadata, modelAlias: string | undefined, workingDir: string, resumeNativeSessionId: string | undefined): Promise<import("../providers/types.js").CliLaunchContext> {
     const secrets: Record<string, string> = {};
     const launch = adapter.profile.cliLaunch;
     if (launch.kind === "proxy-routed") {
@@ -311,7 +341,7 @@ export class Launcher {
       if (stored) secrets[envVar] = stored;
       else if (process.env[envVar]) secrets[envVar] = process.env[envVar]!;
     }
-    return { workingDir, modelAlias, secrets };
+    return { workingDir, modelAlias, secrets, ...(resumeNativeSessionId ? { resumeNativeSessionId } : {}) };
   }
 
   private async detectProjectOrThrow(cwd?: string): Promise<import("../registry/types.js").ProjectRecord> {

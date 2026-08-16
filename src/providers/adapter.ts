@@ -12,6 +12,7 @@ import { ProviderAuthError, ProviderConfigError, UnknownModelAliasError } from "
 import { resolveSecret } from "./secrets.js";
 import type {
   CliLaunchContext,
+  CliLaunchDescriptor,
   CliLaunchPlan,
   ProviderAdapter,
   ProviderCapabilities,
@@ -76,11 +77,12 @@ class DataDrivenProviderAdapter implements ProviderAdapter {
 
   buildCliLaunchPlan(ctx: CliLaunchContext): CliLaunchPlan {
     const launch = this.profile.cliLaunch;
+    const args = this.resumeArgs(launch, ctx);
     switch (launch.kind) {
       case "native":
         return {
           executable: launch.executable,
-          args: [],
+          args,
           // Deliberately empty: relies on the CLI's own persisted login
           // (e.g. `claude`'s own auth), matching the existing native-Claude
           // launcher path, which never injects ANTHROPIC_API_KEY itself.
@@ -102,7 +104,7 @@ class DataDrivenProviderAdapter implements ProviderAdapter {
         }
         return {
           executable: launch.executable,
-          args: [],
+          args,
           env: {
             ANTHROPIC_BASE_URL: `${launch.proxyBaseUrl}${launch.proxyPathSuffix}`,
             ANTHROPIC_AUTH_TOKEN: token,
@@ -112,6 +114,19 @@ class DataDrivenProviderAdapter implements ProviderAdapter {
         };
       }
     }
+  }
+
+  /**
+   * Build the native-resume args from the declared capability + a requested
+   * session id. Returns [] when unsupported or no id is requested — the
+   * launcher then starts a fresh native session (resume-brief fallback).
+   * No provider-id switch: this reads only the declared `nativeResume` data.
+   */
+  private resumeArgs(launch: CliLaunchDescriptor, ctx: CliLaunchContext): readonly string[] {
+    const nr = launch.nativeResume;
+    if (!nr || !nr.supported || !ctx.resumeNativeSessionId) return [];
+    const id = ctx.resumeNativeSessionId;
+    return nr.resume.kind === "flag" ? [nr.resume.flag, id] : [nr.resume.subcommand, id];
   }
 
   getCapabilities(): ProviderCapabilities {

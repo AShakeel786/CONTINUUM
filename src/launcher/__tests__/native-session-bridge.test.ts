@@ -1,0 +1,203 @@
+import { describe, expect, it } from "vitest";
+import { mkdtempSync, writeFileSync, utimesSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Launcher } from "../launcher.js";
+import { findRecentNativeSessionId } from "../native-session.js";
+import { ProjectRegistry } from "../../registry/registry.js";
+import { ProjectRegistryStore } from "../../registry/store.js";
+import { ProviderRegistry } from "../../providers/registry.js";
+import { createProviderAdapter } from "../../providers/adapter.js";
+import { claudeProfile } from "../../providers/profiles/claude.js";
+import { deepseekProfile } from "../../providers/profiles/deepseek.js";
+import { codexProfile } from "../../providers/profiles/codex.js";
+import { CredentialManager } from "../../auth/credential-manager.js";
+import { CliAuthManager } from "../../auth/cli-auth-manager.js";
+import { AuthVerifier } from "../../auth/auth-verifier.js";
+import { SessionManager } from "../../session/manager.js";
+import { FileSessionStore } from "../../session/store.js";
+import { createDefaultProviderAuthMetadata } from "../../auth/provider-auth/index.js";
+import { createScriptedPrompt } from "../../auth/prompt.js";
+import type { LauncherDeps } from "../launcher.js";
+import type { CliAuthAdapter, CredentialBackend } from "../../auth/types.js";
+
+class FakeBackend implements CredentialBackend {
+  readonly id = "fake";
+  readonly securityLevel = "os-native" as const;
+  readonly description = "test backend";
+  private readonly store = new Map<string, string>();
+  async isAvailable() { return true; }
+  async set(k: string, v: string) { this.store.set(k, v); }
+  async get(k: string) { return this.store.get(k); }
+  async delete(k: string) { this.store.delete(k); }
+  async list() { return [...this.store.keys()]; }
+}
+
+function fakeCli(providerId: string): CliAuthAdapter {
+  return {
+    providerId,
+    capability: claudeProfile.cliLaunch as never,
+    async detectInstalled() { return "installed"; },
+    async detectAuthenticated() { return "authenticated"; },
+    async login() { return { completed: true, exitCode: 0 }; },
+    async logout() { return { completed: true, exitCode: 0 }; },
+  };
+}
+
+async function buildDeps(): Promise<{ deps: LauncherDeps; registry: ProjectRegistry; sessionManager: SessionManager }> {
+  const dataDir = mkdtempSync(join(tmpdir(), "continuum-nsb-"));
+  const sessionDir = mkdtempSync(join(tmpdir(), "continuum-nsb-sess-"));
+  const registry = new ProjectRegistry(new ProjectRegistryStore(dataDir));
+  const providers = new ProviderRegistry();
+  providers.register(createProviderAdapter(claudeProfile));
+  providers.register(createProviderAdapter(deepseekProfile));
+  providers.register(createProviderAdapter(codexProfile));
+
+  const credentialManager = new CredentialManager(new FakeBackend());
+  await credentialManager.setCredential("deepseek", "api-key", "sk-test");
+  await credentialManager.setCredential("deepseek", "proxy-user-key", "sk-proxy-test");
+
+  const cliAuthManager = new CliAuthManager();
+  cliAuthManager.register(fakeCli("claude"));
+  cliAuthManager.register(fakeCli("codex"));
+
+  const sessionManager = new SessionManager(new FileSessionStore(sessionDir));
+  const deps: LauncherDeps = {
+    projects: registry,
+    providers,
+    credentialManager,
+    cliAuthManager,
+    authVerifier: new AuthVerifier({ credentialManager, cliAuthManager }),
+    authMetadata: createDefaultProviderAuthMetadata(),
+    sessionManager,
+    prompt: createScriptedPrompt({}),
+    sessionBaseDir: sessionDir,
+  };
+  return { deps, registry, sessionManager };
+}
+
+describe("native session bridge — first launch stores id", () => {
+  it("recordNativeSessionId persists the provider-native id on the session", async () => {
+    const { deps, registry, sessionManager } = await buildDeps();
+    const p = await registry.add({ name: "CARS", path: "/work/CARS", defaultProvider: "codex" });
+    const launcher = new Launcher(deps);
+    const prep = await launcher.prepareLaunch({ projectKey: p.id, taskGoal: "ship it" }, { permissionMode: "safe" });
+    const sessionId = prep.session!.sessionId;
+
+    await launcher.recordNativeSessionId(sessionId, "codex", "codex-native-uuid-1");
+
+    const reloaded = await sessionManager.loadSession(sessionId);
+    expect(reloaded.nativeSessionIds?.codex).toBe("codex-native-uuid-1");
+    // No resume args on the FIRST launch (fresh native session).
+    expect(prep.plan.args).toEqual([]);
+  });
+});
+
+describe("native session bridge — same-provider resume uses native resume", () => {
+  it("codex resume injects `resume <id>` and reports nativeResume", async () => {
+    const { deps, registry } = await buildDeps();
+    const p = await registry.add({ name: "CARS", path: "/work/CARS", defaultProvider: "codex" });
+    const launcher = new Launcher(deps);
+    const first = await launcher.prepareLaunch({ projectKey: p.id, taskGoal: "ship it" }, { permissionMode: "safe" });
+    await launcher.recordNativeSessionId(first.session!.sessionId, "codex", "codex-native-uuid-1");
+
+    const resume = await launcher.prepareLaunch({ sessionId: first.session!.sessionId }, { permissionMode: "safe" });
+    expect(resume.plan.args).toEqual(["resume", "codex-native-uuid-1"]);
+    expect(resume.nativeResume).toEqual({ providerId: "codex", nativeSessionId: "codex-native-uuid-1" });
+  });
+
+  it("claude resume injects `--resume <id>`", async () => {
+    const { deps, registry } = await buildDeps();
+    const p = await registry.add({ name: "CARS", path: "/work/CARS", defaultProvider: "claude" });
+    const launcher = new Launcher(deps);
+    const first = await launcher.prepareLaunch({ projectKey: p.id, taskGoal: "ship it" }, { permissionMode: "safe" });
+    await launcher.recordNativeSessionId(first.session!.sessionId, "claude", "claude-native-uuid-9");
+
+    const resume = await launcher.prepareLaunch({ sessionId: first.session!.sessionId }, { permissionMode: "safe" });
+    expect(resume.plan.args).toEqual(["--resume", "claude-native-uuid-9"]);
+  });
+});
+
+describe("native session bridge — handoff preserves task, starts fresh target", () => {
+  it("Claude→Codex starts a FRESH codex session (no resume args) while preserving the task", async () => {
+    const { deps, registry } = await buildDeps();
+    const p = await registry.add({ name: "CARS", path: "/work/CARS", defaultProvider: "claude" });
+    const launcher = new Launcher(deps);
+    const first = await launcher.prepareLaunch({ projectKey: p.id, taskGoal: "ship the thing" }, { permissionMode: "safe" });
+    await launcher.recordNativeSessionId(first.session!.sessionId, "claude", "claude-native-uuid-9");
+
+    // Handoff via provider override: the launcher records the transition and
+    // sets activeProvider to codex.
+    const handoff = await launcher.prepareLaunch({ sessionId: first.session!.sessionId, providerId: "codex" }, { permissionMode: "safe" });
+    expect(handoff.providerRef.providerId).toBe("codex");
+    // No stored codex native id → fresh codex session (no resume args).
+    expect(handoff.plan.args).toEqual([]);
+    expect(handoff.nativeResume).toBeUndefined();
+    // CONTINUUM task preserved.
+    expect(handoff.session!.taskGoal).toBe("ship the thing");
+  });
+
+  it("Codex→Claude starts a fresh claude session while the source codex id is retained for a later handoff-back", async () => {
+    const { deps, registry, sessionManager } = await buildDeps();
+    const p = await registry.add({ name: "CARS", path: "/work/CARS", defaultProvider: "codex" });
+    const launcher = new Launcher(deps);
+    const first = await launcher.prepareLaunch({ projectKey: p.id, taskGoal: "task" }, { permissionMode: "safe" });
+    await launcher.recordNativeSessionId(first.session!.sessionId, "codex", "codex-native-uuid-1");
+
+    const toClaude = await launcher.prepareLaunch({ sessionId: first.session!.sessionId, providerId: "claude" }, { permissionMode: "safe" });
+    expect(toClaude.plan.args).toEqual([]); // fresh claude session
+    expect(toClaude.providerRef.providerId).toBe("claude");
+    // The codex native id is retained so a later codex handoff can resume it.
+    expect((await sessionManager.loadSession(first.session!.sessionId)).nativeSessionIds?.codex).toBe("codex-native-uuid-1");
+  });
+});
+
+describe("native session bridge — fallback when native resume unavailable", () => {
+  it("no stored native id → no resume args, no nativeResume (brief fallback)", async () => {
+    const { deps, registry } = await buildDeps();
+    const p = await registry.add({ name: "CARS", path: "/work/CARS", defaultProvider: "claude" });
+    const launcher = new Launcher(deps);
+    const first = await launcher.prepareLaunch({ projectKey: p.id, taskGoal: "ship it" }, { permissionMode: "safe" });
+    // No recordNativeSessionId call — simulate no capture.
+    const resume = await launcher.prepareLaunch({ sessionId: first.session!.sessionId }, { permissionMode: "safe" });
+    expect(resume.plan.args).toEqual([]);
+    expect(resume.nativeResume).toBeUndefined();
+  });
+});
+
+describe("findRecentNativeSessionId — discovery", () => {
+  it("returns the most-recent session id at/after sinceMs (basename strategy)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "continuum-store-"));
+    writeFileSync(join(dir, "a1b2c3d4-1111-2222-3333-444455556666.jsonl"), "{}\n");
+    writeFileSync(join(dir, "z9y8x7w6-aaaa-bbbb-cccc-ddddeeeeffff.jsonl"), "{}\n");
+    const now = Date.now();
+    utimesSync(join(dir, "a1b2c3d4-1111-2222-3333-444455556666.jsonl"), now / 1000, now / 1000 - 5);
+    utimesSync(join(dir, "z9y8x7w6-aaaa-bbbb-cccc-ddddeeeeffff.jsonl"), now / 1000, now / 1000);
+
+    const id = await findRecentNativeSessionId({ rootDir: dir, extension: ".jsonl", idFrom: "basename" }, now - 1000);
+    expect(id).toBe("z9y8x7w6-aaaa-bbbb-cccc-ddddeeeeffff");
+  });
+
+  it("returns undefined when nothing is newer than sinceMs", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "continuum-store-"));
+    writeFileSync(join(dir, "old.jsonl"), "{}\n");
+    const id = await findRecentNativeSessionId({ rootDir: dir, extension: ".jsonl", idFrom: "basename" }, Date.now() + 60_000);
+    expect(id).toBeUndefined();
+  });
+
+  it("extracts a trailing UUID for the last-uuid strategy (Codex rollout filenames)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "continuum-store-"));
+    writeFileSync(join(dir, "rollout-2026-08-16T06-19-26-01a00a15-59c5-7672-8332-c9aad96fad0f.jsonl"), "{}\n");
+    const id = await findRecentNativeSessionId({ rootDir: dir, extension: ".jsonl", idFrom: "last-uuid" }, 0);
+    expect(id).toBe("01a00a15-59c5-7672-8332-c9aad96fad0f");
+  });
+
+  it("never reads file contents — no secret leakage from the store scan", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "continuum-store-"));
+    // File content contains a would-be secret; discovery must not surface it.
+    writeFileSync(join(dir, "secret-session.jsonl"), '{"api_key":"sk-SHOULD-NOT-LEAK"}\n');
+    const id = await findRecentNativeSessionId({ rootDir: dir, extension: ".jsonl", idFrom: "basename" }, 0);
+    expect(id).toBe("secret-session");
+    expect(id).not.toContain("sk-");
+  });
+});

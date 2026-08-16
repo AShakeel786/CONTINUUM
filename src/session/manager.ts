@@ -162,6 +162,14 @@ export class SessionManager {
     return this.update(sessionId, (s) => ({ ...s, lastHandoff: handoff }));
   }
 
+  /** Persist a provider-native session id after a successful launch (best-effort capture). */
+  async recordNativeSessionId(sessionId: string, providerId: string, nativeSessionId: string): Promise<TaskSession> {
+    return this.update(sessionId, (s) => ({
+      ...s,
+      nativeSessionIds: { ...(s.nativeSessionIds ?? {}), [providerId]: nativeSessionId },
+    }));
+  }
+
   async updatePricingAwareness(sessionId: string, pricingAwareness: SessionPricingState): Promise<TaskSession> {
     return this.update(sessionId, (s) => ({ ...s, pricingAwareness }));
   }

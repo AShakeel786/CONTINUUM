@@ -59,5 +59,10 @@ export const codexProfile: ProviderProfile = {
     executable: "codex",
     // No configDirName: Codex uses its native ~/.codex home, not CLAUDE_CONFIG_DIR.
     clearEnvVars: ["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"],
+    nativeResume: {
+      supported: true,
+      resume: { kind: "subcommand", subcommand: "resume" },
+      sessionStore: { rootDir: "~/.codex/sessions", extension: ".jsonl", idFrom: "last-uuid" },
+    },
   },
 };

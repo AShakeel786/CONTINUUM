@@ -14,6 +14,8 @@ import { spawnCli } from "../../launcher/spawn.js";
 import { NoAuthenticatedAgentError, NoProjectError, ProviderNotAuthenticatedError } from "../../launcher/errors.js";
 import { listRecentSessions } from "../../launcher/session-list.js";
 import { suggestHandoffOnPeakEvent } from "../../pricing/handoff-suggestion.js";
+import type { Launcher } from "../../launcher/launcher.js";
+import type { LaunchPreparation } from "../../launcher/types.js";
 import type { PricingAwarenessService } from "../../pricing/service.js";
 import type { HandoffManager } from "../../handoff/manager.js";
 import type { CliIo } from "../index.js";
@@ -79,6 +81,18 @@ async function checkPricing(
   return lines;
 }
 
+/**
+ * After a successful (or interrupted) spawn, best-effort capture the
+ * provider's most-recent native session id and persist it against the
+ * CONTINUUM session. Never throws — a failed capture just means the next
+ * resume falls back to the resume brief.
+ */
+async function recordNativeSessionAfterLaunch(launcher: Launcher, prep: LaunchPreparation, startedAtMs: number): Promise<void> {
+  if (!prep.session) return;
+  const id = await launcher.captureNativeSessionId(prep.providerRef.providerId, startedAtMs);
+  if (id) await launcher.recordNativeSessionId(prep.session.sessionId, prep.providerRef.providerId, id);
+}
+
 export async function runLaunchCommand(args: readonly string[], io: CliIo): Promise<number> {
   const out = io.out ?? noopOutput();
   const prompt = createPrompt();
@@ -104,6 +118,7 @@ export async function runLaunchCommand(args: readonly string[], io: CliIo): Prom
     }
     if (prep.memoryCoreNote) out(`ℹ️  ${prep.memoryCoreNote}\n`);
     if (prep.session) out(`Session: ${prep.session.sessionId}\n`);
+    if (prep.nativeResume) out(`ℹ️  Resuming ${prep.nativeResume.providerId} native session ${prep.nativeResume.nativeSessionId}\n`);
 
     // Peak-pricing handoff prompt: before launching, check the session's
     // active provider for a pricing transition; if a peak event fires, surface
@@ -113,7 +128,9 @@ export async function runLaunchCommand(args: readonly string[], io: CliIo): Prom
       for (const line of pricingLines) out(line);
     }
 
+    const startedAt = Date.now();
     const result = await spawnCli(prep.plan);
+    await recordNativeSessionAfterLaunch(launcher, prep, startedAt);
     return result.exitCode ?? 0;
   } catch (err) {
     if (err instanceof NoProjectError || err instanceof ProviderNotAuthenticatedError || err instanceof NoAuthenticatedAgentError) {
@@ -153,7 +170,10 @@ export async function runResumeCommand(args: readonly string[], io: CliIo): Prom
       out(`⚠️  Stale state detected:\n${prep.staleReasons.map((r) => `  - ${r}`).join("\n")}\n`);
     }
     if (prep.session) out(`Resuming session: ${prep.session.sessionId} [${prep.plan.providerId}]\n`);
+    if (prep.nativeResume) out(`ℹ️  Resuming ${prep.nativeResume.providerId} native session ${prep.nativeResume.nativeSessionId}\n`);
+    const startedAt = Date.now();
     const result = await spawnCli(prep.plan);
+    await recordNativeSessionAfterLaunch(launcher, prep, startedAt);
     return result.exitCode ?? 0;
   } catch (err) {
     if (err instanceof NoAuthenticatedAgentError || err instanceof ProviderNotAuthenticatedError) {
@@ -196,7 +216,9 @@ export async function runHandoffCommand(args: readonly string[], io: CliIo): Pro
 
     // Launch the receiving agent in the same project, continuing the session.
     const prep = await launcher.prepareLaunch({ sessionId, providerId: chosenId }, { permissionMode: "safe" });
+    const startedAt = Date.now();
     const spawnResult = await spawnCli(prep.plan);
+    await recordNativeSessionAfterLaunch(launcher, prep, startedAt);
     return spawnResult.exitCode ?? 0;
   } catch (err) {
     if (err instanceof NoAuthenticatedAgentError) {

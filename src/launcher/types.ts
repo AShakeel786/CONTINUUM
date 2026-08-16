@@ -48,4 +48,6 @@ export interface LaunchPreparation {
   readonly memoryCoreAvailable: boolean;
   /** Human-readable degradation note when MemoryCore is unavailable. */
   readonly memoryCoreNote?: string;
+  /** Set when this launch resumes the provider's own native CLI session (by stored id). */
+  readonly nativeResume?: { readonly providerId: string; readonly nativeSessionId: string };
 }

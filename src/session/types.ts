@@ -115,6 +115,15 @@ export interface TaskSession {
   readonly updatedAt: string;
 
   readonly lastHandoff?: HandoffMetadata;
+
+  /**
+   * Provider-native session ids, keyed by providerId. Written after a
+   * successful launch (best-effort capture) and read on same-provider resume
+   * to continue the provider's own CLI session instead of only injecting a
+   * resume brief. Absent key = no known native session → fresh native session
+   * + brief fallback. Never a fabricated id.
+   */
+  readonly nativeSessionIds?: Readonly<Record<string, string>>;
 }
 
 export interface CreateSessionInput {
