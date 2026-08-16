@@ -2,18 +2,23 @@
  * `continuum` (bare) — the interactive front door.
  *
  * A terminal-native menu (no GUI) that reuses existing systems only:
- * project registry (list), launcher (provider usability + prepare), session
- * list (resume), and the same preflight/pricing/launch helpers the explicit
- * `launch`/`resume` commands use. It owns no provider/session/launch logic
- * of its own — only the ordering of already-built pieces.
+ * project registry (list/add/remove/detect), launcher (provider usability +
+ * prepare), session list (resume), and the same preflight/pricing/launch
+ * helpers the explicit `launch`/`resume` commands use. It owns no
+ * provider/session/launch/registry logic of its own — only the ordering of
+ * already-built pieces.
  *
- * Flow: header → choose project → choose action (new/resume) → choose
- * provider (new) or session (resume) → prepare + launch.
+ * First menu: existing projects → "+ Add project" → "Manage projects" →
+ * (optional) "Register current directory as a project" → "0. Exit".
  */
 
+import { statSync } from "node:fs";
+import { basename } from "node:path";
 import { createPrompt, noopOutput } from "../../auth/prompt.js";
 import type { Prompt, PromptOutput } from "../../auth/prompt.js";
+import { ProjectRegistry, normalizeProjectPath } from "../../registry/registry.js";
 import type { ProjectRecord } from "../../registry/types.js";
+import { ProjectAlreadyExistsError, ProjectNotFoundError } from "../../registry/errors.js";
 import { listRecentSessions, type RecentSessionSummary } from "../../launcher/session-list.js";
 import type { ProviderUsability } from "../../launcher/launcher.js";
 import type { LaunchPreparation } from "../../launcher/types.js";
@@ -24,10 +29,13 @@ import { checkPricing, ensureMcpRegistration, launchPrepared, runLaunchPreflight
 
 const HEADER = "CONTINUUM\n------------";
 
-export interface InteractiveMenuData {
-  readonly projects: readonly ProjectRecord[];
+export interface InteractiveMenuDeps {
+  readonly projects: ProjectRegistry;
   readonly providers: readonly ProviderUsability[];
   readonly sessions: readonly RecentSessionSummary[];
+  readonly knownProviders: ReadonlySet<string>;
+  /** Launch directory — used to offer "register current directory". */
+  readonly cwd: string;
 }
 
 export type InteractiveDecision =
@@ -39,57 +47,99 @@ function truncate(s: string, n: number): string {
   return s.length > n ? `${s.slice(0, n - 1)}…` : s;
 }
 
-/** Present a numbered menu; returns the 0-based index, or undefined for exit/empty. */
+function isDirectory(p: string): boolean {
+  try {
+    return statSync(p).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/** Present a numbered menu; returns the 0-based index, or undefined for exit/back. */
 async function chooseNumber(
   prompt: Prompt,
   out: PromptOutput,
   title: string,
   items: readonly string[],
+  exitLabel = "Exit",
 ): Promise<number | undefined> {
   out(`\n${title}\n`);
   items.forEach((label, i) => out(`  ${i + 1}. ${label}\n`));
-  out(`  0. Exit\n`);
+  out(`  0. ${exitLabel}\n`);
   for (;;) {
     const answer = (await prompt.ask("Select")).trim().toLowerCase();
     if (answer === "" || answer === "0" || answer === "q" || answer === "quit" || answer === "exit") return undefined;
     const n = Number(answer);
     if (Number.isInteger(n) && n >= 1 && n <= items.length) return n - 1;
-    out("  (enter a number from the list, or 0 to exit)\n");
+    out("  (enter a number from the list, or 0)\n");
   }
 }
 
 /**
- * The pure menu/decision half of the front door — takes already-loaded data
- * plus a prompt, returns what to launch. Kept free of any filesystem/launch
- * side effects so it can be tested with a scripted prompt.
+ * The pure menu/decision half of the front door. Takes the live registry +
+ * already-loaded data plus a prompt, and returns what to launch (or exit).
+ * Project add/remove/manage and current-directory registration happen in the
+ * loop here and always return to the project menu, so a newly added project
+ * is immediately launchable. Kept side-effect-light (only the injected
+ * `ProjectRegistry` is mutated) so it can be tested with a scripted prompt
+ * and a temp-registry-backed ProjectRegistry.
  */
 export async function runInteractiveMenu(
-  data: InteractiveMenuData,
+  deps: InteractiveMenuDeps,
   prompt: Prompt,
   out: PromptOutput,
 ): Promise<InteractiveDecision> {
   out(`${HEADER}\n`);
 
-  const projects = data.projects;
-  if (projects.length === 0) {
-    out("\nNo projects registered yet. Add one with:\n");
-    out("  continuum project add <name> <path>\n");
-    return { kind: "exit" };
+  for (;;) {
+    const projects = await deps.projects.list();
+    const cwdDetected = deps.cwd ? await deps.projects.detect(deps.cwd) : undefined;
+    const registerCwd = !!deps.cwd && !cwdDetected;
+
+    const labels = [
+      ...projects.map((p) => p.name),
+      "+ Add project",
+      "Manage projects",
+      ...(registerCwd ? ["Register current directory as a project"] : []),
+    ];
+    const choice = await chooseNumber(prompt, out, "Choose project:", labels);
+    if (choice === undefined) return { kind: "exit" };
+
+    if (choice < projects.length) {
+      return await chooseActionForProject(deps, projects[choice]!, prompt, out);
+    }
+
+    const special = choice - projects.length;
+    if (special === 0) {
+      await addProjectFlow(deps, prompt, out);
+      continue;
+    }
+    if (special === 1) {
+      await manageProjectsFlow(deps, prompt, out);
+      continue;
+    }
+    // Register the current directory.
+    await addProjectFlow(deps, prompt, out, deps.cwd);
+    continue;
   }
+}
 
-  const projectIdx = await chooseNumber(prompt, out, "Choose project:", projects.map((p) => p.name));
-  if (projectIdx === undefined) return { kind: "exit" };
-  const project = projects[projectIdx]!;
-
+/** After a project is chosen: start a new task or resume a recent session. */
+async function chooseActionForProject(
+  deps: InteractiveMenuDeps,
+  project: ProjectRecord,
+  prompt: Prompt,
+  out: PromptOutput,
+): Promise<InteractiveDecision> {
   const actionIdx = await chooseNumber(prompt, out, "Choose action:", ["Start new task", "Resume session"]);
   if (actionIdx === undefined) return { kind: "exit" };
 
   if (actionIdx === 0) {
     // Start a new task in the chosen project.
-    for (const d of data.providers.filter((p) => !p.usable)) {
+    for (const d of deps.providers.filter((p) => !p.usable)) {
       out(`  (${d.displayName} unavailable: ${d.reason ?? "not authenticated"})\n`);
     }
-    const usable = data.providers.filter((p) => p.usable);
+    const usable = deps.providers.filter((p) => p.usable);
     if (usable.length === 0) {
       out("\nNo usable provider. Authenticate one first (e.g. `continuum auth codex`).\n");
       return { kind: "exit" };
@@ -101,8 +151,8 @@ export async function runInteractiveMenu(
   }
 
   // Resume a recent session (scoped to the chosen project; fall back to all).
-  const scoped = data.sessions.filter((s) => s.projectId === project.id);
-  const pool = scoped.length > 0 ? scoped : data.sessions;
+  const scoped = deps.sessions.filter((s) => s.projectId === project.id);
+  const pool = scoped.length > 0 ? scoped : deps.sessions;
   if (pool.length === 0) {
     out("\nNo sessions to resume yet.\n");
     return { kind: "exit" };
@@ -114,18 +164,150 @@ export async function runInteractiveMenu(
   return { kind: "resume", sessionId: pool[sessionIdx]!.sessionId };
 }
 
+/**
+ * Prompt for name/path/provider and add through the existing ProjectRegistry.
+ * When `presetPath` is set (register-current-directory), the path is fixed and
+ * the name defaults to the directory basename.
+ */
+async function addProjectFlow(
+  deps: InteractiveMenuDeps,
+  prompt: Prompt,
+  out: PromptOutput,
+  presetPath?: string,
+): Promise<void> {
+  if (presetPath) {
+    out(`\nRegister current directory as a project (${presetPath}).\n`);
+  } else {
+    out("\n— Add project —\n");
+  }
+
+  const defaultName = presetPath ? basename(presetPath) : "";
+  const name = (await prompt.ask("Project name", defaultName)).trim();
+  if (!name) {
+    out("(cancelled: no name)\n");
+    return;
+  }
+
+  const path = (presetPath ?? (await prompt.ask("Project path", deps.cwd))).trim();
+  if (!path) {
+    out("(cancelled: no path)\n");
+    return;
+  }
+  if (!isDirectory(path)) {
+    out(`Path does not exist or is not a directory: ${path}\n`);
+    return;
+  }
+
+  const provider = (await prompt.ask("Default provider (optional)", "")).trim();
+  if (provider && !deps.knownProviders.has(provider)) {
+    out(`Unknown provider "${provider}". Known: ${[...deps.knownProviders].join(", ")}\n`);
+    return;
+  }
+
+  try {
+    const record = await deps.projects.add({
+      name,
+      path: normalizeProjectPath(path),
+      ...(provider ? { defaultProvider: provider } : {}),
+    });
+    out(`✓ Added project "${record.name}" at ${record.path}.\n`);
+  } catch (err) {
+    if (err instanceof ProjectAlreadyExistsError) {
+      out(`${err.message}\n`);
+      return;
+    }
+    throw err;
+  }
+}
+
+/** Minimal project management: list / remove / show details. */
+async function manageProjectsFlow(deps: InteractiveMenuDeps, prompt: Prompt, out: PromptOutput): Promise<void> {
+  for (;;) {
+    const choice = await chooseNumber(
+      prompt,
+      out,
+      "Manage projects:",
+      ["List projects", "Remove project", "Show project details"],
+      "Back",
+    );
+    if (choice === undefined) return;
+
+    const projects = await deps.projects.list();
+
+    if (choice === 0) {
+      out("\nProjects:\n");
+      if (projects.length === 0) {
+        out("  (none)\n");
+        continue;
+      }
+      for (const p of projects) {
+        const def = p.defaultProvider ? ` [default: ${p.defaultProvider}]` : "";
+        out(`  - ${p.name}${def}\n    ${p.path}\n`);
+      }
+      continue;
+    }
+
+    if (choice === 1) {
+      if (projects.length === 0) {
+        out("\nNo projects to remove.\n");
+        continue;
+      }
+      const idx = await chooseNumber(prompt, out, "Remove project:", projects.map((p) => p.name), "Back");
+      if (idx === undefined) continue;
+      const p = projects[idx]!;
+      if (!(await prompt.confirm(`Remove "${p.name}"?`, false))) {
+        out("(cancelled)\n");
+        continue;
+      }
+      try {
+        await deps.projects.remove(p.id);
+        out(`✓ Removed "${p.name}".\n`);
+      } catch (err) {
+        if (err instanceof ProjectNotFoundError) {
+          out(`${err.message}\n`);
+          continue;
+        }
+        throw err;
+      }
+      continue;
+    }
+
+    // Show details.
+    if (projects.length === 0) {
+      out("\nNo projects to show.\n");
+      continue;
+    }
+    const idx = await chooseNumber(prompt, out, "Show project:", projects.map((p) => p.name), "Back");
+    if (idx === undefined) continue;
+    const p = projects[idx]!;
+    out(`\n${p.name}\n  path: ${p.path}\n`);
+    if (p.defaultProvider) out(`  default provider: ${p.defaultProvider}\n`);
+    if (p.defaultModel) out(`  default model: ${p.defaultModel}\n`);
+    if (p.aliases.length) out(`  aliases: ${p.aliases.join(", ")}\n`);
+  }
+}
+
 export async function runInteractiveCommand(args: readonly string[], io: CliIo): Promise<number> {
   const out = io.out ?? noopOutput();
   const prompt = createPrompt();
   const ctx = await buildLauncherContext({ prompt });
 
-  const [projects, providers, sessions] = await Promise.all([
-    ctx.projects.list(),
+  const [providers, sessions] = await Promise.all([
     ctx.launcher.listProviderUsability(),
     listRecentSessions(ctx.sessionManager, 20),
   ]);
 
-  const decision = await runInteractiveMenu({ projects, providers, sessions }, prompt, out);
+  const decision = await runInteractiveMenu(
+    {
+      projects: ctx.projects,
+      providers,
+      sessions,
+      knownProviders: new Set(ctx.providers.listIds()),
+      cwd: process.cwd(),
+    },
+    prompt,
+    out,
+  );
   if (decision.kind === "exit") return 0;
 
   try {
