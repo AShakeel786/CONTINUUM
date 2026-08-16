@@ -18,6 +18,33 @@ import type { PricingAwarenessService } from "../../pricing/service.js";
 import type { HandoffManager } from "../../handoff/manager.js";
 import type { CliIo } from "../index.js";
 import { buildLauncherContext } from "./launcher-context.js";
+import { HealthDoctor } from "../../health/doctor.js";
+import { DEFAULT_OPTIONS, DEFAULT_POLICY, liveRuntime, scanStaleProviderProcesses } from "../../health/adapters.js";
+import { buildPreflightWarnings } from "../../health/preflight.js";
+import { join } from "node:path";
+import { resolveDataDir } from "../../config/paths.js";
+
+/**
+ * Runtime-only preflight (docker/containers/gateways/processes). Deliberately
+ * excludes provider/credential probes — those live in `continuum doctor`, and
+ * launch already enforces auth via prepareLaunch. Failure-tolerant: a broken
+ * preflight must never block a launch.
+ */
+async function runLaunchPreflight(): Promise<readonly string[]> {
+  try {
+    const doctor = new HealthDoctor({
+      runtime: liveRuntime,
+      options: { ...DEFAULT_OPTIONS, stateFile: join(resolveDataDir(), "health-state.json") },
+      policy: { ...DEFAULT_POLICY },
+      probes: {
+        staleProcesses: async () => scanStaleProviderProcesses([...DEFAULT_OPTIONS.providerExecutables]),
+      },
+    });
+    return buildPreflightWarnings(await doctor.diagnose());
+  } catch {
+    return [];
+  }
+}
 
 function opt(args: readonly string[], ...flags: readonly string[]): string | undefined {
   for (let i = 0; i < args.length; i++) {
@@ -63,6 +90,10 @@ export async function runLaunchCommand(args: readonly string[], io: CliIo): Prom
   const bypass = args.includes("--bypass-permissions") || args.includes("--dangerously-bypass");
 
   try {
+    // Preflight: surface stack problems BEFORE the interactive session starts.
+    // Never blocks launch — degraded mode is a launcher feature, not an error.
+    for (const warning of await runLaunchPreflight()) out(`⚠️  ${warning}\n`);
+
     const prep = await launcher.prepareLaunch(
       { ...(projectKey ? { projectKey } : {}), providerId, taskGoal },
       { permissionMode: bypass ? "bypass" : "safe" },
