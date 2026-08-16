@@ -1,5 +1,7 @@
 # CONTINUUM
 
+<p align="center"><img src="assets/icons/png/icon-256.png" alt="CONTINUUM logo" width="160" /></p>
+
 **Provider-neutral AI development continuity and token-efficiency infrastructure.**
 
 CONTINUUM lets you run several coding agents — Claude Code, DeepSeek, Codex, or any
