@@ -9,7 +9,7 @@ Legend: 🔴 High (security exposure or active correctness bug) · 🟡 Medium (
 ## Security
 
 **R-1 🔴 Untracked credential-shaped file sitting in the repo tree, not gitignored.**
-`backups\2026-08-09_bypass-all-agents\<garbled filename>` — the filename is the mangled text of a failed `cp C:\Users\arsla\.codex\config.toml ...` command (cross-shell path-quoting accident). Content wasn't opened (per audit instructions), but the filename strongly implies a raw copy of Codex's credential file. `backups/` is not covered by `.gitignore` and the file is currently untracked (`??`). A broad `git add -A`/`git add .` in this repo would commit it.
+`backups\2026-08-09_bypass-all-agents\<garbled filename>` — the filename is the mangled text of a failed `cp C:\Users\<user>\.codex\config.toml ...` command (cross-shell path-quoting accident). Content wasn't opened (per audit instructions), but the filename strongly implies a raw copy of Codex's credential file. `backups/` is not covered by `.gitignore` and the file is currently untracked (`??`). A broad `git add -A`/`git add .` in this repo would commit it.
 *Recommendation:* delete the file or add `backups/` to `.gitignore` before any further git operations in that repo.
 
 **R-2 🔴 MemoryProxy admin endpoints are open-by-default.**

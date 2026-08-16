@@ -1,6 +1,6 @@
 # Phase 1 — Existing System Audit: TencentDB Agent Memory
 
-**Audit target:** `C:\Users\arsla\Documents\Ai-tools\TencentDB-Agent-Memory` (fork of the open-source [TencentDB Agent Memory](https://github.com/Tencent/TencentDB-Agent-Memory) project, local branch `feat/server_team`, canonical remote `TencentCloud/TencentDB-Agent-Memory`)
+**Audit target:** `C:\Users\<user>\Documents\Ai-tools\TencentDB-Agent-Memory` (fork of the open-source [TencentDB Agent Memory](https://github.com/Tencent/TencentDB-Agent-Memory) project, local branch `feat/server_team`, canonical remote `TencentCloud/TencentDB-Agent-Memory`)
 **Audit method:** read-only static inspection of source, config, and scripts. No containers were stopped/started, no registry data changed, no credentials read or printed. This document distinguishes **verified facts** (cited to file/line) from **recommendations** (marked explicitly).
 **Audit date:** 2026-08-14
 
