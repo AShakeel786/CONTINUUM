@@ -97,7 +97,11 @@ async function postV3<T>(
     if (!res.ok) {
       throw new Error(`MemoryCore Gateway ${path} returned HTTP ${res.status}`);
     }
-    return (await res.json()) as T;
+    // The Gateway wraps every /v3 response in `{ code, message, request_id, data }`.
+    // Handlers consume the *inner* `data` payload, so unwrap that field here —
+    // mirroring the write client (`memorycore-write.ts`), which already does.
+    const envelope = (await res.json()) as { data?: T };
+    return envelope.data as T;
   } finally {
     clearTimeout(timer);
   }

@@ -30,10 +30,10 @@ describe("MemoryCore Gateway client", () => {
     const fetchMock = vi.fn(async (url: string | URL, init?: RequestInit) => {
       const u = String(url);
       if (u.endsWith("/v3/core/read")) {
-        return jsonResponse({ content: "User is a backend engineer.", updated_at: "2026-01-01T00:00:00.000Z" });
+        return jsonResponse({ code: 0, data: { content: "User is a backend engineer.", updated_at: "2026-01-01T00:00:00.000Z" } });
       }
       if (u.endsWith("/v3/scenario/ls")) {
-        return jsonResponse({ entries: [{ path: "scenes/onboarding.md", summary: "Onboarding notes" }] });
+        return jsonResponse({ code: 0, data: { entries: [{ path: "scenes/onboarding.md", summary: "Onboarding notes" }] } });
       }
       throw new Error(`unexpected URL in test: ${u}`);
     });
@@ -55,9 +55,12 @@ describe("MemoryCore Gateway client", () => {
     process.env.TEST_MEMORYCORE_TOKEN = "sk-mem-test-fixture";
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse({
-        items: [
-          { id: "mem-1", type: "episodic", content: "Discussed deployment plan.", score: 0.75, updated_at: "2026-01-01" },
-        ],
+        code: 0,
+        data: {
+          items: [
+            { id: "mem-1", type: "episodic", content: "Discussed deployment plan.", score: 0.75, updated_at: "2026-01-01" },
+          ],
+        },
       }),
     );
     vi.stubGlobal("fetch", fetchMock);
@@ -101,10 +104,10 @@ describe("MemoryCore Gateway client", () => {
     process.env.TEST_MEMORYCORE_TOKEN = "sk-mem-test-fixture";
     const fetchMock = vi.fn(async (url: string | URL) => {
       const u = String(url);
-      if (u.endsWith("/v3/core/read")) return jsonResponse({ content: "Persona content." });
-      if (u.endsWith("/v3/scenario/ls")) return jsonResponse({ entries: [] });
+      if (u.endsWith("/v3/core/read")) return jsonResponse({ code: 0, data: { content: "Persona content." } });
+      if (u.endsWith("/v3/scenario/ls")) return jsonResponse({ code: 0, data: { entries: [] } });
       if (u.endsWith("/v3/atomic/search")) {
-        return jsonResponse({ items: [{ id: "mem-9", type: "instruction", content: "Be concise.", score: 0.6 }] });
+        return jsonResponse({ code: 0, data: { items: [{ id: "mem-9", type: "instruction", content: "Be concise.", score: 0.6 }] } });
       }
       throw new Error(`unexpected URL: ${u}`);
     });

@@ -36,14 +36,17 @@ describe("assembleNativeClaudeContext — closing the memory-blind gap for nativ
     const fetchMock = vi.fn(async (url: string | URL) => {
       const u = String(url);
       if (u.endsWith("/v3/core/read")) {
-        return jsonResponse({ content: "User is a backend engineer who prefers concise answers." });
+        return jsonResponse({ code: 0, data: { content: "User is a backend engineer who prefers concise answers." } });
       }
       if (u.endsWith("/v3/scenario/ls")) {
-        return jsonResponse({ entries: [{ path: "scenes/deploy-runbook.md", summary: "Deployment runbook" }] });
+        return jsonResponse({ code: 0, data: { entries: [{ path: "scenes/deploy-runbook.md", summary: "Deployment runbook" }] } });
       }
       if (u.endsWith("/v3/atomic/search")) {
         return jsonResponse({
-          items: [{ id: "mem-42", type: "instruction", content: "Always run tests before deploying.", score: 0.81 }],
+          code: 0,
+          data: {
+            items: [{ id: "mem-42", type: "instruction", content: "Always run tests before deploying.", score: 0.81 }],
+          },
         });
       }
       throw new Error(`unexpected URL in native-claude harness test: ${u}`);
@@ -82,9 +85,9 @@ describe("assembleNativeClaudeContext — closing the memory-blind gap for nativ
       "fetch",
       vi.fn(async (url: string | URL) => {
         const u = String(url);
-        if (u.endsWith("/v3/core/read")) return jsonResponse({ content: "" });
-        if (u.endsWith("/v3/scenario/ls")) return jsonResponse({ entries: [] });
-        if (u.endsWith("/v3/atomic/search")) return jsonResponse({ items: [] });
+        if (u.endsWith("/v3/core/read")) return jsonResponse({ code: 0, data: { content: "" } });
+        if (u.endsWith("/v3/scenario/ls")) return jsonResponse({ code: 0, data: { entries: [] } });
+        if (u.endsWith("/v3/atomic/search")) return jsonResponse({ code: 0, data: { items: [] } });
         throw new Error(`unexpected URL: ${u}`);
       }),
     );
@@ -107,9 +110,9 @@ describe("assembleNativeClaudeContext — closing the memory-blind gap for nativ
       "fetch",
       vi.fn(async (url: string | URL) => {
         const u = String(url);
-        if (u.endsWith("/v3/core/read")) return jsonResponse({ content: "Persona." });
-        if (u.endsWith("/v3/scenario/ls")) return jsonResponse({ entries: [] });
-        if (u.endsWith("/v3/atomic/search")) return jsonResponse({ items: [] });
+        if (u.endsWith("/v3/core/read")) return jsonResponse({ code: 0, data: { content: "Persona." } });
+        if (u.endsWith("/v3/scenario/ls")) return jsonResponse({ code: 0, data: { entries: [] } });
+        if (u.endsWith("/v3/atomic/search")) return jsonResponse({ code: 0, data: { items: [] } });
         throw new Error(`unexpected URL: ${u}`);
       }),
     );
