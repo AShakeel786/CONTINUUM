@@ -145,20 +145,45 @@ describe("native session bridge — handoff preserves task, starts fresh target"
     await launcher.recordNativeSessionId(first.session!.sessionId, "codex", "codex-native-uuid-1");
 
     const toClaude = await launcher.prepareLaunch({ sessionId: first.session!.sessionId, providerId: "claude" }, { permissionMode: "safe" });
-    expect(toClaude.plan.args).toEqual([]); // fresh claude session
+    // Fresh claude session, but with a deterministic session id (no --resume).
+    expect(toClaude.plan.args).toEqual(["--session-id", first.session!.sessionId]);
+    expect(toClaude.nativeResume).toBeUndefined();
     expect(toClaude.providerRef.providerId).toBe("claude");
     // The codex native id is retained so a later codex handoff can resume it.
     expect((await sessionManager.loadSession(first.session!.sessionId)).nativeSessionIds?.codex).toBe("codex-native-uuid-1");
   });
 });
 
-describe("native session bridge — fallback when native resume unavailable", () => {
-  it("no stored native id → no resume args, no nativeResume (brief fallback)", async () => {
+describe("native session bridge — deterministic Claude session identity", () => {
+  it("first claude launch sets --session-id = CONTINUUM session id and records it deterministically", async () => {
+    const { deps, registry, sessionManager } = await buildDeps();
+    const p = await registry.add({ name: "CARS", path: "/work/CARS", defaultProvider: "claude" });
+    const launcher = new Launcher(deps);
+    const prep = await launcher.prepareLaunch({ projectKey: p.id, taskGoal: "ship it" }, { permissionMode: "safe" });
+    const sessionId = prep.session!.sessionId;
+    // Deterministic native id (no --resume, no store-scan needed).
+    expect(prep.plan.args).toEqual(["--session-id", sessionId]);
+    expect((await sessionManager.loadSession(sessionId)).nativeSessionIds?.claude).toBe(sessionId);
+  });
+
+  it("claude resume with a stored id uses --resume, not --session-id", async () => {
     const { deps, registry } = await buildDeps();
     const p = await registry.add({ name: "CARS", path: "/work/CARS", defaultProvider: "claude" });
     const launcher = new Launcher(deps);
     const first = await launcher.prepareLaunch({ projectKey: p.id, taskGoal: "ship it" }, { permissionMode: "safe" });
-    // No recordNativeSessionId call — simulate no capture.
+    const sessionId = first.session!.sessionId;
+    // After the deterministic first launch, resume must use --resume <id>.
+    const resume = await launcher.prepareLaunch({ sessionId }, { permissionMode: "safe" });
+    expect(resume.plan.args).toEqual(["--resume", sessionId]);
+    expect(resume.nativeResume).toEqual({ providerId: "claude", nativeSessionId: sessionId });
+  });
+
+  it("Codex (no session-id flag) still falls back to empty args with no stored id", async () => {
+    const { deps, registry } = await buildDeps();
+    const p = await registry.add({ name: "CARS", path: "/work/CARS", defaultProvider: "codex" });
+    const launcher = new Launcher(deps);
+    const first = await launcher.prepareLaunch({ projectKey: p.id, taskGoal: "ship it" }, { permissionMode: "safe" });
+    // No capture/record — codex keeps the store-scan fallback, no deterministic id.
     const resume = await launcher.prepareLaunch({ sessionId: first.session!.sessionId }, { permissionMode: "safe" });
     expect(resume.plan.args).toEqual([]);
     expect(resume.nativeResume).toBeUndefined();

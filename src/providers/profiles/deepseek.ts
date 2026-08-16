@@ -74,11 +74,13 @@ export const deepseekProfile: ProviderProfile = {
     proxyUserKeySecret: secretRef("CONTINUUM_TENCENT_PROXY_USER_KEY"),
     clearEnvVars: [],
     // The proxy-routed path launches the `claude` binary (Claude Code), so its
-    // real native-session semantics are Claude's own `--resume <id>` flag.
+    // real native-session semantics are Claude's own `--resume <id>` flag, and
+    // it accepts `--session-id <uuid>` for a deterministic native id.
     nativeResume: {
       supported: true,
       resume: { kind: "flag", flag: "--resume" },
       sessionStore: { rootDir: "~/.claude-tencent/projects", extension: ".jsonl", idFrom: "basename" },
+      sessionIdFlag: "--session-id",
     },
   },
 };

@@ -63,6 +63,9 @@ export const codexProfile: ProviderProfile = {
       supported: true,
       resume: { kind: "subcommand", subcommand: "resume" },
       sessionStore: { rootDir: "~/.codex/sessions", extension: ".jsonl", idFrom: "last-uuid" },
+      // No sessionIdFlag: Codex generates its own session UUID (no --session-id),
+      // so its id is still discovered via the store scan, not set deterministically.
     },
+    mcp: { supported: true, serverName: "continuum" },
   },
 };

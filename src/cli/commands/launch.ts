@@ -89,6 +89,9 @@ async function checkPricing(
  */
 async function recordNativeSessionAfterLaunch(launcher: Launcher, prep: LaunchPreparation, startedAtMs: number): Promise<void> {
   if (!prep.session) return;
+  // Deterministic providers (Claude/DeepSeek) already recorded their id in
+  // prepareLaunch — no store-scan needed (and it could pick the wrong file).
+  if (launcher.supportsDeterministicSessionId(prep.providerRef.providerId)) return;
   const id = await launcher.captureNativeSessionId(prep.providerRef.providerId, startedAtMs);
   if (id) await launcher.recordNativeSessionId(prep.session.sessionId, prep.providerRef.providerId, id);
 }

@@ -147,6 +147,8 @@ export interface NativeCliLaunch {
   readonly clearEnvVars: readonly string[];
   /** Native-session resume capability (declared as data — see below). */
   readonly nativeResume?: NativeResumeDescriptor;
+  /** MCP auto-connect capability (declared as data — see below). */
+  readonly mcp?: McpRegistrationDescriptor;
 }
 
 /**
@@ -167,6 +169,8 @@ export interface ProxyRoutedCliLaunch {
   readonly clearEnvVars: readonly string[];
   /** Native-session resume capability (declared as data — see below). */
   readonly nativeResume?: NativeResumeDescriptor;
+  /** MCP auto-connect capability (declared as data — see below). */
+  readonly mcp?: McpRegistrationDescriptor;
 }
 
 export type CliLaunchDescriptor = NativeCliLaunch | ProxyRoutedCliLaunch;
@@ -197,11 +201,35 @@ export interface NativeResumeCapability {
   readonly supported: true;
   readonly resume: NativeResume;
   readonly sessionStore: NativeSessionStore;
+  /**
+   * When the CLI supports setting a new session's id explicitly (e.g. Claude
+   * Code `--session-id <uuid>`), the flag to use for a deterministic native
+   * session id. Absent = the CLI generates its own id (Codex) → store-scan.
+   */
+  readonly sessionIdFlag?: string;
 }
 export interface NativeResumeUnsupported {
   readonly supported: false;
 }
 export type NativeResumeDescriptor = NativeResumeCapability | NativeResumeUnsupported;
+
+// ── MCP auto-connect (data, not behavior) ─────────────────────────────────
+//
+// A provider whose CLI can register an external MCP server declares that the
+// CONTINUUM `continuum-mcp` stdio server may be auto-registered for it. The
+// registration command shape is identical across Claude and Codex
+// (`<cli> mcp add <name> -- <command>...`), so this is just a capability flag
+// + server name, never a provider-id switch.
+
+export interface McpRegistrationCapability {
+  readonly supported: true;
+  /** MCP server name used in `<cli> mcp add <name> ...`. */
+  readonly serverName: string;
+}
+export interface McpRegistrationUnsupported {
+  readonly supported: false;
+}
+export type McpRegistrationDescriptor = McpRegistrationCapability | McpRegistrationUnsupported;
 
 // ── Provider profile (pure data) ────────────────────────────────────────
 
@@ -240,6 +268,8 @@ export interface CliLaunchContext {
   readonly secrets?: Readonly<Record<string, string>>;
   /** When set, resume the provider's native session with this id (builds resume args). */
   readonly resumeNativeSessionId?: string;
+  /** When set (and the provider declares a `sessionIdFlag`), set a deterministic native session id for a fresh launch. */
+  readonly setSessionId?: string;
 }
 
 /** A fully-resolved plan for launching a coding-agent CLI against this provider. */

@@ -48,4 +48,22 @@ describe("native resume args (data-driven, no provider switch)", () => {
       }
     }
   });
+
+  it("deterministic session-id: Claude/DeepSeek set --session-id, Codex does not", () => {
+    const claude = createProviderAdapter(claudeProfile).buildCliLaunchPlan({ workingDir: "/x", setSessionId: "sess-1" });
+    expect(claude.args).toEqual(["--session-id", "sess-1"]);
+
+    process.env.CONTINUUM_TENCENT_PROXY_USER_KEY = "sk-proxy-test";
+    const ds = createProviderAdapter(deepseekProfile).buildCliLaunchPlan({ workingDir: "/x", setSessionId: "sess-2" });
+    expect(ds.args).toEqual(["--session-id", "sess-2"]);
+
+    // Codex declares no sessionIdFlag → a setSessionId is ignored (store-scan fallback).
+    const codex = createProviderAdapter(codexProfile).buildCliLaunchPlan({ workingDir: "/x", setSessionId: "sess-3" });
+    expect(codex.args).toEqual([]);
+  });
+
+  it("resume id takes precedence over a set session id", () => {
+    const plan = createProviderAdapter(claudeProfile).buildCliLaunchPlan({ workingDir: "/x", resumeNativeSessionId: "resume-1", setSessionId: "fresh-1" });
+    expect(plan.args).toEqual(["--resume", "resume-1"]);
+  });
 });

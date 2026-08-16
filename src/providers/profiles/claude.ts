@@ -63,6 +63,10 @@ export const claudeProfile: ProviderProfile = {
       supported: true,
       resume: { kind: "flag", flag: "--resume" },
       sessionStore: { rootDir: "~/.claude/projects", extension: ".jsonl", idFrom: "basename" },
+      // Claude Code accepts `--session-id <uuid>` — a deterministic native id
+      // equal to the CONTINUUM session id, so no newest-file discovery needed.
+      sessionIdFlag: "--session-id",
     },
+    mcp: { supported: true, serverName: "continuum" },
   },
 };

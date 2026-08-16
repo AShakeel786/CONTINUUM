@@ -24,6 +24,7 @@ import { runProjectCommand } from "./commands/project.js";
 import { runLaunchCommand, runResumeCommand, runHandoffCommand } from "./commands/launch.js";
 import { runSessionsCommand } from "./commands/sessions.js";
 import { runMcpCommand } from "./commands/mcp.js";
+import { runMcpSetupCommand } from "./commands/mcp-setup.js";
 import type { PromptOutput } from "../auth/prompt.js";
 
 export interface CliIo {
@@ -69,6 +70,8 @@ export async function main(argv: readonly string[]): Promise<number> {
       return runSessionsCommand(rest, io);
     case "mcp":
       return runMcpCommand(rest, io);
+    case "mcp-setup":
+      return runMcpSetupCommand(rest, io);
     default:
       io.out?.(`Unknown command "${command}".\n`);
       printHelp(io);
@@ -94,6 +97,7 @@ function printHelp(io: CliIo): void {
       "  handoff <session> Hand off to an authenticated agent (never auto-selects)",
       "  sessions          List/archive recent sessions",
       "  mcp               Run the MCP server (JSON-RPC over stdio)",
+      "  mcp-setup         Idempotently register CONTINUUM MCP with Claude/Codex",
       "  --version         Print the version",
       "  --help            Show this help",
       "",

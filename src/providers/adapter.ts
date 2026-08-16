@@ -77,7 +77,7 @@ class DataDrivenProviderAdapter implements ProviderAdapter {
 
   buildCliLaunchPlan(ctx: CliLaunchContext): CliLaunchPlan {
     const launch = this.profile.cliLaunch;
-    const args = this.resumeArgs(launch, ctx);
+    const args = this.sessionArgs(launch, ctx);
     switch (launch.kind) {
       case "native":
         return {
@@ -117,16 +117,25 @@ class DataDrivenProviderAdapter implements ProviderAdapter {
   }
 
   /**
-   * Build the native-resume args from the declared capability + a requested
-   * session id. Returns [] when unsupported or no id is requested — the
-   * launcher then starts a fresh native session (resume-brief fallback).
-   * No provider-id switch: this reads only the declared `nativeResume` data.
+   * Build the native-session args from the declared capability + the requested
+   * session identity. Resume takes precedence; otherwise a deterministic
+   * session-id flag is used when declared. Returns [] when unsupported or
+   * nothing is requested — the launcher then starts a fresh native session
+   * (resume-brief fallback). No provider-id switch: this reads only the
+   * declared `nativeResume` data.
    */
-  private resumeArgs(launch: CliLaunchDescriptor, ctx: CliLaunchContext): readonly string[] {
+  private sessionArgs(launch: CliLaunchDescriptor, ctx: CliLaunchContext): readonly string[] {
     const nr = launch.nativeResume;
-    if (!nr || !nr.supported || !ctx.resumeNativeSessionId) return [];
-    const id = ctx.resumeNativeSessionId;
-    return nr.resume.kind === "flag" ? [nr.resume.flag, id] : [nr.resume.subcommand, id];
+    if (!nr || !nr.supported) return [];
+    if (ctx.resumeNativeSessionId) {
+      return nr.resume.kind === "flag"
+        ? [nr.resume.flag, ctx.resumeNativeSessionId]
+        : [nr.resume.subcommand, ctx.resumeNativeSessionId];
+    }
+    if (ctx.setSessionId && nr.sessionIdFlag) {
+      return [nr.sessionIdFlag, ctx.setSessionId];
+    }
+    return [];
   }
 
   getCapabilities(): ProviderCapabilities {

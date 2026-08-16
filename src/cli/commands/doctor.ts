@@ -20,6 +20,11 @@ import {
   liveRuntime,
   scanStaleProviderProcesses,
 } from "../../health/adapters.js";
+import { isMcpRegistered } from "../../mcp/registration.js";
+import { verifyCliContract } from "../../launcher/cli-contract.js";
+import { createProviderAdapter } from "../../providers/adapter.js";
+import { claudeProfile } from "../../providers/profiles/claude.js";
+import { codexProfile } from "../../providers/profiles/codex.js";
 import type { CliIo } from "../index.js";
 import { buildContext } from "./common.js";
 
@@ -72,6 +77,16 @@ export async function runDoctorCommand(args: readonly string[], io: CliIo): Prom
   out(`\nRuntime stack:\n`);
   const before = await healthDoctor.diagnose();
   for (const line of HealthDoctor.formatReport(before)) out(`${line}\n`);
+
+  // Native CLI surface: MCP registration + session-contract drift (read-only).
+  out(`\nNative CLI (MCP + session contract):\n`);
+  for (const profile of [claudeProfile, codexProfile]) {
+    const adapter = createProviderAdapter(profile);
+    const contract = await verifyCliContract(liveRuntime, adapter);
+    out(`  ${contract.ok ? "ok" : "!! "} ${profile.id} session contract: ${contract.detail}\n`);
+    const registered = await isMcpRegistered(liveRuntime, profile.cliLaunch);
+    out(`  ${registered ? "ok" : "-- "} ${profile.id} MCP: ${registered ? "continuum registered" : "continuum-mcp not registered (run: continuum mcp-setup)"}\n`);
+  }
 
   if (!repair) {
     return before.overall === "healthy" && authReport.overall === "healthy" ? 0 : 1;
