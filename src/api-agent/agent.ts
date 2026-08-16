@@ -10,6 +10,7 @@
 import type { ToolRegistry } from "../mcp/tools.js";
 import type { ApiRunner } from "./runner.js";
 import { AgentLoopError, DEFAULT_AGENT_LIMITS, type AgentLoopLimits, type AgentMessage, type AgentTurnResult } from "./types.js";
+import type { OptimizedToolOutput } from "../tool-output/types.js";
 
 export interface AgentLoopDeps {
   readonly runner: ApiRunner;
@@ -18,6 +19,8 @@ export interface AgentLoopDeps {
   readonly now?: () => number;
   /** Where the final answer / each step is written (tests inject a no-op). */
   readonly onEvent?: (event: string, detail: string) => void;
+  /** Optional Tool Output Optimizer; when absent, tool results pass through unchanged. */
+  readonly optimizeOutput?: (toolName: string, text: string) => OptimizedToolOutput;
 }
 
 export interface AgentLoopResult {
@@ -52,8 +55,9 @@ export async function runAgentLoop(messages: readonly AgentMessage[], deps: Agen
     for (const tc of turn.toolCalls) {
       toolCalls += 1;
       const resultText = await executeTool(deps.tools, tc.name, tc.arguments);
-      conversation.push({ role: "tool", toolCallId: tc.id, content: resultText });
-      deps.onEvent?.("tool", `${tc.name} → ${resultText.slice(0, 120)}`);
+      const finalText = applyOutputOptimizer(tc.name, resultText, deps.optimizeOutput, deps.onEvent);
+      conversation.push({ role: "tool", toolCallId: tc.id, content: finalText });
+      deps.onEvent?.("tool", `${tc.name} → ${finalText.slice(0, 120)}`);
     }
   }
 
@@ -75,4 +79,17 @@ async function executeTool(tools: ToolRegistry, name: string, argsJson: string):
     // Unknown tool or handler throw → surface, never fabricate.
     return `[tool failure] ${err instanceof Error ? err.message : String(err)}`;
   }
+}
+
+/** Apply the optimizer if configured; append a retrievable raw reference when retained. */
+function applyOutputOptimizer(
+  toolName: string,
+  text: string,
+  optimizeOutput: ((toolName: string, text: string) => OptimizedToolOutput) | undefined,
+  onEvent: ((event: string, detail: string) => void) | undefined,
+): string {
+  if (!optimizeOutput) return text;
+  const optimized = optimizeOutput(toolName, text);
+  onEvent?.("optimize", `${toolName}: ${optimized.telemetry.optimizer} ${optimized.telemetry.originalTokens}→${optimized.telemetry.optimizedTokens} tok`);
+  return optimized.rawRef ? `${optimized.text}\n[raw output retained: ${optimized.rawRef}]` : optimized.text;
 }

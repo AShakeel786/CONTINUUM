@@ -5,9 +5,11 @@
  * fakes; wired here for a real `continuum mcp` server.
  */
 
-import { ToolRegistry } from "./tools.js";
+import { ToolRegistry, type RegisteredTool } from "./tools.js";
+import { textResult } from "./tools.js";
 import { buildMemoryTools, type MemoryCoreProvider } from "./memory-tools.js";
 import { buildSessionTools, type SessionToolDeps } from "./session-tools.js";
+import { defaultRawStore } from "../tool-output/store.js";
 import { ProjectRegistry } from "../registry/registry.js";
 import { ProjectRegistryStore } from "../registry/store.js";
 import { SessionManager } from "../session/manager.js";
@@ -50,5 +52,25 @@ export async function buildToolRegistry(opts: BuildRegistryOptions = {}): Promis
   const registry = new ToolRegistry();
   for (const t of buildMemoryTools(memoryProvider)) registry.register(t);
   for (const t of buildSessionTools(sessionDeps)) registry.register(t);
+  for (const t of buildRetrievalTools()) registry.register(t);
   return registry;
+}
+
+/** Raw-output retrieval tools for the Tool Output Optimizer. */
+function buildRetrievalTools(): RegisteredTool[] {
+  return [
+    {
+      definition: {
+        name: "tool_output_retrieve",
+        description: "Retrieve the complete original output previously retained by the tool-output optimizer, addressed by a tool-output://<id> reference.",
+        inputSchema: { type: "object", properties: { id: { type: "string", description: "The raw-output id (from a tool-output://<id> reference)." } }, required: ["id"], additionalProperties: false },
+        access: "read",
+      },
+      handler: async (args) => {
+        const id = typeof args.id === "string" ? args.id : "";
+        const raw = defaultRawStore.get(id);
+        return raw !== undefined ? textResult(raw) : textResult(`tool-output ${id} not found (may have been evicted)`, true);
+      },
+    },
+  ];
 }

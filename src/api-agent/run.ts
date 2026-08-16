@@ -10,6 +10,8 @@ import type { RenderedContext } from "../rendering/types.js";
 import type { ToolRegistry } from "../mcp/tools.js";
 import { createApiRunner, type FetchLike } from "./runner.js";
 import { runAgentLoop } from "./agent.js";
+import { optimizeToolOutput } from "../tool-output/optimizer.js";
+import type { OptimizedToolOutput } from "../tool-output/types.js";
 import type { AgentLoopLimits, AgentMessage } from "./types.js";
 
 export interface RunApiAgentDeps {
@@ -21,6 +23,8 @@ export interface RunApiAgentDeps {
   readonly onOutput?: (line: string) => void;
   /** Injectable fetch (tests/mocks); defaults to real fetch. */
   readonly fetch?: FetchLike;
+  /** Tool Output Optimizer; default applies the deterministic optimizer. Pass a no-op to disable. */
+  readonly optimizeOutput?: (toolName: string, text: string) => OptimizedToolOutput;
 }
 
 export interface RunApiAgentResult {
@@ -47,10 +51,12 @@ export function buildInitialMessages(rendered: RenderedContext, query: string): 
 export async function runApiAgent(deps: RunApiAgentDeps): Promise<RunApiAgentResult> {
   const messages = buildInitialMessages(deps.rendered, deps.query);
   const runner = createApiRunner(deps.adapter, deps.fetch ? { fetch: deps.fetch } : {});
+  const optimizeOutput = deps.optimizeOutput ?? ((toolName: string, text: string) => optimizeToolOutput(toolName, text));
   const result = await runAgentLoop(messages, {
     runner,
     tools: deps.tools,
     limits: deps.limits,
+    optimizeOutput,
     onEvent: (event, detail) => deps.onOutput?.(`[${event}] ${detail}\n`),
   });
   return { finalContent: result.finalContent, iterations: result.iterations, toolCalls: result.toolCalls };
