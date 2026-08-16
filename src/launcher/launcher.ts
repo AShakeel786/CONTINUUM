@@ -118,7 +118,7 @@ export class Launcher {
         const hasProxy =
           (await this.deps.credentialManager.hasCredential(adapter.profile.id, metadata.proxyUserKey.credentialName)) ||
           !!process.env[metadata.proxyUserKey.envVar];
-        if (!hasProxy) return { usable: false, reason: `${adapter.profile.id} has no proxy user key (run "continuum auth ${adapter.profile.id}")` };
+        if (!hasProxy) return { usable: false, reason: `${adapter.profile.id} has no proxy user key` };
       }
       return { usable: true };
     }

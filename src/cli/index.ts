@@ -106,5 +106,5 @@ function printHelp(io: CliIo): void {
 }
 
 function printVersion(io: CliIo): void {
-  io.out?.("continuum 0.1.0 (Phase 7)\n");
+  io.out?.("continuum 0.1.0 (Phase 19 — release candidate)\n");
 }

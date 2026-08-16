@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "CONTINUUM: multi-agent development runtime — Phase 3 provider-adapter foundation.",
+  "description": "CONTINUUM: multi-agent development runtime — Claude Code, DeepSeek, and Codex through one provider/tool layer.",
   "bin": {
     "continuum": "./dist/cli/bin.js",
     "continuum-mcp": "./dist/mcp/bin.js"

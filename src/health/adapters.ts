@@ -11,7 +11,14 @@ import { join } from "node:path";
 import type { HealthRuntime } from "./types.js";
 import { resolveDataDir } from "../config/paths.js";
 
-export const DEFAULT_TENCENT_MAC_DIR = join(homedir(), "Developer", "Ai-tools", "TencentDB-Agent-Memory", "mac");
+/**
+ * Canonical Tencent Mac scripts dir. Overridable via `CONTINUUM_TENCENT_MAC_DIR`
+ * so a fresh install on a machine without the Tencent repo at the default
+ * location can point at its own checkout — never a hard machine-specific path.
+ */
+export const DEFAULT_TENCENT_MAC_DIR =
+  process.env.CONTINUUM_TENCENT_MAC_DIR?.trim() ||
+  join(homedir(), "Developer", "Ai-tools", "TencentDB-Agent-Memory", "mac");
 
 export const DEFAULT_OPTIONS = {
   tencentMacDir: DEFAULT_TENCENT_MAC_DIR,

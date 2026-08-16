@@ -1,44 +1,39 @@
 # CONTINUUM
 
-A multi-agent development runtime: orchestration across agents, seamless mid-task handoff, shared persistent memory, project isolation, prompt/context-caching optimization, and support for Claude Code, DeepSeek, Gemini, and local models — through a common provider and tool layer.
+A multi-agent development runtime: orchestration across agents, seamless mid-task handoff, shared persistent memory, project isolation, prompt/context-caching optimization, and support for Claude Code, DeepSeek, and Codex — through a common provider and tool layer.
 
-## Status: Phase 8 complete (MCP tool layer)
+## Status: release candidate (Phase 19)
 
-**Phase 8 adds a provider-independent MCP server** (`continuum mcp` /
-`continuum-mcp`, JSON-RPC 2.0 over stdio, dependency-free) so any supported
-agent reaches CONTINUUM/Tencent capabilities through one standard tool
-interface — *wrapping* existing systems, never duplicating them. Tools:
-memory `recall`/`search` (read) and `capture`/`store_atom` (write) over MemoryCore's
-Gateway, plus `session_state`/`session_recent`/`project_state`/`project_list`
-over local state. Read-vs-write is explicit, no secrets leave the process,
-MemoryCore unavailability degrades clearly, and project/session isolation is
-enforced. See `docs/PHASE_8_MCP_ARCHITECTURE.md`, `docs/PHASE_8_VERIFICATION.md`,
-and `docs/PHASE_9_ENTRY_CRITERIA.md`.
-
-Earlier: **Phase 7/7.1** built the cross-platform daily launcher (project
-registry + `launch`/`resume`/`handoff`, proxy-key credential, provider prompt,
-session listing), and **Phase 6** built onboarding/auth.
+CONTINUUM is a working multi-agent runtime with three real providers
+(Claude Code, DeepSeek via the Tencent proxy, and Codex), durable session
+state with mid-task handoff, a native-session bridge (resume the provider's
+own CLI session), a provider-independent MCP server, and a health/recovery
+layer (`doctor --repair`). See `docs/RELEASE_READINESS.md` for the release
+assessment and `docs/PHASE_19_FRESH_INSTALL_REPORT.md` for the clean-room
+install verification.
 
 ## Quick start
 
 ```bash
 npm ci            # install dev + runtime deps
 npm run build     # compile to dist/
-node dist/cli/bin.js setup            # first-run onboarding (masked key entry, backend selection)
+node dist/cli/bin.js setup            # first-run onboarding (backend + provider auth + MCP consent)
 node dist/cli/bin.js project add <name> <path> --provider claude   # register a project
 node dist/cli/bin.js launch [<proj>]  # resolve project → provider → session → spawn
-node dist/cli/bin.js resume <session> # resume (stale-worktree safe)
+node dist/cli/bin.js resume <session> # resume (stale-worktree safe; resumes the provider's native session)
 node dist/cli/bin.js handoff <session># hand off to an authenticated agent (never auto-selects)
 node dist/cli/bin.js sessions         # list/archive recent sessions
 node dist/cli/bin.js doctor           # read-only health report (exit 0 healthy / 1 unhealthy)
+node dist/cli/bin.js mcp-setup        # idempotently register CONTINUUM MCP with Claude/Codex
 node dist/cli/bin.js mcp              # run the MCP server (JSON-RPC over stdio)
-```
 ```
 
 Credentials live in `~/.continuum/` (or `$CONTINUUM_HOME`); config and project
 registry store references only. On macOS the native Keychain backend is used
 automatically (read `PHASE_6_SECURITY_REPORT.md` for the one documented
-`security`-CLI argv limitation).
+`security`-CLI argv limitation). The Tencent memory stack (Docker
+`tdai-memory-core`/`tdai-proxy`/`tdai-memory-hub`) is optional — without it,
+CONTINUUM degrades to local session context only.
 
 ## Status: Phase 6 complete (onboarding & auth)
 
@@ -95,7 +90,7 @@ Read the docs:
 
 TencentDB Agent Memory is **not discarded** — it becomes CONTINUUM's memory/context infrastructure layer. The audit found its memory engine (`MemoryCore`, the L0→L3 pipeline, storage backends, host-adapter architecture) is cleanly host-agnostic by design and directly reusable. The proxy/context-injection layer (`MemoryProxy`) is ~70% provider-agnostic and reusable as CONTINUUM's context/observability middleware, with the Claude-Code/DeepSeek-specific parts isolated to a small, well-factored adapter surface.
 
-What the audit found was genuinely missing — and what CONTINUUM adds on top of Tencent's memory layer — is: mid-task agent handoff, a unified context-assembly path, a real multi-provider abstraction, and an MCP/tool layer (zero MCP code exists anywhere in the current system). Phase 3 built the provider abstraction, proven with Claude and DeepSeek (`src/providers/`) — Gemini/Codex/local models still don't exist, but adding them is now a matter of adding a profile, not rewriting routing logic. Phase 4 built the unified context-assembly path (`src/context/`) and proved, via a tested harness, that native Claude sessions — memory-blind today in the real launcher — can receive real Tencent Memory through it (`src/native-claude/`). Phase 5 built mid-task agent handoff (`src/session/`, `src/handoff/`) — R-18's "no agent-handoff mechanism exists" — as a durable session-state layer plus a working Claude↔DeepSeek handoff prototype, again without touching the production launcher. Codex remains unwired in the Provider Registry (nothing to hand off to yet), and the MCP/tool layer remains unbuilt — both deliberately, see `docs/PHASE_6_ENTRY_CRITERIA.md`.
+What the audit found was genuinely missing — and what CONTINUUM adds on top of Tencent's memory layer — is: mid-task agent handoff, a unified context-assembly path, a real multi-provider abstraction, and an MCP/tool layer (zero MCP code exists anywhere in the current system). Phase 3 built the provider abstraction, proven with Claude and DeepSeek (`src/providers/`), later extended with Codex (Phase 15) — adding a further provider is now a matter of adding a profile, not rewriting routing logic. Phase 4 built the unified context-assembly path (`src/context/`) and proved, via a tested harness, that native Claude sessions — memory-blind today in the real launcher — can receive real Tencent Memory through it (`src/native-claude/`). Phase 5 built mid-task agent handoff (`src/session/`, `src/handoff/`) — R-18's "no agent-handoff mechanism exists" — as a durable session-state layer plus a working handoff mechanism, later extended to Claude/DeepSeek↔Codex (Phase 15) and native-session continuity (Phase 16). The MCP/tool layer (Phase 8) and its auto-connect/health hardening (Phases 17–18) complete the runtime.
 
 ## Canonical repo
 
