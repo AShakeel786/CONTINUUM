@@ -1,18 +1,21 @@
 # RELEASE_READINESS — Public GitHub Beta Assessment
 
 **Date:** 2026-08-16
-**State:** Phase 19 (release candidate)
+**State:** Phase 20 (provider-neutral)
 
 ## Verdict
 
 **Ready for a public GitHub beta**, with clearly-scoped caveats. The core loop
 (setup → project → launch → session → resume → handoff → doctor) is proven on a
-clean-room install, the full test suite passes (52 files / 363 tests), and
-typecheck/build are clean.
+clean-room install, the full test suite passes (54 files / 374 tests), and
+typecheck/build are clean. Phase 20 adds a universal provider-extension framework:
+users add API/CLI providers via secret-free JSON manifests — no source edits.
 
 ## What is solid
 
-- **Three real providers** — Claude Code (native), DeepSeek (Tencent proxy), Codex (native).
+- **Three bundled providers** — Claude Code (native), DeepSeek (Tencent proxy), Codex (native).
+- **User-defined providers** — `continuum provider add/list/show/remove/validate`; Grok + GLM
+  added through the public workflow with zero source changes.
 - **Onboarding** — `setup`/`providers`/`auth` with OS-native credential backends, references-only config.
 - **Durable session state + handoff** — atomic writes, corruption recovery, optimistic concurrency;
   Claude/DeepSeek/Codex handoff in all directions; receiving agent does not re-audit.
@@ -43,9 +46,11 @@ typecheck/build are clean.
 
 ## What is NOT ready (and should not be promised)
 
-- A fourth provider (Gemini/local models), a UI, or npm-registry distribution.
-- Precise "stale registration" re-registration in `doctor --repair` (Phase 19 deferral — missing
-  registration is repaired; an old-path entry is detected but not yet re-registered).
+- A UI, or npm-registry distribution (`private: true` is intentional — clone-and-build beta).
+- Precise "stale registration" re-registration in `doctor --repair` (missing registration is
+  repaired; an old-path entry is detected but not yet re-registered).
+- Custom CLI status parsers for user providers (user CLIs use the generic exit-code adapter;
+  a bespoke parser would need a small code addition).
 
 ## Go/no-go
 

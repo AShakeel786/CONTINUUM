@@ -7,23 +7,29 @@ export { createProviderAdapter } from "./adapter.js";
 export { claudeProfile } from "./profiles/claude.js";
 export { deepseekProfile } from "./profiles/deepseek.js";
 export { codexProfile } from "./profiles/codex.js";
+export * from "./manifest.js";
+export * from "./manifest-store.js";
+export { bundledManifests, claudeManifest, deepseekManifest, codexManifest } from "./presets.js";
 
 import { createProviderAdapter } from "./adapter.js";
-import { claudeProfile } from "./profiles/claude.js";
-import { deepseekProfile } from "./profiles/deepseek.js";
-import { codexProfile } from "./profiles/codex.js";
 import { ProviderRegistry } from "./registry.js";
+import { bundledManifests } from "./presets.js";
+import { manifestToProfile, type ProviderManifest } from "./manifest.js";
 
 /**
- * Build the default registry with today's providers registered.
- * Adding a future provider (Gemini, a local model) means adding a
- * profile + one `register()` call here — never touching runtime routing
- * elsewhere in CONTINUUM (Phase 3 closure criterion #3).
+ * Build a registry from the bundled presets plus any user manifests. This is
+ * the one place provider *identity* becomes a live adapter; everything else
+ * branches on the profile's capability data, never on a hardcoded id.
  */
-export function createDefaultProviderRegistry(): ProviderRegistry {
+export function createProviderRegistry(userManifests: readonly ProviderManifest[] = []): ProviderRegistry {
   const registry = new ProviderRegistry();
-  registry.register(createProviderAdapter(claudeProfile));
-  registry.register(createProviderAdapter(deepseekProfile));
-  registry.register(createProviderAdapter(codexProfile));
+  for (const manifest of [...bundledManifests, ...userManifests]) {
+    registry.register(createProviderAdapter(manifestToProfile(manifest)));
+  }
   return registry;
+}
+
+/** Bundled-only registry (backward-compatible, synchronous). */
+export function createDefaultProviderRegistry(): ProviderRegistry {
+  return createProviderRegistry([]);
 }

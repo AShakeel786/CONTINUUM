@@ -21,6 +21,7 @@ import { runProvidersCommand } from "./commands/providers.js";
 import { runAuthCommand } from "./commands/auth.js";
 import { runDoctorCommand } from "./commands/doctor.js";
 import { runProjectCommand } from "./commands/project.js";
+import { runProviderCommand } from "./commands/provider.js";
 import { runLaunchCommand, runResumeCommand, runHandoffCommand } from "./commands/launch.js";
 import { runSessionsCommand } from "./commands/sessions.js";
 import { runMcpCommand } from "./commands/mcp.js";
@@ -59,6 +60,8 @@ export async function main(argv: readonly string[]): Promise<number> {
       return runDoctorCommand(rest, io);
     case "project":
       return runProjectCommand(rest, io);
+    case "provider":
+      return runProviderCommand(rest, io);
     case "launch":
     case "run":
       return runLaunchCommand(rest, io);
@@ -92,6 +95,7 @@ function printHelp(io: CliIo): void {
       "  auth <provider>   (Re)authenticate one provider  [--remove]",
       "  doctor            Read-only health report",
       "  project <sub>     Manage projects (add/remove/list/show)",
+      "  provider <sub>    Manage user provider manifests (add/list/show/remove/validate)",
       "  launch [<proj>]   Launch a task (resolve project → provider → session)",
       "  resume <session>  Resume an existing session (stale-worktree safe)",
       "  handoff <session> Hand off to an authenticated agent (never auto-selects)",

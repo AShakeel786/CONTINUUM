@@ -9,7 +9,8 @@ import { ConfigStore } from "../../config/store.js";
 import { resolveDataDir } from "../../config/paths.js";
 import { selectCredentialBackend } from "../../auth/backends/detect.js";
 import { CredentialManager } from "../../auth/credential-manager.js";
-import { createDefaultProviderAuthMetadata, createDefaultCliAuthManager } from "../../auth/provider-auth/index.js";
+import { createProviderAuthMetadata, createCliAuthManager } from "../../auth/provider-auth/index.js";
+import { loadUserManifests } from "../../providers/manifest-store.js";
 import type { Prompt } from "../../auth/prompt.js";
 import type { CredentialBackend } from "../../auth/types.js";
 import type { CliAuthManager } from "../../auth/cli-auth-manager.js";
@@ -40,12 +41,15 @@ export async function buildContext(options: CommandOptions): Promise<CommandCont
   const selection = await selectCredentialBackend(passphraseProvider, dataDir);
   const credentialManager = new CredentialManager(selection.backend);
 
+  // Load user provider manifests so runtime/auth metadata sees user-defined providers.
+  const { manifests: userManifests } = await loadUserManifests(dataDir);
+
   return {
     configStore,
     credentialManager,
     backend: selection.backend,
-    providerMetadata: createDefaultProviderAuthMetadata(),
-    cliAuthManager: createDefaultCliAuthManager(),
+    providerMetadata: createProviderAuthMetadata(userManifests),
+    cliAuthManager: createCliAuthManager(userManifests),
     prompt: options.prompt,
     dataDir,
   };

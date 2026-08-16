@@ -1,38 +1,16 @@
 /**
- * Codex auth metadata + CLI adapter. Grounded in the real, installed `codex`
- * CLI on this machine (live-verified read-only this phase):
- *   - `codex --version` → "codex-cli 0.147.0", exit 0.
- *   - `codex login status` → "Logged in using ChatGPT", exit 0.
- *   - `codex login` / `codex logout` exist as subcommands.
- * Login/logout are deliberately never invoked against the real installation:
- * Codex authenticates via its own OAuth/device flow and its own
- * `~/.codex/auth.json`; CONTINUUM only detects the existing session, it never
- * copies or stores the tokens.
+ * Codex auth metadata + CLI adapter. Metadata derived from the bundled
+ * `codexManifest`; the adapter keeps Codex's stderr-based status parser.
  */
 
 import { createCliAuthAdapter } from "../cli-auth-adapter.js";
 import type { CliAuthAdapter, CliAuthStatus, ProviderAuthMetadata } from "../types.js";
+import { manifestToAuthMetadata } from "../../providers/manifest.js";
+import { codexManifest } from "../../providers/presets.js";
 
-export const codexAuthMetadata: ProviderAuthMetadata = {
-  providerId: "codex",
-  // No API-key auth here: Codex is reached through its native CLI session.
-  api: { supported: false },
-  cli: {
-    supported: true,
-    executable: "codex",
-    versionArgs: ["--version"],
-    statusArgs: ["login", "status"],
-    loginArgs: ["login"],
-    logoutArgs: ["logout"],
-  },
-};
+export const codexAuthMetadata: ProviderAuthMetadata = manifestToAuthMetadata(codexManifest);
 
-/**
- * `codex login status` prints "Logged in using <method>" when authenticated
- * and "Not logged in." otherwise — and, crucially, writes it to *stderr*,
- * not stdout. Parse both streams case-insensitively and never guess from
- * unparseable output.
- */
+/** `codex login status` prints to stderr; parse both streams case-insensitively. */
 export function parseCodexAuthStatus(stdout: string, stderr = ""): CliAuthStatus {
   const s = `${stdout}\n${stderr}`.toLowerCase();
   if (s.includes("not logged in")) return "not-authenticated";

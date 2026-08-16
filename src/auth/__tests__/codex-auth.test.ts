@@ -16,7 +16,7 @@ describe("Codex auth metadata", () => {
 
   it("is registered in the default metadata map and CLI auth manager", () => {
     const metadata = createDefaultProviderAuthMetadata();
-    expect(metadata.get("codex")).toBe(codexAuthMetadata);
+    expect(metadata.get("codex")).toEqual(codexAuthMetadata);
     const manager = createDefaultCliAuthManager();
     expect(manager.has("codex")).toBe(true);
     expect(manager.has("deepseek")).toBe(false); // deepseek has no CLI auth

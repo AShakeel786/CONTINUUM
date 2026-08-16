@@ -9,10 +9,10 @@
 import { ProjectRegistry } from "../../registry/registry.js";
 import { ProjectRegistryStore } from "../../registry/store.js";
 import { ProviderRegistry } from "../../providers/registry.js";
-import { createDefaultProviderRegistry } from "../../providers/index.js";
+import { createProviderRegistry } from "../../providers/index.js";
+import { loadUserManifests } from "../../providers/manifest-store.js";
 import { CredentialManager } from "../../auth/credential-manager.js";
 import { AuthVerifier } from "../../auth/auth-verifier.js";
-import { createDefaultProviderAuthMetadata, createDefaultCliAuthManager } from "../../auth/provider-auth/index.js";
 import { SessionManager } from "../../session/manager.js";
 import { FileSessionStore } from "../../session/store.js";
 import { Launcher } from "../../launcher/launcher.js";
@@ -58,10 +58,12 @@ export async function buildLauncherContext(options: { dataDir?: string; prompt: 
   const dataDir = options.dataDir ?? resolveDataDir();
 
   const projects = new ProjectRegistry(new ProjectRegistryStore(dataDir));
-  const providers = createDefaultProviderRegistry();
+  const { manifests: userManifests } = await loadUserManifests(dataDir);
+  const providers = createProviderRegistry(userManifests);
   const credentialManager = ctx.credentialManager;
-  const cliAuthManager = createDefaultCliAuthManager();
-  const authMetadata = createDefaultProviderAuthMetadata();
+  // buildContext already loaded user manifests into these.
+  const cliAuthManager = ctx.cliAuthManager;
+  const authMetadata = ctx.providerMetadata;
   const authVerifier = new AuthVerifier({ credentialManager, cliAuthManager });
 
   const sessionBaseDir = path.join(dataDir, "sessions");

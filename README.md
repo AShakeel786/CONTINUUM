@@ -26,6 +26,10 @@ node dist/cli/bin.js sessions         # list/archive recent sessions
 node dist/cli/bin.js doctor           # read-only health report (exit 0 healthy / 1 unhealthy)
 node dist/cli/bin.js mcp-setup        # idempotently register CONTINUUM MCP with Claude/Codex
 node dist/cli/bin.js mcp              # run the MCP server (JSON-RPC over stdio)
+
+# add an OpenAI/Anthropic-compatible API provider (manifest under ~/.continuum/providers/)
+node dist/cli/bin.js provider add --id grok --protocol openai-compatible --base-url https://api.x.ai/v1 --auth api-key --env XAI_API_KEY --model grok-3
+node dist/cli/bin.js provider list
 ```
 
 Credentials live in `~/.continuum/` (or `$CONTINUUM_HOME`); config and project

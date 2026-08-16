@@ -5,7 +5,8 @@
 import { ProjectRegistry } from "../../registry/registry.js";
 import { normalizeProjectPath } from "../../registry/registry.js";
 import { ProjectRegistryStore } from "../../registry/store.js";
-import { createDefaultProviderAuthMetadata } from "../../auth/provider-auth/index.js";
+import { createProviderAuthMetadata } from "../../auth/provider-auth/index.js";
+import { loadUserManifests } from "../../providers/manifest-store.js";
 import { resolveDataDir } from "../../config/paths.js";
 import { createPrompt, noopOutput } from "../../auth/prompt.js";
 import { ProjectAlreadyExistsError, ProjectNotFoundError } from "../../registry/errors.js";
@@ -15,7 +16,8 @@ export async function runProjectCommand(args: readonly string[], io: CliIo): Pro
   const out = io.out ?? noopOutput();
   const dataDir = resolveDataDir();
   const project = new ProjectRegistry(new ProjectRegistryStore(dataDir));
-  const knownProviders = new Set(createDefaultProviderAuthMetadata().keys());
+  const { manifests: userManifests } = await loadUserManifests(dataDir);
+  const knownProviders = new Set(createProviderAuthMetadata(userManifests).keys());
 
   const [sub, ...rest] = args;
 
