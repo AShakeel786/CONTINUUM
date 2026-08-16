@@ -29,9 +29,8 @@ export class MacosKeychainCredentialBackend implements CredentialBackend {
   readonly id = "macos-keychain";
   readonly securityLevel = "os-native" as const;
   readonly description =
-    "macOS Keychain (via the `security` CLI). NOTE: `security add-generic-password` requires the secret " +
-    "as a command-line argument (no stdin support) — it briefly appears in this process's own argv during " +
-    "credential set/replace. A known limitation of the macOS `security` CLI, not mitigated in this phase.";
+    "macOS Keychain (via the `security` CLI). The secret briefly appears in this process's own argv during " +
+    "credential set/replace — a macOS `security` CLI limitation.";
 
   async isAvailable(): Promise<boolean> {
     if (process.platform !== "darwin") return false;

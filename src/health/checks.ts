@@ -81,6 +81,15 @@ async function containerStates(runtime: HealthRuntime): Promise<ContainerState[]
   return parseContainerStates(res.stdout);
 }
 
+/** Whether the optional Tencent memory stack is present (explicitly configured OR its containers exist). */
+async function tencentStackPresent(runtime: HealthRuntime, options: HealthOptions): Promise<boolean> {
+  if (options.tencentConfigured) return true;
+  const states = (await containerStates(runtime)) ?? [];
+  return states.some(
+    (s) => s.name === options.containers.memoryCore || s.name === options.containers.proxy || s.name === options.containers.hub,
+  );
+}
+
 function firstLine(s: string): string {
   const idx = s.indexOf("\n");
   return (idx === -1 ? s : s.slice(0, idx)).trim();
@@ -107,16 +116,11 @@ function containerCheck(expectedName: string, state: ContainerState | undefined,
   return { name, status: "ok", detail: `running (image ${state.image})` };
 }
 
-/** Build all docker + gateway + provider + store checks. */
-export async function runHealthChecks(deps: CheckDeps): Promise<readonly HealthCheckResult[]> {
-  const { runtime, options } = deps;
-  const checks: HealthCheckResult[] = [];
-
+/** Add docker + container + gateway + proxy checks (Tencent stack is present). */
+async function addTencentChecks(checks: HealthCheckResult[], runtime: HealthRuntime, options: HealthOptions): Promise<void> {
   const docker = await dockerInfoOk(runtime);
   if (!docker.ok) {
     checks.push({ name: "docker", status: "down", detail: docker.detail, repair: "docker-desktop" });
-    // Everything below depends on docker; mark dependents skipped, not down,
-    // so repair does not try container actions without a daemon.
     checks.push({ name: "container:memory-core", status: "skipped", detail: "docker unavailable" });
     checks.push({ name: "container:proxy", status: "skipped", detail: "docker unavailable" });
     checks.push({ name: "container:hub", status: "skipped", detail: "docker unavailable" });
@@ -180,11 +184,7 @@ export async function runHealthChecks(deps: CheckDeps): Promise<readonly HealthC
     repairContext: { container: options.containers.proxy },
   });
 
-  // Functional proxy/auth path. `gateway:proxy` only probes /health, which
-  // stays green even when the proxy's auth backend (MemoryCore) is down. This
-  // probe sends an intentionally-invalid key through the real auth path and
-  // reads the rejection: "invalid user_key" proves the proxy reached
-  // MemoryCore; "auth service …" proves MemoryCore is unavailable.
+  // Functional proxy/auth path.
   {
     let proxyBase: string;
     try {
@@ -209,7 +209,6 @@ export async function runHealthChecks(deps: CheckDeps): Promise<readonly HealthC
         repairContext: { container: options.containers.proxy },
       };
     } else if (authProbe.status === 401 && body.includes("auth service")) {
-      // Proxy is up, but its auth backend (MemoryCore) is unreachable.
       proxyAuth = {
         name: "proxy:auth",
         status: "down",
@@ -218,17 +217,42 @@ export async function runHealthChecks(deps: CheckDeps): Promise<readonly HealthC
         repairContext: { container: options.containers.memoryCore },
       };
     } else if (authProbe.status === 401) {
-      // Rejected with invalid_user_key / missing_* — auth reached MemoryCore fine.
       proxyAuth = {
         name: "proxy:auth",
         status: "ok",
         detail: `auth verification working (probe key correctly rejected, HTTP ${authProbe.status})`,
       };
     } else {
-      // 200/400/etc.: proxy responded and did not reject on an auth error.
       proxyAuth = { name: "proxy:auth", status: "ok", detail: `auth path responding (HTTP ${authProbe.status})` };
     }
     checks.push(proxyAuth);
+  }
+}
+
+/** Build the docker + gateway + provider + store checks. */
+export async function runHealthChecks(deps: CheckDeps): Promise<readonly HealthCheckResult[]> {
+  const { runtime, options } = deps;
+  const checks: HealthCheckResult[] = [];
+
+  // The Tencent memory stack is OPTIONAL. When it's neither configured nor
+  // deployed, report it as "skipped" rather than a scary "down".
+  const tencentPresent = await tencentStackPresent(runtime, options);
+  if (!tencentPresent) {
+    checks.push({
+      name: "tencent-memory",
+      status: "skipped",
+      detail: "Tencent memory stack not deployed (optional) — memory/context features degrade to local session context",
+    });
+    checks.push({ name: "docker", status: "skipped", detail: "not required (Tencent memory stack not configured)" });
+    checks.push({ name: "container:memory-core", status: "skipped", detail: "not required" });
+    checks.push({ name: "container:proxy", status: "skipped", detail: "not required" });
+    checks.push({ name: "container:hub", status: "skipped", detail: "not required" });
+    checks.push({ name: "gateway:memory-core", status: "skipped", detail: "not required" });
+    checks.push({ name: "gateway:memory-core-auth", status: "skipped", detail: "not required" });
+    checks.push({ name: "gateway:proxy", status: "skipped", detail: "not required" });
+    checks.push({ name: "proxy:auth", status: "skipped", detail: "not required" });
+  } else {
+    await addTencentChecks(checks, runtime, options);
   }
 
   if (deps.providerStatus) {

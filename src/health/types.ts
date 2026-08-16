@@ -70,6 +70,8 @@ export interface HealthOptions {
   readonly tencentMacDir: string;
   /** MemoryCore gateway base URL, or undefined when not configured. */
   readonly memoryCoreUrl?: string;
+  /** True when the user has explicitly configured the optional Tencent memory stack (CONTINUUM_MEMORY_CORE_URL set). */
+  readonly tencentConfigured?: boolean;
   /** MemoryProxy health URL. */
   readonly proxyHealthUrl: string;
   /** Container names used by the canonical Mac stack. */

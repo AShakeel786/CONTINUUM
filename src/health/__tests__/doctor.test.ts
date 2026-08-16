@@ -90,6 +90,7 @@ function makeOptions(overrides?: Partial<HealthOptions>): HealthOptions {
   return {
     tencentMacDir: "/tmp/fake-tencent/mac",
     memoryCoreUrl: "http://127.0.0.1:8420",
+    tencentConfigured: true, // health tests exercise the Tencent stack recovery paths
     proxyHealthUrl: "http://127.0.0.1:8096/health",
     containers: { memoryCore: "tdai-memory-core", proxy: "tdai-proxy", hub: "tdai-memory-hub" },
     pinnedImage: "agentmemory/memory-core:phase13",

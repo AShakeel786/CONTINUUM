@@ -23,7 +23,14 @@ export async function runProvidersCommand(args: readonly string[], io: CliIo): P
   for (const metadata of ctx.providerMetadata.values()) {
     const entry = configuredById.get(metadata.providerId);
     if (!entry) {
-      out(`${metadata.providerId}: not configured\n`);
+      // When a CLI-auth provider's CLI is present but unconfigured, say so — a
+      // normal user should not have to guess whether the CLI exists.
+      let hint = "";
+      if (metadata.cli.supported) {
+        const installed = await ctx.cliAuthManager.checkInstalled(metadata.providerId);
+        if (installed === "installed") hint = ` (${metadata.cli.executable} CLI detected — run "continuum auth ${metadata.providerId}")`;
+      }
+      out(`${metadata.providerId}: not configured${hint}\n`);
       continue;
     }
     const result = entry.method === "api" ? await verifier.verifyApi(metadata) : await verifier.verifyCli(metadata);

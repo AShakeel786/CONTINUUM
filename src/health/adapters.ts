@@ -23,6 +23,7 @@ export const DEFAULT_TENCENT_MAC_DIR =
 export const DEFAULT_OPTIONS = {
   tencentMacDir: DEFAULT_TENCENT_MAC_DIR,
   memoryCoreUrl: process.env.CONTINUUM_MEMORY_CORE_URL ?? "http://127.0.0.1:8420",
+  tencentConfigured: !!process.env.CONTINUUM_MEMORY_CORE_URL,
   proxyHealthUrl: process.env.CONTINUUM_MEMORY_PROXY_URL ?? "http://127.0.0.1:8096/health",
   containers: {
     memoryCore: "tdai-memory-core",

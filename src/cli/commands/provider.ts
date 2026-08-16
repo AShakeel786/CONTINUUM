@@ -22,7 +22,9 @@ import {
 import type { CliIo } from "../index.js";
 
 function runtimeLabel(m: ProviderManifest): string {
-  return manifestToProfile(m).capabilities.cliAvailable ? "Native CLI" : "CONTINUUM API";
+  const profile = manifestToProfile(m);
+  if (!profile.capabilities.cliAvailable) return "CONTINUUM API";
+  return profile.cliLaunch.kind === "proxy-routed" ? "Proxy CLI" : "Native CLI";
 }
 
 function opt(args: readonly string[], ...flags: readonly string[]): string | undefined {
@@ -118,11 +120,16 @@ async function addProvider(args: readonly string[], out: (s: string) => void): P
 async function listProviders(out: (s: string) => void): Promise<number> {
   const { manifests } = await loadUserManifests(resolveDataDir());
   out("Bundled:\n");
-  for (const m of bundledManifests) out(`  ${m.id} [${m.protocol}] ${m.displayName} — Runtime: ${runtimeLabel(m)}\n`);
+  for (const m of bundledManifests) out(formatProviderLine(m));
   out("User-defined:\n");
   if (manifests.length === 0) out("  (none)\n");
-  for (const m of manifests) out(`  ${m.id} [${m.protocol}] ${m.displayName} — Runtime: ${runtimeLabel(m)}\n`);
+  for (const m of manifests) out(formatProviderLine(m));
   return 0;
+}
+
+function formatProviderLine(m: ProviderManifest): string {
+  const notes = m.capabilities?.notes;
+  return `  ${m.id} [${m.protocol}] ${m.displayName} — Runtime: ${runtimeLabel(m)}${notes ? `\n      ${notes}` : ""}\n`;
 }
 
 async function showProvider(args: readonly string[], out: (s: string) => void): Promise<number> {

@@ -24,6 +24,7 @@ export const claudeManifest: ProviderManifest = {
     promptCache: "anthropic-explicit",
     cliAvailable: true,
     contextWindowTokens: 200_000,
+    notes: "Native Claude Code (Anthropic). Uses the `claude` CLI's own login (`claude auth login`); this is NOT the Tencent/DeepSeek proxy path — that is the `deepseek` provider.",
   },
   environment: { owns: ["ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CONFIG_DIR"] },
   cliLaunch: {
@@ -56,7 +57,7 @@ export const deepseekManifest: ProviderManifest = {
   baseUrl: "https://api.deepseek.com",
   auth: { kind: "api-key", envVar: "DEEPSEEK_API_KEY" },
   models: { default: "deepseek-v4-pro", aliases: { flash: "deepseek-v4-flash" } },
-  capabilities: { thinking: "supported", tools: true, promptCache: "openai-automatic", cliAvailable: true },
+  capabilities: { thinking: "supported", tools: true, promptCache: "openai-automatic", cliAvailable: true, notes: "Claude Code routed through the Tencent/DeepSeek proxy. Requires DEEPSEEK_API_KEY plus a proxy user key (run `continuum auth deepseek`)." },
   environment: { owns: ["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"] },
   cliLaunch: {
     kind: "proxy-routed",
@@ -86,7 +87,7 @@ export const codexManifest: ProviderManifest = {
     default: "gpt-5.6-sol",
     aliases: { terra: "gpt-5.6-terra", luna: "gpt-5.6-luna", mini: "gpt-5.4-mini" },
   },
-  capabilities: { thinking: "extended", tools: true, promptCache: "openai-automatic", cliAvailable: true },
+  capabilities: { thinking: "extended", tools: true, promptCache: "openai-automatic", cliAvailable: true, notes: "Native Codex CLI (OpenAI). Uses the `codex` CLI's own ChatGPT login." },
   environment: { owns: ["OPENAI_API_KEY", "CODEX_HOME", "CODEX_ACCESS_TOKEN"] },
   cliLaunch: {
     kind: "native",

@@ -18,6 +18,7 @@
 
 import { runSetupCommand } from "./commands/setup.js";
 import { runProvidersCommand } from "./commands/providers.js";
+import { getVersion } from "../version.js";
 import { runAuthCommand } from "./commands/auth.js";
 import { runDoctorCommand } from "./commands/doctor.js";
 import { runProjectCommand } from "./commands/project.js";
@@ -110,5 +111,5 @@ function printHelp(io: CliIo): void {
 }
 
 function printVersion(io: CliIo): void {
-  io.out?.("continuum 0.1.0 (Phase 19 — release candidate)\n");
+  io.out?.(`continuum ${getVersion()}\n`);
 }
