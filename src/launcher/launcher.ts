@@ -39,6 +39,8 @@ import { allocateBudget } from "../token/budget.js";
 import { renderContextForProvider } from "../rendering/render.js";
 import { buildResumeInstructionsBlock } from "../handoff/resume-block.js";
 import { findRecentNativeSessionId } from "./native-session.js";
+import { repoMapBlock } from "../repo-map/repo-map.js";
+import type { ContextBlock } from "../context/types.js";
 import type { Prompt, PromptOutput } from "../auth/prompt.js";
 import { NoAuthenticatedAgentError, NoProjectError, ProviderNotAuthenticatedError } from "./errors.js";
 import type { LaunchOptions, LaunchPlan, LaunchPreparation } from "./types.js";
@@ -56,11 +58,14 @@ export interface LauncherDeps {
   /** Optional MemoryCore gateway config; when absent, launches degrade to caller-supplied context only. */
   memoryCore?: MemoryCoreGatewayConfig;
   readonly sessionBaseDir: string;
+  /** Optional repo-map builder (Token Efficiency Phase 2); when absent, no repo map is injected. */
+  readonly repoMapBuilder?: (projectPath: string, query: string, budgetTokens: number) => Promise<import("../repo-map/repo-map.js").RepoMapResult>;
 }
 
 export type SpawnFn = (plan: LaunchPlan) => Promise<{ exitCode: number | null }>;
 
 const DEFAULT_OUTPUT_RESERVE = 8192;
+const REPO_MAP_BUDGET_TOKENS = 1200;
 
 export class Launcher {
   constructor(private readonly deps: LauncherDeps) {}
@@ -237,7 +242,18 @@ export class Launcher {
     // Context assembly: MemoryCore when available, degrade gracefully otherwise.
     const memoryCoreAvailable = !!this.deps.memoryCore;
     let memoryCoreNote: string | undefined;
-    const callerBlocks = [buildResumeInstructionsBlock(session, { stale, reasons: staleReasons })];
+    const callerBlocks: ContextBlock[] = [buildResumeInstructionsBlock(session, { stale, reasons: staleReasons })];
+    // Repo intelligence map (Token Efficiency Phase 2) — navigation-only context;
+    // a build failure never blocks the launch.
+    if (this.deps.repoMapBuilder) {
+      try {
+        const map = await this.deps.repoMapBuilder(project.path, session.taskGoal, REPO_MAP_BUDGET_TOKENS);
+        const block = repoMapBlock(map, session.taskGoal);
+        if (block) callerBlocks.push(block);
+      } catch {
+        // degrade to no repo map
+      }
+    }
 
     let envelope;
     if (this.deps.memoryCore) {

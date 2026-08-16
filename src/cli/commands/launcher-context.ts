@@ -24,6 +24,7 @@ import type { MemoryCoreGatewayConfig } from "../../context/memorycore-client.js
 import { resolveDataDir } from "../../config/paths.js";
 import type { Prompt } from "../../auth/prompt.js";
 import { buildContext } from "./common.js";
+import { buildRepoMap, FileRepoMapCache } from "../../repo-map/repo-map.js";
 import path from "node:path";
 
 export interface LauncherContext {
@@ -69,6 +70,7 @@ export async function buildLauncherContext(options: { dataDir?: string; prompt: 
   const sessionBaseDir = path.join(dataDir, "sessions");
   const sessionManager = new SessionManager(new FileSessionStore(sessionBaseDir));
 
+  const repoMapCache = new FileRepoMapCache(path.join(dataDir, "repo-map"));
   const deps: LauncherDeps = {
     projects,
     providers,
@@ -80,6 +82,7 @@ export async function buildLauncherContext(options: { dataDir?: string; prompt: 
     prompt: options.prompt,
     sessionBaseDir,
     memoryCore: memoryCoreFromEnv(),
+    repoMapBuilder: (projectPath, query, budgetTokens) => buildRepoMap(projectPath, query, { budgetTokens }, repoMapCache),
   };
 
   const handoffManager = new HandoffManager(sessionManager, providers);
