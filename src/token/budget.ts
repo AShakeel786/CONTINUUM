@@ -72,16 +72,19 @@ export function allocateBudget(envelope: ContextEnvelope, limits: TokenLimits): 
     };
   }
 
-  const protectedBlocks = allBlocks.filter((b) => b.class === "instructions");
+  // "instructions" (system constraints) and "current-task" (what the agent is
+  // doing right now) are never pruned — everything else is a candidate.
+  const PROTECTED = new Set(["instructions", "current-task"]);
+  const protectedBlocks = allBlocks.filter((b) => PROTECTED.has(b.class));
   const protectedTokens = protectedBlocks.reduce(
     (sum, b) => addTokenCounts(sum, tokenCounts.get(b.id)!),
     { tokens: 0, method: "tiktoken-estimate" } as TokenCount,
   );
 
   if (protectedTokens.tokens > availableForInput) {
-    // Never silently truncate critical instructions: return the envelope
-    // completely unchanged and flag the condition instead of guessing at
-    // a "least bad" cut.
+    // Never silently truncate critical instructions/current task: return the
+    // envelope completely unchanged and flag the condition instead of guessing
+    // at a "least bad" cut.
     return {
       envelope,
       inputTokensBefore: totalBefore,
@@ -95,7 +98,7 @@ export function allocateBudget(envelope: ContextEnvelope, limits: TokenLimits): 
   // Trimmable candidates, ranked by keep-priority (lower number = kept
   // longer), id as a deterministic tiebreaker.
   const candidates = allBlocks
-    .filter((b) => b.class !== "instructions")
+    .filter((b) => !PROTECTED.has(b.class))
     .sort((a, b) => a.priority - b.priority || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 
   let remaining = availableForInput - protectedTokens.tokens;

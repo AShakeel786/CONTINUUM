@@ -25,6 +25,7 @@ import { resolveDataDir } from "../../config/paths.js";
 import type { Prompt } from "../../auth/prompt.js";
 import { buildContext } from "./common.js";
 import { buildRepoMap, FileRepoMapCache } from "../../repo-map/repo-map.js";
+import { FilePruneStore } from "../../context/pruning.js";
 import path from "node:path";
 
 export interface LauncherContext {
@@ -83,6 +84,7 @@ export async function buildLauncherContext(options: { dataDir?: string; prompt: 
     sessionBaseDir,
     memoryCore: memoryCoreFromEnv(),
     repoMapBuilder: (projectPath, query, budgetTokens) => buildRepoMap(projectPath, query, { budgetTokens }, repoMapCache),
+    pruneStore: new FilePruneStore(dataDir),
   };
 
   const handoffManager = new HandoffManager(sessionManager, providers);

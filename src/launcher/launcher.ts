@@ -40,6 +40,7 @@ import { renderContextForProvider } from "../rendering/render.js";
 import { buildResumeInstructionsBlock } from "../handoff/resume-block.js";
 import { findRecentNativeSessionId } from "./native-session.js";
 import { repoMapBlock } from "../repo-map/repo-map.js";
+import { applyReversiblePruning } from "../context/pruning.js";
 import type { ContextBlock } from "../context/types.js";
 import type { Prompt, PromptOutput } from "../auth/prompt.js";
 import { NoAuthenticatedAgentError, NoProjectError, ProviderNotAuthenticatedError } from "./errors.js";
@@ -60,6 +61,8 @@ export interface LauncherDeps {
   readonly sessionBaseDir: string;
   /** Optional repo-map builder (Token Efficiency Phase 2); when absent, no repo map is injected. */
   readonly repoMapBuilder?: (projectPath: string, query: string, budgetTokens: number) => Promise<import("../repo-map/repo-map.js").RepoMapResult>;
+  /** Optional prune store (Token Efficiency Phase 4); when absent, pruning stays destructive. */
+  readonly pruneStore?: import("../context/pruning.js").PruneStore;
 }
 
 export type SpawnFn = (plan: LaunchPlan) => Promise<{ exitCode: number | null }>;
@@ -280,7 +283,12 @@ export class Launcher {
 
     const contextWindow = adapter.getCapabilities().contextWindowTokens ?? 200_000;
     const budget = allocateBudget(envelope, { contextWindow, reservedOutput: DEFAULT_OUTPUT_RESERVE });
-    const rendered = renderContextForProvider(budget.envelope, adapter);
+    // Reversible pruning: when the budget dropped/truncated eligible blocks,
+    // persist them and replace with compact references (fail-closed).
+    const finalEnvelope = this.deps.pruneStore
+      ? (await applyReversiblePruning(envelope, budget, this.deps.pruneStore, session.sessionId)).envelope
+      : budget.envelope;
+    const rendered = renderContextForProvider(finalEnvelope, adapter);
 
     // Build the CLI launch plan (auth/env/session identity), merging resolved credentials.
     // Proxy user key (deepseek proxy-routed path) is sourced from the credential

@@ -10,6 +10,9 @@ import { textResult } from "./tools.js";
 import { buildMemoryTools, type MemoryCoreProvider } from "./memory-tools.js";
 import { buildSessionTools, type SessionToolDeps } from "./session-tools.js";
 import { defaultRawStore } from "../tool-output/store.js";
+import { FilePruneStore } from "../context/pruning.js";
+
+const defaultPruneStore = new FilePruneStore();
 import { ProjectRegistry } from "../registry/registry.js";
 import { ProjectRegistryStore } from "../registry/store.js";
 import { SessionManager } from "../session/manager.js";
@@ -56,7 +59,7 @@ export async function buildToolRegistry(opts: BuildRegistryOptions = {}): Promis
   return registry;
 }
 
-/** Raw-output retrieval tools for the Tool Output Optimizer. */
+/** Raw-output retrieval tools for the Tool Output Optimizer + reversible pruning. */
 function buildRetrievalTools(): RegisteredTool[] {
   return [
     {
@@ -71,6 +74,20 @@ function buildRetrievalTools(): RegisteredTool[] {
         const id = typeof args.id === "string" ? args.id : "";
         const raw = defaultRawStore.get(id);
         return raw !== undefined ? textResult(raw) : textResult(`tool-output ${id} not found (may have been evicted)`, true);
+      },
+    },
+    {
+      definition: {
+        name: "context_retrieve",
+        description: "Retrieve the full content of a context block that was pruned to save tokens (from a [pruned …] reference), addressed by its reference id.",
+        inputSchema: { type: "object", properties: { refId: { type: "string", description: "The pruned-block reference id (from a [pruned …] reference)." } }, required: ["refId"], additionalProperties: false },
+        access: "read",
+        cacheScope: "global",
+      },
+      handler: async (args) => {
+        const refId = typeof args.refId === "string" ? args.refId : "";
+        const content = await defaultPruneStore.get(refId);
+        return content !== undefined ? textResult(content) : textResult(`pruned block ${refId} not found (may have been evicted)`, true);
       },
     },
   ];
