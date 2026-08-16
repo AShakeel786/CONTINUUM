@@ -17,6 +17,7 @@
  */
 
 import { runSetupCommand } from "./commands/setup.js";
+import { runInteractiveCommand } from "./commands/interactive.js";
 import { runProvidersCommand } from "./commands/providers.js";
 import { getVersion } from "../version.js";
 import { runAuthCommand } from "./commands/auth.js";
@@ -41,6 +42,9 @@ export async function main(argv: readonly string[]): Promise<number> {
 
   switch (command) {
     case undefined:
+      // Bare `continuum` opens the interactive front door (project → action →
+      // provider/session → launch), never just the help text.
+      return runInteractiveCommand(rest, io);
     case "--help":
     case "-h":
     case "help":

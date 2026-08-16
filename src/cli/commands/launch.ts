@@ -42,7 +42,7 @@ import { resolveDataDir } from "../../config/paths.js";
  * launch already enforces auth via prepareLaunch. Failure-tolerant: a broken
  * preflight must never block a launch.
  */
-async function runLaunchPreflight(): Promise<readonly string[]> {
+export async function runLaunchPreflight(): Promise<readonly string[]> {
   try {
     const doctor = new HealthDoctor({
       runtime: liveRuntime,
@@ -71,7 +71,7 @@ function opt(args: readonly string[], ...flags: readonly string[]): string | und
  * as printable lines. Never auto-selects or auto-handsoff — it only prints
  * the choice a human then makes via `continuum handoff`.
  */
-async function checkPricing(
+export async function checkPricing(
   sessionId: string,
   pricing: PricingAwarenessService,
   handoffManager: HandoffManager,
@@ -110,7 +110,7 @@ async function recordNativeSessionAfterLaunch(launcher: Launcher, prep: LaunchPr
  * Carry a prepared launch: API providers run the generic CONTINUUM API agent;
  * CLI providers spawn their native binary (with native-session capture).
  */
-async function launchPrepared(ctx: { launcher: Launcher; providers: ProviderRegistry; sessionManager: SessionManager; dataDir: string }, prep: LaunchPreparation, out: (s: string) => void): Promise<number> {
+export async function launchPrepared(ctx: { launcher: Launcher; providers: ProviderRegistry; sessionManager: SessionManager; dataDir: string }, prep: LaunchPreparation, out: (s: string) => void): Promise<number> {
   if (prep.runtimeKind === "api") {
     const adapter = ctx.providers.get(prep.providerRef.providerId);
     const tools = await buildToolRegistry({ dataDir: ctx.dataDir });
@@ -136,7 +136,7 @@ async function launchPrepared(ctx: { launcher: Launcher; providers: ProviderRegi
  * CONTINUUM MCP server is registered with the installed native CLIs before a
  * launch. Idempotent; never overwrites unrelated user MCP servers.
  */
-async function ensureMcpRegistration(): Promise<void> {
+export async function ensureMcpRegistration(): Promise<void> {
   const config = await new ConfigStore(resolveDataDir()).load();
   await ensureMcpRegistered(liveRuntime, [claudeProfile.cliLaunch, codexProfile.cliLaunch], config.mcpAutoConfigure);
 }

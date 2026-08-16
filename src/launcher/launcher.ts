@@ -67,6 +67,15 @@ export interface LauncherDeps {
 
 export type SpawnFn = (plan: LaunchPlan) => Promise<{ exitCode: number | null }>;
 
+/** Per-provider usability, including a human-readable display name and (when unusable) a reason — powers the interactive provider picker. */
+export interface ProviderUsability {
+  readonly providerId: string;
+  readonly displayName: string;
+  readonly model: string;
+  readonly usable: boolean;
+  readonly reason?: string;
+}
+
 const DEFAULT_OUTPUT_RESERVE = 8192;
 const REPO_MAP_BUDGET_TOKENS = 1200;
 
@@ -82,22 +91,38 @@ export class Launcher {
   }
 
   /**
-   * Which providers are both installed and authenticated, so a handoff /
-   * "who should take over" prompt only ever offers usable agents. Never
-   * auto-selects; it only *filters to available*, and the caller/user picks.
+   * Usability of every registered provider — the single source of truth
+   * behind both the authenticated-provider list (handoff) and the
+   * interactive provider picker (bare `continuum`). Includes display name
+   * and, when unusable, the human-readable reason, so a menu can show only
+   * usable agents without duplicating the usability check.
    */
-  async listAuthenticatedProviders(): Promise<readonly ProviderRef[]> {
-    const result: ProviderRef[] = [];
+  async listProviderUsability(): Promise<readonly ProviderUsability[]> {
+    const result: ProviderUsability[] = [];
     for (const id of this.deps.providers.listIds()) {
       const adapter = this.deps.providers.get(id);
       const metadata = this.deps.authMetadata.get(id);
       if (!metadata) continue;
       const check = await this.isProviderUsable(adapter, metadata);
-      if (check.usable) {
-        result.push({ providerId: id, model: adapter.resolveModel() });
-      }
+      result.push({
+        providerId: id,
+        displayName: adapter.profile.displayName,
+        model: adapter.resolveModel(),
+        usable: check.usable,
+        reason: check.reason,
+      });
     }
     return result;
+  }
+
+  /**
+   * Which providers are both installed and authenticated, so a handoff /
+   * "who should take over" prompt only ever offers usable agents. Never
+   * auto-selects; it only *filters to available*, and the caller/user picks.
+   */
+  async listAuthenticatedProviders(): Promise<readonly ProviderRef[]> {
+    const usable = (await this.listProviderUsability()).filter((u) => u.usable);
+    return usable.map((u) => ({ providerId: u.providerId, model: u.model }));
   }
 
   private async isProviderUsable(
