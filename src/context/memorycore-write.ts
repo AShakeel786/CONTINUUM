@@ -132,6 +132,12 @@ export async function captureTurn(
         user_content: args.userContent,
         assistant_content: args.assistantContent,
         session_key: args.sessionKey ?? cfg.sessionId ?? DEFAULT_SESSION_ID,
+        // Thread the isolation triple so extracted memory is scoped by
+        // team/user/agent (phase-12 MemoryCore change). Omitted fields fall
+        // back to the gateway default bucket, preserving old behavior.
+        team_id: cfg.teamId,
+        user_id: cfg.userId,
+        agent_id: cfg.agentId,
         ...(args.messages ? { messages: args.messages } : {}),
       }),
     });

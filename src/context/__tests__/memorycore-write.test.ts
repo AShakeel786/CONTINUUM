@@ -92,6 +92,9 @@ describe("MemoryCore Gateway write client", () => {
     expect(body.user_content).toBe("hello");
     expect(body.assistant_content).toBe("hi there");
     expect(body.session_key).toBe("sess-turn");
+    expect(body.team_id).toBe("team-x");
+    expect(body.user_id).toBe("user-x");
+    expect(body.agent_id).toBe("agent-x");
     // /capture is NOT the /v3 envelope — captureTurn unwraps the raw body itself.
   });
 
