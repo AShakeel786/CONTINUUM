@@ -294,6 +294,8 @@ export class Launcher {
       staleReasons,
       memoryCoreAvailable,
       memoryCoreNote,
+      runtimeKind: adapter.getCapabilities().cliAvailable ? "cli" : "api",
+      rendered,
       ...(resumeNativeSessionId ? { nativeResume: { providerId, nativeSessionId: resumeNativeSessionId } } : {}),
     };
   }

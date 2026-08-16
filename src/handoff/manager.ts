@@ -16,7 +16,7 @@
 import { renderContextForProvider } from "../rendering/render.js";
 import type { RenderedContext } from "../rendering/types.js";
 import type { ProviderRegistry } from "../providers/registry.js";
-import type { ProviderCapabilities } from "../providers/types.js";
+import type { ProviderAdapter, ProviderCapabilities } from "../providers/types.js";
 import type { SessionManager } from "../session/manager.js";
 import type { GitFingerprint, ProviderRef, TaskSession } from "../session/types.js";
 import type { TokenLimits } from "../token/types.js";
@@ -24,6 +24,14 @@ import { HandoffProviderUnavailableError } from "./errors.js";
 import { flushHandoff } from "./flush.js";
 import type { FlushHandoffOptions } from "./flush.js";
 import type { HandoffPackage } from "./types.js";
+
+/** A provider can receive a handoff if it has a CLI OR a generic API runtime. */
+function isLaunchable(adapter: ProviderAdapter): boolean {
+  const caps = adapter.getCapabilities();
+  if (caps.cliAvailable) return true;
+  const kind = adapter.profile.auth.kind;
+  return kind === "api-key" || kind === "bearer-token" || kind === "proxy-routed";
+}
 
 export interface ProviderChoice {
   readonly providerId: string;
@@ -82,9 +90,8 @@ export class HandoffManager {
    */
   async finalizeHandoff(sessionId: string, chosenProviderId: string, opts: FinalizeHandoffOptions): Promise<HandoffResult> {
     const targetAdapter = this.providerRegistry.get(chosenProviderId); // throws UnknownProviderError if unregistered
-    const capabilities = targetAdapter.getCapabilities();
-    if (!capabilities.cliAvailable) {
-      throw new HandoffProviderUnavailableError(chosenProviderId, "no CLI integration available (cliAvailable=false)");
+    if (!isLaunchable(targetAdapter)) {
+      throw new HandoffProviderUnavailableError(chosenProviderId, "no launch runtime (neither CLI nor API) available");
     }
 
     const session = await this.sessionManager.loadSession(sessionId);

@@ -7,6 +7,7 @@
 
 import type { ProjectRecord } from "../registry/types.js";
 import type { ProviderRef, TaskSession } from "../session/types.js";
+import type { RenderedContext } from "../rendering/types.js";
 
 /** A concrete plan for spawning a provider CLI. */
 export interface LaunchPlan {
@@ -23,6 +24,9 @@ export interface LaunchPlan {
   /** Safe-by-default: true means the launch requires explicit opt-in bypass. */
   readonly bypassPermissions: boolean;
 }
+
+/** Which runtime carries a launch: the provider's native CLI, or CONTINUUM's generic API agent. */
+export type LaunchRuntimeKind = "cli" | "api";
 
 export interface ResolvedLaunchTarget {
   readonly project: ProjectRecord;
@@ -50,4 +54,8 @@ export interface LaunchPreparation {
   readonly memoryCoreNote?: string;
   /** Set when this launch resumes the provider's own native CLI session (by stored id). */
   readonly nativeResume?: { readonly providerId: string; readonly nativeSessionId: string };
+  /** Which runtime carries this launch (CLI vs generic API agent). */
+  readonly runtimeKind: LaunchRuntimeKind;
+  /** The budgeted + provider-rendered context, for the API agent to send as its first turn. */
+  readonly rendered: RenderedContext;
 }

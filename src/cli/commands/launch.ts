@@ -16,6 +16,7 @@ import { listRecentSessions } from "../../launcher/session-list.js";
 import { suggestHandoffOnPeakEvent } from "../../pricing/handoff-suggestion.js";
 import type { Launcher } from "../../launcher/launcher.js";
 import type { LaunchPreparation } from "../../launcher/types.js";
+import type { ProviderRegistry } from "../../providers/registry.js";
 import type { PricingAwarenessService } from "../../pricing/service.js";
 import type { HandoffManager } from "../../handoff/manager.js";
 import type { CliIo } from "../index.js";
@@ -27,6 +28,8 @@ import { ConfigStore } from "../../config/store.js";
 import { ensureMcpRegistered } from "../../mcp/registration.js";
 import { claudeProfile } from "../../providers/profiles/claude.js";
 import { codexProfile } from "../../providers/profiles/codex.js";
+import { buildToolRegistry } from "../../mcp/build.js";
+import { runApiAgent } from "../../api-agent/run.js";
 import { join } from "node:path";
 import { resolveDataDir } from "../../config/paths.js";
 
@@ -101,6 +104,29 @@ async function recordNativeSessionAfterLaunch(launcher: Launcher, prep: LaunchPr
 }
 
 /**
+ * Carry a prepared launch: API providers run the generic CONTINUUM API agent;
+ * CLI providers spawn their native binary (with native-session capture).
+ */
+async function launchPrepared(ctx: { launcher: Launcher; providers: ProviderRegistry; dataDir: string }, prep: LaunchPreparation, out: (s: string) => void): Promise<number> {
+  if (prep.runtimeKind === "api") {
+    const adapter = ctx.providers.get(prep.providerRef.providerId);
+    const tools = await buildToolRegistry({ dataDir: ctx.dataDir });
+    try {
+      const result = await runApiAgent({ adapter, tools, rendered: prep.rendered, query: prep.session?.taskGoal ?? "", onOutput: out });
+      if (result.finalContent) out(`\n${result.finalContent}\n`);
+      return 0;
+    } catch (err) {
+      out(`API agent error: ${err instanceof Error ? err.message : String(err)}\n`);
+      return 1;
+    }
+  }
+  const startedAt = Date.now();
+  const result = await spawnCli(prep.plan);
+  await recordNativeSessionAfterLaunch(ctx.launcher, prep, startedAt);
+  return result.exitCode ?? 0;
+}
+
+/**
  * When the user granted one-time MCP auto-configure permission, ensure the
  * CONTINUUM MCP server is registered with the installed native CLIs before a
  * launch. Idempotent; never overwrites unrelated user MCP servers.
@@ -113,7 +139,7 @@ async function ensureMcpRegistration(): Promise<void> {
 export async function runLaunchCommand(args: readonly string[], io: CliIo): Promise<number> {
   const out = io.out ?? noopOutput();
   const prompt = createPrompt();
-  const { launcher, pricing, handoffManager } = await buildLauncherContext({ prompt });
+  const { launcher, pricing, handoffManager, providers, dataDir } = await buildLauncherContext({ prompt });
 
   const projectKey = args.find((a) => !a.startsWith("-"));
   const providerId = opt(args, "--provider", "-p");
@@ -146,10 +172,7 @@ export async function runLaunchCommand(args: readonly string[], io: CliIo): Prom
     }
 
     await ensureMcpRegistration();
-    const startedAt = Date.now();
-    const result = await spawnCli(prep.plan);
-    await recordNativeSessionAfterLaunch(launcher, prep, startedAt);
-    return result.exitCode ?? 0;
+    return launchPrepared({ launcher, providers, dataDir }, prep, out);
   } catch (err) {
     if (err instanceof NoProjectError || err instanceof ProviderNotAuthenticatedError || err instanceof NoAuthenticatedAgentError) {
       out(`${err.message}\n`);
@@ -167,7 +190,7 @@ export async function runResumeCommand(args: readonly string[], io: CliIo): Prom
   const recentN = Number(opt(args, "--recent") ?? "nan");
 
   const prompt = createPrompt();
-  const { launcher, sessionManager } = await buildLauncherContext({ prompt });
+  const { launcher, sessionManager, providers, dataDir } = await buildLauncherContext({ prompt });
 
   let targetSessionId = sessionId;
   if (!targetSessionId && Number.isFinite(recentN)) {
@@ -190,10 +213,7 @@ export async function runResumeCommand(args: readonly string[], io: CliIo): Prom
     if (prep.session) out(`Resuming session: ${prep.session.sessionId} [${prep.plan.providerId}]\n`);
     if (prep.nativeResume) out(`ℹ️  Resuming ${prep.nativeResume.providerId} native session ${prep.nativeResume.nativeSessionId}\n`);
     await ensureMcpRegistration();
-    const startedAt = Date.now();
-    const result = await spawnCli(prep.plan);
-    await recordNativeSessionAfterLaunch(launcher, prep, startedAt);
-    return result.exitCode ?? 0;
+    return launchPrepared({ launcher, providers, dataDir }, prep, out);
   } catch (err) {
     if (err instanceof NoAuthenticatedAgentError || err instanceof ProviderNotAuthenticatedError) {
       out(`${err.message}\n`);
@@ -211,7 +231,7 @@ export async function runHandoffCommand(args: readonly string[], io: CliIo): Pro
     return 2;
   }
   const prompt = createPrompt();
-  const { launcher, handoffManager, sessionManager, providers } = await buildLauncherContext({ prompt });
+  const { launcher, handoffManager, sessionManager, providers, dataDir } = await buildLauncherContext({ prompt });
 
   try {
     // Which *available authenticated* agents can take over — never auto-select.
@@ -236,10 +256,7 @@ export async function runHandoffCommand(args: readonly string[], io: CliIo): Pro
     // Launch the receiving agent in the same project, continuing the session.
     const prep = await launcher.prepareLaunch({ sessionId, providerId: chosenId }, { permissionMode: "safe" });
     await ensureMcpRegistration();
-    const startedAt = Date.now();
-    const spawnResult = await spawnCli(prep.plan);
-    await recordNativeSessionAfterLaunch(launcher, prep, startedAt);
-    return spawnResult.exitCode ?? 0;
+    return launchPrepared({ launcher, providers, dataDir }, prep, out);
   } catch (err) {
     if (err instanceof NoAuthenticatedAgentError) {
       out(`${err.message}\n`);

@@ -12,6 +12,7 @@ import { ProviderRegistry } from "../../providers/registry.js";
 import { createProviderAdapter } from "../../providers/adapter.js";
 import { claudeProfile } from "../../providers/profiles/claude.js";
 import { deepseekProfile } from "../../providers/profiles/deepseek.js";
+import { manifestToProfile } from "../../providers/manifest.js";
 import { UnknownProviderError } from "../../providers/errors.js";
 import type { ProviderProfile } from "../../providers/types.js";
 
@@ -177,6 +178,33 @@ describe("HandoffManager — Codex as source provider", () => {
   });
 });
 
+describe("HandoffManager — API-only providers", () => {
+  it("accepts an API-only provider (grok) as a handoff target (CONTINUUM API runtime)", async () => {
+    const sessionManager = await makeSessionManager();
+    await seedSession(sessionManager, "claude");
+
+    const grokProfile = manifestToProfile({
+      schemaVersion: 1,
+      id: "grok",
+      displayName: "Grok",
+      protocol: "openai-compatible",
+      baseUrl: "https://api.x.ai/v1",
+      auth: { kind: "api-key", envVar: "XAI_API_KEY" },
+      models: { default: "grok-3" },
+    });
+    const registry = new ProviderRegistry();
+    registry.register(createProviderAdapter(claudeProfile));
+    registry.register(createProviderAdapter(grokProfile));
+
+    const manager = new HandoffManager(sessionManager, registry);
+    const result = await manager.finalizeHandoff("sess-1", "grok", { tokenLimits });
+    expect(result.handoffPackage.targetProvider.providerId).toBe("grok");
+    expect(result.rendered.protocol).toBe("openai-compatible");
+    // Task state preserved — no re-audit.
+    expect(result.handoffPackage.completedWork).toEqual(["Wrote the core logic"]);
+  });
+});
+
 describe("HandoffManager — same-provider handoff/restart", () => {
   it("supports Claude \u2192 Claude (e.g. a fresh session resuming the same task) through the same mechanism, no special-casing", async () => {
     const sessionManager = await makeSessionManager();
@@ -204,22 +232,24 @@ describe("HandoffManager — validation and failure modes", () => {
     expect(session.lastHandoff).toBeUndefined();
   });
 
-  it("throws HandoffProviderUnavailableError for a registered provider with cliAvailable=false, and does not modify the session", async () => {
+  it("throws HandoffProviderUnavailableError for a provider with no launch runtime (no CLI, no API), and does not modify the session", async () => {
     const sessionManager = await makeSessionManager();
     await seedSession(sessionManager, "claude");
 
-    const noCliProfile: ProviderProfile = {
+    // A provider with neither a CLI nor an API auth kind has no way to run.
+    const noRuntimeProfile: ProviderProfile = {
       ...claudeProfile,
-      id: "no-cli-provider",
+      id: "no-runtime-provider",
+      auth: { kind: "cli-session" },
       capabilities: { ...claudeProfile.capabilities, cliAvailable: false },
     };
     const registry = new ProviderRegistry();
     registry.register(createProviderAdapter(claudeProfile));
     registry.register(createProviderAdapter(deepseekProfile));
-    registry.register(createProviderAdapter(noCliProfile));
+    registry.register(createProviderAdapter(noRuntimeProfile));
 
     const manager = new HandoffManager(sessionManager, registry);
-    await expect(manager.finalizeHandoff("sess-1", "no-cli-provider", { tokenLimits })).rejects.toThrow(
+    await expect(manager.finalizeHandoff("sess-1", "no-runtime-provider", { tokenLimits })).rejects.toThrow(
       HandoffProviderUnavailableError,
     );
 

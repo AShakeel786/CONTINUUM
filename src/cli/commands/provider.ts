@@ -15,10 +15,15 @@ import {
   saveUserManifest,
   deleteUserManifest,
   validateManifest,
+  manifestToProfile,
   MANIFEST_SCHEMA_VERSION,
   type ProviderManifest,
 } from "../../providers/index.js";
 import type { CliIo } from "../index.js";
+
+function runtimeLabel(m: ProviderManifest): string {
+  return manifestToProfile(m).capabilities.cliAvailable ? "Native CLI" : "CONTINUUM API";
+}
 
 function opt(args: readonly string[], ...flags: readonly string[]): string | undefined {
   for (let i = 0; i < args.length; i++) {
@@ -113,10 +118,10 @@ async function addProvider(args: readonly string[], out: (s: string) => void): P
 async function listProviders(out: (s: string) => void): Promise<number> {
   const { manifests } = await loadUserManifests(resolveDataDir());
   out("Bundled:\n");
-  for (const m of bundledManifests) out(`  ${m.id} [${m.protocol}] ${m.displayName}\n`);
+  for (const m of bundledManifests) out(`  ${m.id} [${m.protocol}] ${m.displayName} — Runtime: ${runtimeLabel(m)}\n`);
   out("User-defined:\n");
   if (manifests.length === 0) out("  (none)\n");
-  for (const m of manifests) out(`  ${m.id} [${m.protocol}] ${m.displayName}\n`);
+  for (const m of manifests) out(`  ${m.id} [${m.protocol}] ${m.displayName} — Runtime: ${runtimeLabel(m)}\n`);
   return 0;
 }
 

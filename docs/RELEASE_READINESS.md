@@ -1,21 +1,25 @@
 # RELEASE_READINESS — Public GitHub Beta Assessment
 
 **Date:** 2026-08-16
-**State:** Phase 20 (provider-neutral)
+**State:** Phase 21 (generic API agent runtime)
 
 ## Verdict
 
 **Ready for a public GitHub beta**, with clearly-scoped caveats. The core loop
 (setup → project → launch → session → resume → handoff → doctor) is proven on a
-clean-room install, the full test suite passes (54 files / 374 tests), and
-typecheck/build are clean. Phase 20 adds a universal provider-extension framework:
-users add API/CLI providers via secret-free JSON manifests — no source edits.
+clean-room install, the full test suite passes (56 files / 383 tests), and
+typecheck/build are clean. Phases 20–21 make CONTINUUM fully provider-neutral:
+users add API/CLI providers via secret-free JSON manifests (no source edits), and
+API-only providers run as full agents through a generic, protocol-selected agent
+loop — no CLI required.
 
 ## What is solid
 
 - **Three bundled providers** — Claude Code (native), DeepSeek (Tencent proxy), Codex (native).
 - **User-defined providers** — `continuum provider add/list/show/remove/validate`; Grok + GLM
   added through the public workflow with zero source changes.
+- **Generic API agent runtime** — OpenAI- and Anthropic-compatible; bounded model→tool→MCP loop;
+  API providers participate in sessions and handoff.
 - **Onboarding** — `setup`/`providers`/`auth` with OS-native credential backends, references-only config.
 - **Durable session state + handoff** — atomic writes, corruption recovery, optimistic concurrency;
   Claude/DeepSeek/Codex handoff in all directions; receiving agent does not re-audit.
@@ -51,6 +55,8 @@ users add API/CLI providers via secret-free JSON manifests — no source edits.
   repaired; an old-path entry is detected but not yet re-registered).
 - Custom CLI status parsers for user providers (user CLIs use the generic exit-code adapter;
   a bespoke parser would need a small code addition).
+- API agent streaming (non-streaming today); user-defined providers are direct-API or CLI —
+  no custom agent-loop code is added by users.
 
 ## Go/no-go
 
