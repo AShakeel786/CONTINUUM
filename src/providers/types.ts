@@ -193,8 +193,18 @@ export interface NativeSessionStore {
   readonly rootDir: string;
   /** File extension marking a session file. */
   readonly extension: string;
-  /** How to derive the native session id from a session file's basename. */
-  readonly idFrom: "basename" | "last-uuid";
+  /**
+   * How to derive the native session id:
+   *   - "basename": filename minus extension (Claude's `<uuid>.jsonl`).
+   *   - "last-uuid": trailing UUID in the filename (Codex's `rollout-…-<uuid>`).
+   *   - "session-meta": read the canonical id from a JSONL record's payload
+   *     (proven for Codex: `payload.session_id`), falling back to last-uuid.
+   */
+  readonly idFrom: "basename" | "last-uuid" | "session-meta";
+  /** For idFrom "session-meta": the JSONL record `type` holding the canonical id. */
+  readonly metaRecordType?: string;
+  /** For idFrom "session-meta": the payload field holding the canonical id. */
+  readonly metaPayloadField?: string;
 }
 
 export interface NativeResumeCapability {

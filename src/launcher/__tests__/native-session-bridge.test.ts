@@ -225,4 +225,38 @@ describe("findRecentNativeSessionId — discovery", () => {
     expect(id).toBe("secret-session");
     expect(id).not.toContain("sk-");
   });
+
+  it("session-meta strategy reads the canonical Codex id (payload.session_id)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "continuum-store-"));
+    const meta = JSON.stringify({
+      ordinal: 0,
+      type: "session_meta",
+      timestamp: "2026-08-16T10:19:26.559Z",
+      payload: { id: "01a00a15-59c5-7672-8332-c9aad96fad0f", session_id: "01a00a15-59c5-7672-8332-c9aad96fad0f", model_provider: "openai" },
+    });
+    writeFileSync(join(dir, "rollout-2026-08-16T06-19-26-01a00a15-59c5-7672-8332-c9aad96fad0f.jsonl"), meta + "\n");
+    const id = await findRecentNativeSessionId({ rootDir: dir, extension: ".jsonl", idFrom: "session-meta", metaRecordType: "session_meta", metaPayloadField: "session_id" }, 0);
+    expect(id).toBe("01a00a15-59c5-7672-8332-c9aad96fad0f");
+  });
+
+  it("session-meta falls back to filename last-uuid when metadata is unreadable", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "continuum-store-"));
+    // Not valid JSON — the metadata read fails; fall back to the trailing UUID.
+    writeFileSync(join(dir, "rollout-2026-08-16T06-19-26-01a00a15-59c5-7672-8332-c9aad96fad0f.jsonl"), "not-json\n");
+    const id = await findRecentNativeSessionId({ rootDir: dir, extension: ".jsonl", idFrom: "session-meta", metaRecordType: "session_meta", metaPayloadField: "session_id" }, 0);
+    expect(id).toBe("01a00a15-59c5-7672-8332-c9aad96fad0f");
+  });
+
+  it("session-meta extracts only session_id, never leaks sibling payload (e.g. a key)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "continuum-store-"));
+    const meta = JSON.stringify({
+      ordinal: 0,
+      type: "session_meta",
+      payload: { session_id: "canonical-uuid", api_key: "sk-SHOULD-NOT-LEAK" },
+    });
+    writeFileSync(join(dir, "rollout-x-canonical-uuid.jsonl"), meta + "\n");
+    const id = await findRecentNativeSessionId({ rootDir: dir, extension: ".jsonl", idFrom: "session-meta", metaRecordType: "session_meta", metaPayloadField: "session_id" }, 0);
+    expect(id).toBe("canonical-uuid");
+    expect(id).not.toContain("sk-");
+  });
 });

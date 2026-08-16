@@ -62,7 +62,15 @@ export const codexProfile: ProviderProfile = {
     nativeResume: {
       supported: true,
       resume: { kind: "subcommand", subcommand: "resume" },
-      sessionStore: { rootDir: "~/.codex/sessions", extension: ".jsonl", idFrom: "last-uuid" },
+      // Canonical id read directly from the JSONL `session_meta` record's
+      // `payload.session_id` (proven live), with last-uuid as fallback.
+      sessionStore: {
+        rootDir: "~/.codex/sessions",
+        extension: ".jsonl",
+        idFrom: "session-meta",
+        metaRecordType: "session_meta",
+        metaPayloadField: "session_id",
+      },
       // No sessionIdFlag: Codex generates its own session UUID (no --session-id),
       // so its id is still discovered via the store scan, not set deterministically.
     },

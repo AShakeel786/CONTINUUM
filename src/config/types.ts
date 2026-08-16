@@ -20,6 +20,12 @@ export interface ContinuumConfig {
   readonly schemaVersion: number;
   readonly credentialBackendId?: string;
   readonly providers: readonly ProviderAuthConfigEntry[];
+  /**
+   * One-time permission: may CONTINUUM auto-register its MCP server with the
+   * installed native CLIs (Claude/Codex)? Non-secret; undefined = not yet
+   * asked, false = declined, true = allowed.
+   */
+  readonly mcpAutoConfigure?: boolean;
   readonly createdAt: string;
   readonly updatedAt: string;
 }

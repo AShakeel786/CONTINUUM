@@ -20,12 +20,21 @@ export interface McpShell {
   run(cmd: string, args: readonly string[]): Promise<{ code: number | null; stdout: string; stderr: string }>;
 }
 
-/** The stdio server command: `node <projectRoot>/dist/mcp/bin.js` (absolute, secret-free). */
+/**
+ * The stdio server command, secret-free. Prefers an explicit override, then
+ * falls back to `process.execPath` (the actual Node binary running CONTINUUM,
+ * more portable than a bare `"node"`) + the `dist/mcp/bin.js` next to this
+ * module. The `dist`-relative path is valid for both a repo checkout and a
+ * normal npm-installed package (the compiled tree always sits beside the
+ * source `dist/`).
+ */
 export function mcpServerCommand(): readonly string[] {
+  const override = process.env.CONTINUUM_MCP_SERVER_COMMAND?.trim();
+  if (override) return [override];
   const here = dirname(fileURLToPath(import.meta.url)); // .../dist/mcp
   const projectRoot = join(here, "..", "..");
   const bin = join(projectRoot, "dist", "mcp", "bin.js");
-  return ["node", bin];
+  return [process.execPath, bin];
 }
 
 /** Build `<cli> mcp add <name> -- node <dist/mcp/bin.js>` for a profile that declares MCP support. */
@@ -65,6 +74,20 @@ export async function registerMcpIfMissing(shell: McpShell, launch: CliLaunchDes
     return { serverName: mcp.serverName, status: "unsupported", detail: `register failed: ${firstLine(res.stderr) || firstLine(res.stdout)}` };
   }
   return { serverName: mcp.serverName, status: "registered", detail: "registered" };
+}
+
+/**
+ * When MCP auto-configure is granted, ensure the CONTINUUM MCP server is
+ * registered for every given launch descriptor (idempotent). Returns [] when
+ * auto-configure is undefined/false — nothing is registered without consent.
+ */
+export async function ensureMcpRegistered(shell: McpShell, launches: readonly CliLaunchDescriptor[], autoConfigure: boolean | undefined): Promise<McpRegistrationResult[]> {
+  if (autoConfigure !== true) return [];
+  const results: McpRegistrationResult[] = [];
+  for (const launch of launches) {
+    results.push(await registerMcpIfMissing(shell, launch));
+  }
+  return results;
 }
 
 function firstLine(s: string): string {

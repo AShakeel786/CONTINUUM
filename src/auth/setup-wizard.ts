@@ -111,6 +111,16 @@ export class SetupWizard {
       this.out(`✓ ${metadata.providerId}: ${result.method === "api" ? "API key stored" : "CLI auth"} (${result.method}).\n`);
     }
 
+    // One-time MCP auto-configure permission (ask only when not yet answered).
+    if (config.mcpAutoConfigure === undefined && !this.deps.nonInteractive) {
+      const allow = await this.deps.prompt.confirm(
+        "Allow CONTINUUM to auto-register its MCP server with installed CLIs (Claude/Codex)?",
+        false,
+      );
+      config = { ...config, mcpAutoConfigure: allow, updatedAt: new Date().toISOString() };
+      this.out(`${allow ? "✓" : "✗"} MCP auto-configure: ${allow ? "enabled" : "disabled"}.\n`);
+    }
+
     await configStore.save(config);
     return config;
   }

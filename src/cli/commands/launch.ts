@@ -23,6 +23,10 @@ import { buildLauncherContext } from "./launcher-context.js";
 import { HealthDoctor } from "../../health/doctor.js";
 import { DEFAULT_OPTIONS, DEFAULT_POLICY, liveRuntime, scanStaleProviderProcesses } from "../../health/adapters.js";
 import { buildPreflightWarnings } from "../../health/preflight.js";
+import { ConfigStore } from "../../config/store.js";
+import { ensureMcpRegistered } from "../../mcp/registration.js";
+import { claudeProfile } from "../../providers/profiles/claude.js";
+import { codexProfile } from "../../providers/profiles/codex.js";
 import { join } from "node:path";
 import { resolveDataDir } from "../../config/paths.js";
 
@@ -96,6 +100,16 @@ async function recordNativeSessionAfterLaunch(launcher: Launcher, prep: LaunchPr
   if (id) await launcher.recordNativeSessionId(prep.session.sessionId, prep.providerRef.providerId, id);
 }
 
+/**
+ * When the user granted one-time MCP auto-configure permission, ensure the
+ * CONTINUUM MCP server is registered with the installed native CLIs before a
+ * launch. Idempotent; never overwrites unrelated user MCP servers.
+ */
+async function ensureMcpRegistration(): Promise<void> {
+  const config = await new ConfigStore(resolveDataDir()).load();
+  await ensureMcpRegistered(liveRuntime, [claudeProfile.cliLaunch, codexProfile.cliLaunch], config.mcpAutoConfigure);
+}
+
 export async function runLaunchCommand(args: readonly string[], io: CliIo): Promise<number> {
   const out = io.out ?? noopOutput();
   const prompt = createPrompt();
@@ -131,6 +145,7 @@ export async function runLaunchCommand(args: readonly string[], io: CliIo): Prom
       for (const line of pricingLines) out(line);
     }
 
+    await ensureMcpRegistration();
     const startedAt = Date.now();
     const result = await spawnCli(prep.plan);
     await recordNativeSessionAfterLaunch(launcher, prep, startedAt);
@@ -174,6 +189,7 @@ export async function runResumeCommand(args: readonly string[], io: CliIo): Prom
     }
     if (prep.session) out(`Resuming session: ${prep.session.sessionId} [${prep.plan.providerId}]\n`);
     if (prep.nativeResume) out(`ℹ️  Resuming ${prep.nativeResume.providerId} native session ${prep.nativeResume.nativeSessionId}\n`);
+    await ensureMcpRegistration();
     const startedAt = Date.now();
     const result = await spawnCli(prep.plan);
     await recordNativeSessionAfterLaunch(launcher, prep, startedAt);
@@ -219,6 +235,7 @@ export async function runHandoffCommand(args: readonly string[], io: CliIo): Pro
 
     // Launch the receiving agent in the same project, continuing the session.
     const prep = await launcher.prepareLaunch({ sessionId, providerId: chosenId }, { permissionMode: "safe" });
+    await ensureMcpRegistration();
     const startedAt = Date.now();
     const spawnResult = await spawnCli(prep.plan);
     await recordNativeSessionAfterLaunch(launcher, prep, startedAt);

@@ -54,6 +54,47 @@ describe("SetupWizard.run (non-interactive)", () => {
   });
 });
 
+describe("SetupWizard MCP auto-configure permission", () => {
+  function mcpWizard(dir: string, confirms: readonly boolean[]) {
+    return new SetupWizard({
+      prompt: createScriptedPrompt({ confirms: [...confirms] }),
+      cliAuthManager: new CliAuthManager(),
+      providerMetadata: new Map(), // no providers → only the MCP question is asked
+      dataDir: dir,
+      output: () => {},
+    });
+  }
+
+  it("persists mcpAutoConfigure=true when accepted (asked once)", async () => {
+    const dir = tmpDataDir();
+    const wizard = mcpWizard(dir, [true]);
+    const store = new ConfigStore(dir);
+    const state = await wizard.initialize(store, dir);
+    const config = await wizard.run(store, state);
+    expect(config.mcpAutoConfigure).toBe(true);
+  });
+
+  it("persists mcpAutoConfigure=false when declined", async () => {
+    const dir = tmpDataDir();
+    const wizard = mcpWizard(dir, [false]);
+    const store = new ConfigStore(dir);
+    const state = await wizard.initialize(store, dir);
+    const config = await wizard.run(store, state);
+    expect(config.mcpAutoConfigure).toBe(false);
+  });
+
+  it("does not re-ask when already answered (idempotent)", async () => {
+    const dir = tmpDataDir();
+    // No confirm available — if it re-asked it would read the default false.
+    const wizard = mcpWizard(dir, []);
+    const store = new ConfigStore(dir);
+    const state = await wizard.initialize(store, dir);
+    await store.save({ ...state.config, mcpAutoConfigure: true, updatedAt: new Date().toISOString() });
+    const config = await wizard.run(store, { ...state, config: await store.load() });
+    expect(config.mcpAutoConfigure).toBe(true);
+  });
+});
+
 describe("SetupWizard.run (interactive with confirms)", () => {
   it("sets up a declined-then-accepted sequence, storing only references", async () => {
     const dir = tmpDataDir();

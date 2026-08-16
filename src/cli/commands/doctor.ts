@@ -20,13 +20,16 @@ import {
   liveRuntime,
   scanStaleProviderProcesses,
 } from "../../health/adapters.js";
-import { isMcpRegistered } from "../../mcp/registration.js";
+import { isMcpRegistered, mcpServerCommand, registerMcpIfMissing } from "../../mcp/registration.js";
+import { verifyMcpHealth } from "../../mcp/health.js";
 import { verifyCliContract } from "../../launcher/cli-contract.js";
 import { createProviderAdapter } from "../../providers/adapter.js";
 import { claudeProfile } from "../../providers/profiles/claude.js";
 import { codexProfile } from "../../providers/profiles/codex.js";
 import type { CliIo } from "../index.js";
 import { buildContext } from "./common.js";
+
+const NATIVE_CLI_PROFILES = [claudeProfile, codexProfile] as const;
 
 export async function runDoctorCommand(args: readonly string[], io: CliIo): Promise<number> {
   const out = io.out ?? noopOutput();
@@ -78,18 +81,43 @@ export async function runDoctorCommand(args: readonly string[], io: CliIo): Prom
   const before = await healthDoctor.diagnose();
   for (const line of HealthDoctor.formatReport(before)) out(`${line}\n`);
 
-  // Native CLI surface: MCP registration + session-contract drift (read-only).
+  // Native CLI surface: MCP permission + functional health + session contract.
   out(`\nNative CLI (MCP + session contract):\n`);
-  for (const profile of [claudeProfile, codexProfile]) {
+  if (config.mcpAutoConfigure === undefined) {
+    out("  MCP auto-configure: not yet decided (run `continuum setup`).\n");
+  } else if (config.mcpAutoConfigure) {
+    out("  MCP auto-configure: enabled\n");
+  } else {
+    out("  MCP auto-configure: disabled (run: continuum mcp-setup to register manually)\n");
+  }
+
+  // Functional MCP health (the CONTINUUM server itself — same for every CLI).
+  const mcpHealth = await verifyMcpHealth(mcpServerCommand());
+  const healthIcon = mcpHealth.status === "reachable" ? "ok" : "!!";
+  out(`  ${healthIcon} continuum-mcp: ${mcpHealth.status} (${mcpHealth.detail})\n`);
+
+  for (const profile of NATIVE_CLI_PROFILES) {
     const adapter = createProviderAdapter(profile);
     const contract = await verifyCliContract(liveRuntime, adapter);
     out(`  ${contract.ok ? "ok" : "!! "} ${profile.id} session contract: ${contract.detail}\n`);
     const registered = await isMcpRegistered(liveRuntime, profile.cliLaunch);
-    out(`  ${registered ? "ok" : "-- "} ${profile.id} MCP: ${registered ? "continuum registered" : "continuum-mcp not registered (run: continuum mcp-setup)"}\n`);
+    out(`  ${registered ? "ok" : "-- "} ${profile.id} MCP: ${registered ? "registered" : "not registered"}\n`);
   }
 
   if (!repair) {
     return before.overall === "healthy" && authReport.overall === "healthy" ? 0 : 1;
+  }
+
+  // MCP repair: only when auto-configure permission is enabled, and only
+  // CONTINUUM's own registration (never removes/overwrites unrelated servers).
+  out(`\nMCP repair:\n`);
+  if (config.mcpAutoConfigure !== true) {
+    out("  skipped — MCP auto-configure disabled (run: continuum mcp-setup to register manually)\n");
+  } else {
+    for (const profile of NATIVE_CLI_PROFILES) {
+      const result = await registerMcpIfMissing(liveRuntime, profile.cliLaunch);
+      out(`  [${result.status}] ${profile.id} MCP: ${result.detail}\n`);
+    }
   }
 
   out(`\nRepair pass (explicit, bounded by cooldown + circuit breaker):\n`);

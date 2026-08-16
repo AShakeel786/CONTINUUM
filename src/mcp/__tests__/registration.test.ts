@@ -1,25 +1,28 @@
 import { describe, expect, it } from "vitest";
-import { buildMcpAddArgs, isMcpRegistered, mcpServerCommand, registerMcpIfMissing, type McpShell } from "../registration.js";
+import { buildMcpAddArgs, ensureMcpRegistered, isMcpRegistered, mcpServerCommand, registerMcpIfMissing, type McpShell } from "../registration.js";
 import { claudeProfile } from "../../providers/profiles/claude.js";
 import { codexProfile } from "../../providers/profiles/codex.js";
 import { deepseekProfile } from "../../providers/profiles/deepseek.js";
 
 class FakeShell implements McpShell {
   calls: { cmd: string; args: readonly string[] }[] = [];
-  private registered = new Set<string>();
-  constructor() {}
-  markRegistered(name: string): this {
-    this.registered.add(name);
+  private registered = new Map<string, Set<string>>();
+  private set(cmd: string, name: string): void {
+    if (!this.registered.has(cmd)) this.registered.set(cmd, new Set());
+    this.registered.get(cmd)!.add(name);
+  }
+  markRegistered(name: string, cmd = "claude"): this {
+    this.set(cmd, name);
     return this;
   }
   async run(cmd: string, args: readonly string[]): Promise<{ code: number | null; stdout: string; stderr: string }> {
     this.calls.push({ cmd, args });
     if (args[0] === "mcp" && args[1] === "list") {
-      return { code: 0, stdout: [...this.registered].map((n) => `${n}\t...`).join("\n"), stderr: "" };
+      const names = [...(this.registered.get(cmd) ?? new Set<string>())];
+      return { code: 0, stdout: names.map((n) => `${n}\t...`).join("\n"), stderr: "" };
     }
     if (args[0] === "mcp" && args[1] === "add") {
-      const name = args[2]!;
-      this.registered.add(name);
+      this.set(cmd, args[2]!);
       return { code: 0, stdout: "", stderr: "" };
     }
     return { code: 0, stdout: "", stderr: "" };
@@ -29,7 +32,7 @@ class FakeShell implements McpShell {
 describe("mcpServerCommand", () => {
   it("is a secret-free `node <abs>/dist/mcp/bin.js` command", () => {
     const cmd = mcpServerCommand();
-    expect(cmd[0]).toBe("node");
+    expect(cmd[0]).toBe(process.execPath);
     expect(cmd[1]).toContain("dist/mcp/bin.js");
     // No tokens/keys in the generated command.
     expect(JSON.stringify(cmd)).not.toMatch(/sk-|Bearer|token=/i);
@@ -37,7 +40,7 @@ describe("mcpServerCommand", () => {
 });
 
 describe("buildMcpAddArgs", () => {
-  it("builds `claude mcp add continuum -- node <dist>` and `codex mcp add continuum -- node <dist>`", () => {
+  it("builds `claude mcp add continuum -- <node> <dist>` and `codex mcp add continuum -- <node> <dist>`", () => {
     const claude = buildMcpAddArgs(claudeProfile.cliLaunch);
     expect(claude).toBeDefined();
     expect(claude![0]).toBe("claude");
@@ -45,11 +48,12 @@ describe("buildMcpAddArgs", () => {
     expect(claude![2]).toBe("add");
     expect(claude![3]).toBe("continuum");
     expect(claude![4]).toBe("--");
-    expect(claude![5]).toBe("node");
+    expect(claude![5]).toBe(process.execPath);
 
     const codex = buildMcpAddArgs(codexProfile.cliLaunch);
     expect(codex![0]).toBe("codex");
     expect(codex![3]).toBe("continuum");
+    expect(codex![5]).toBe(process.execPath);
   });
 
   it("returns undefined for a provider with no MCP declaration (deepseek)", () => {
@@ -83,5 +87,23 @@ describe("isMcpRegistered + registerMcpIfMissing (idempotency + no overwrite)", 
     expect(await isMcpRegistered(shell, claudeProfile.cliLaunch)).toBe(true);
     expect(shell.calls.filter((c) => c.args[1] === "add")).toHaveLength(1);
     expect(shell.calls.filter((c) => c.args[1] === "remove")).toHaveLength(0);
+  });
+});
+
+describe("ensureMcpRegistered (auto-configure gating)", () => {
+  const launches = [claudeProfile.cliLaunch, codexProfile.cliLaunch];
+
+  it("registers when autoConfigure === true", async () => {
+    const shell = new FakeShell();
+    const results = await ensureMcpRegistered(shell, launches, true);
+    expect(results).toHaveLength(2);
+    expect(shell.calls.filter((c) => c.args[1] === "add")).toHaveLength(2);
+  });
+
+  it("does nothing when autoConfigure === false or undefined", async () => {
+    const shell = new FakeShell();
+    expect(await ensureMcpRegistered(shell, launches, false)).toEqual([]);
+    expect(await ensureMcpRegistered(shell, launches, undefined)).toEqual([]);
+    expect(shell.calls.filter((c) => c.args[1] === "add")).toHaveLength(0);
   });
 });
