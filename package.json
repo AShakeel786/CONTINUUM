@@ -5,7 +5,8 @@
   "type": "module",
   "description": "CONTINUUM: multi-agent development runtime — Phase 3 provider-adapter foundation.",
   "bin": {
-    "continuum": "./dist/cli/bin.js"
+    "continuum": "./dist/cli/bin.js",
+    "continuum-mcp": "./dist/mcp/bin.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

@@ -1,0 +1,139 @@
+/**
+ * Memory tools — the MCP surface over MemoryCore's Gateway, wrapping the
+ * existing read client (`memorycore-client.ts`) and write client
+ * (`memorycore-write.ts`). Read tools surface persona/scene-index/recalled
+ * memory as compact, token-conscious text; write tools are explicitly
+ * labeled `write`. MemoryCore unavailability (unconfigured, unreachable, or
+ * HTTP/auth failure) yields a clear error result — never a crash.
+ */
+
+import { fetchStableFromMemoryCore, fetchDynamicRecallFromMemoryCore, type MemoryCoreGatewayConfig } from "../context/memorycore-client.js";
+import { captureConversation, updateAtomicMemory, writeCoreMemory } from "../context/memorycore-write.js";
+import { jsonResult, textResult, type RegisteredTool, type ToolResult } from "./tools.js";
+
+/** A provider-independent gateway connection factory — injected so tests can point at a fake and production points at env-config. */
+export type MemoryCoreProvider = () => Promise<MemoryCoreGatewayConfig | undefined>;
+
+function stringArg(args: Record<string, unknown>, key: string): string | undefined {
+  const v = args[key];
+  return typeof v === "string" ? v : undefined;
+}
+
+/** Builds the full set of memory tools. */
+export function buildMemoryTools(provider: MemoryCoreProvider): RegisteredTool[] {
+  return [
+    {
+      definition: {
+        name: "memory_recall",
+        description: "Fetch stable memory (L3 persona + L2 scene index) for the current project/agent context. Read-only.",
+        inputSchema: { type: "object", properties: {}, additionalProperties: false },
+        access: "read",
+      },
+      handler: async () => {
+        const cfg = await provider();
+        if (!cfg) return textResult("MemoryCore is not configured (set CONTINUUM_MEMORY_CORE_URL/TOKEN). Recall unavailable.", true);
+        try {
+          const stable = await fetchStableFromMemoryCore(cfg);
+          return jsonResult({
+            persona: stable.persona?.content ?? null,
+            sceneIndex: stable.sceneIndex.map((s) => ({ path: s.path, summary: s.summary ?? null })),
+          });
+        } catch (err) {
+          return textResult(`MemoryCore recall failed: ${errMessage(err)}`, true);
+        }
+      },
+    },
+    {
+      definition: {
+        name: "memory_search",
+        description: "Search relevant L1 atomic memories by query. Read-only.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            query: { type: "string", description: "Search query (max 2048 chars)." },
+            limit: { type: "integer", minimum: 1, maximum: 100, description: "Max results (default 5)." },
+          },
+          required: ["query"],
+          additionalProperties: false,
+        },
+        access: "read",
+      },
+      handler: async (args) => {
+        const query = stringArg(args, "query");
+        if (!query) return textResult("memory_search requires a non-empty \"query\".", true);
+        const cfg = await provider();
+        if (!cfg) return textResult("MemoryCore is not configured. Search unavailable.", true);
+        try {
+          const limit = typeof args.limit === "number" ? args.limit : 5;
+          const dynamic = await fetchDynamicRecallFromMemoryCore(cfg, query, limit);
+          return jsonResult(dynamic.items.map((i) => ({ id: i.id, type: i.type ?? null, content: i.content, score: i.score ?? null })));
+        } catch (err) {
+          return textResult(`MemoryCore search failed: ${errMessage(err)}`, true);
+        }
+      },
+    },
+    {
+      definition: {
+        name: "memory_capture",
+        description: "Store a conversation turn (L0 capture; triggers L1 extraction). Write.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            role: { type: "string", description: "Message role (e.g. user, assistant)." },
+            content: { type: "string", description: "Message text." },
+          },
+          required: ["role", "content"],
+          additionalProperties: false,
+        },
+        access: "write",
+      },
+      handler: async (args) => {
+        const role = stringArg(args, "role");
+        const content = stringArg(args, "content");
+        if (!role || !content) return textResult("memory_capture requires \"role\" and \"content\".", true);
+        const cfg = await provider();
+        if (!cfg) return textResult("MemoryCore is not configured. Capture unavailable.", true);
+        try {
+          const res = await captureConversation(cfg, { messages: [{ role, content }] });
+          return jsonResult({ accepted: res.code === 0, code: res.code });
+        } catch (err) {
+          return textResult(`MemoryCore capture failed: ${errMessage(err)}`, true);
+        }
+      },
+    },
+    {
+      definition: {
+        name: "memory_store_atom",
+        description: "Store/update a single L1 atomic memory by id. Write.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            id: { type: "string", description: "Memory atom id to update." },
+            content: { type: "string", description: "Memory content (max 8192 chars)." },
+            background: { type: "string", description: "Optional background/context note." },
+          },
+          required: ["id", "content"],
+          additionalProperties: false,
+        },
+        access: "write",
+      },
+      handler: async (args) => {
+        const id = stringArg(args, "id");
+        const content = stringArg(args, "content");
+        if (!id || !content) return textResult("memory_store_atom requires \"id\" and \"content\".", true);
+        const cfg = await provider();
+        if (!cfg) return textResult("MemoryCore is not configured. Store unavailable.", true);
+        try {
+          const res = await updateAtomicMemory(cfg, { id, content, background: stringArg(args, "background") });
+          return jsonResult({ updated: res.code === 0, code: res.code });
+        } catch (err) {
+          return textResult(`MemoryCore store failed: ${errMessage(err)}`, true);
+        }
+      },
+    },
+  ];
+}
+
+function errMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}

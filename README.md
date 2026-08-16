@@ -2,18 +2,22 @@
 
 A multi-agent development runtime: orchestration across agents, seamless mid-task handoff, shared persistent memory, project isolation, prompt/context-caching optimization, and support for Claude Code, DeepSeek, Gemini, and local models — through a common provider and tool layer.
 
-## Status: Phase 7 complete (cross-platform launcher)
+## Status: Phase 8 complete (MCP tool layer)
 
-**Phase 7 makes `continuum` the daily launcher.** A project registry
-(`continuum project add/remove/list/show` — aliases, CWD detection, default
-provider/model) plus a launch flow (`launch` / `resume` / `handoff`) that wires
-the Phase 3–6 systems together without duplicating them: provider + auth,
-Context Manager (+ MemoryCore when available, degraded clearly when not),
-durable session state (with stale-worktree protection on resume), handoff (asks
-which authenticated agent takes over — never auto-selects — and preserves the
-task), and peak-pricing handoff prompts. Cross-platform, no legacy `.ps1`
-launcher, safe permissions by default. See `docs/PHASE_7_LAUNCHER_ARCHITECTURE.md`,
-`docs/PHASE_7_VERIFICATION.md`, and `docs/PHASE_8_ENTRY_CRITERIA.md`.
+**Phase 8 adds a provider-independent MCP server** (`continuum mcp` /
+`continuum-mcp`, JSON-RPC 2.0 over stdio, dependency-free) so any supported
+agent reaches CONTINUUM/Tencent capabilities through one standard tool
+interface — *wrapping* existing systems, never duplicating them. Tools:
+memory `recall`/`search` (read) and `capture`/`store_atom` (write) over MemoryCore's
+Gateway, plus `session_state`/`session_recent`/`project_state`/`project_list`
+over local state. Read-vs-write is explicit, no secrets leave the process,
+MemoryCore unavailability degrades clearly, and project/session isolation is
+enforced. See `docs/PHASE_8_MCP_ARCHITECTURE.md`, `docs/PHASE_8_VERIFICATION.md`,
+and `docs/PHASE_9_ENTRY_CRITERIA.md`.
+
+Earlier: **Phase 7/7.1** built the cross-platform daily launcher (project
+registry + `launch`/`resume`/`handoff`, proxy-key credential, provider prompt,
+session listing), and **Phase 6** built onboarding/auth.
 
 ## Quick start
 
@@ -25,7 +29,10 @@ node dist/cli/bin.js project add <name> <path> --provider claude   # register a 
 node dist/cli/bin.js launch [<proj>]  # resolve project → provider → session → spawn
 node dist/cli/bin.js resume <session> # resume (stale-worktree safe)
 node dist/cli/bin.js handoff <session># hand off to an authenticated agent (never auto-selects)
+node dist/cli/bin.js sessions         # list/archive recent sessions
 node dist/cli/bin.js doctor           # read-only health report (exit 0 healthy / 1 unhealthy)
+node dist/cli/bin.js mcp              # run the MCP server (JSON-RPC over stdio)
+```
 ```
 
 Credentials live in `~/.continuum/` (or `$CONTINUUM_HOME`); config and project
@@ -78,6 +85,10 @@ Read the docs:
 | [`docs/PHASE_7_LAUNCHER_ARCHITECTURE.md`](docs/PHASE_7_LAUNCHER_ARCHITECTURE.md) | The cross-platform launcher design: project registry, launch/resume/handoff flow, safe-by-default permissions, MemoryCore degrade, and the one documented DeepSeek-proxy-key seam. |
 | [`docs/PHASE_7_VERIFICATION.md`](docs/PHASE_7_VERIFICATION.md) | Every test the brief required, what covers it, the CLI smoke test, and what was NOT (and why). |
 | [`docs/PHASE_8_ENTRY_CRITERIA.md`](docs/PHASE_8_ENTRY_CRITERIA.md) | What Phase 7 revealed but deliberately didn't build, decisions needed from you, and the recommended Phase 8 starting point (MCP wrapper). |
+| [`docs/PHASE_7_1_CLOSURE.md`](docs/PHASE_7_1_CLOSURE.md) | Phase 7.1 launcher UX closure: proxy credential, provider prompt, session listing, provider-change handoff, upstream-key non-leak. |
+| [`docs/PHASE_8_MCP_ARCHITECTURE.md`](docs/PHASE_8_MCP_ARCHITECTURE.md) | The MCP tool layer: dependency-free JSON-RPC-over-stdio server, memory + session tools wrapping existing modules, read/write split, isolation and secret safety. |
+| [`docs/PHASE_8_VERIFICATION.md`](docs/PHASE_8_VERIFICATION.md) | Every test the brief required, what covers it, the live stdio smoke test, and what was NOT (and why). |
+| [`docs/PHASE_9_ENTRY_CRITERIA.md`](docs/PHASE_9_ENTRY_CRITERIA.md) | What Phase 8 revealed but deliberately didn't build, and the recommended Phase 9 starting point (combined live-verification). |
 | [`docs/PRICING_AWARENESS.md`](docs/PRICING_AWARENESS.md) | The Phase 5 addendum: config-driven peak/off-peak pricing windows, a real boundary bug found and fixed via testing, deduplicated notifications, and the non-automatic handoff-suggestion hook. |
 
 ## Relationship to Tencent
