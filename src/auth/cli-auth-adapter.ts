@@ -16,7 +16,7 @@ const execFileAsync = promisify(execFile);
 const DETECT_TIMEOUT_MS = 5000;
 const STATUS_TIMEOUT_MS = 8000;
 
-export type StatusParser = (stdout: string, exitCode: number) => CliAuthStatus;
+export type StatusParser = (stdout: string, stderr: string, exitCode: number) => CliAuthStatus;
 
 export interface CreateCliAuthAdapterOptions {
   readonly parseStatus?: StatusParser;
@@ -43,17 +43,18 @@ export function createCliAuthAdapter(
     async detectAuthenticated(): Promise<CliAuthStatus> {
       if (!capability.statusArgs) return "unknown";
       try {
-        const { stdout } = await execFileAsync(capability.executable, [...capability.statusArgs], {
+        const { stdout, stderr } = await execFileAsync(capability.executable, [...capability.statusArgs], {
           timeout: STATUS_TIMEOUT_MS,
         });
-        if (options.parseStatus) return options.parseStatus(stdout, 0);
+        if (options.parseStatus) return options.parseStatus(stdout, stderr, 0);
         return "authenticated"; // generic fallback: exit 0 with no parser configured
       } catch (err) {
         const exitCode = typeof (err as { code?: unknown }).code === "number" ? ((err as { code: number }).code) : 1;
         const stdout = typeof (err as { stdout?: unknown }).stdout === "string" ? (err as { stdout: string }).stdout : "";
+        const stderr = typeof (err as { stderr?: unknown }).stderr === "string" ? (err as { stderr: string }).stderr : "";
         if (options.parseStatus) {
           try {
-            return options.parseStatus(stdout, exitCode);
+            return options.parseStatus(stdout, stderr, exitCode);
           } catch {
             return "unknown";
           }

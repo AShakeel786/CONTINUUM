@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { claudeProfile } from "../profiles/claude.js";
 import { deepseekProfile } from "../profiles/deepseek.js";
+import { codexProfile } from "../profiles/codex.js";
 import { createDefaultProviderRegistry } from "../index.js";
 
 /**
@@ -38,6 +39,12 @@ describe("no secrets in provider profiles", () => {
     const json = JSON.stringify(deepseekProfile);
     expect(json).toBeTruthy();
     assertNoLiteralSecrets(deepseekProfile);
+  });
+
+  it("Codex profile is fully JSON-serializable and secret-free", () => {
+    const json = JSON.stringify(codexProfile);
+    expect(json).toBeTruthy();
+    assertNoLiteralSecrets(codexProfile);
   });
 
   it("every auth strategy that carries a secret uses a SecretRef (envVar name only), not a literal", () => {

@@ -3,6 +3,7 @@ import { ProviderRegistry } from "../registry.js";
 import { createProviderAdapter } from "../adapter.js";
 import { claudeProfile } from "../profiles/claude.js";
 import { deepseekProfile } from "../profiles/deepseek.js";
+import { codexProfile } from "../profiles/codex.js";
 import { createDefaultProviderRegistry } from "../index.js";
 import { DuplicateProviderError, UnknownProviderError } from "../errors.js";
 
@@ -47,8 +48,9 @@ describe("ProviderRegistry", () => {
     const registry = new ProviderRegistry();
     registry.register(createProviderAdapter(claudeProfile));
     registry.register(createProviderAdapter(deepseekProfile));
-    expect([...registry.listIds()].sort()).toEqual(["claude", "deepseek"]);
-    expect(registry.listProfiles().map((p) => p.id).sort()).toEqual(["claude", "deepseek"]);
+    registry.register(createProviderAdapter(codexProfile));
+    expect([...registry.listIds()].sort()).toEqual(["claude", "codex", "deepseek"]);
+    expect(registry.listProfiles().map((p) => p.id).sort()).toEqual(["claude", "codex", "deepseek"]);
   });
 
   it("getCapabilities is a lookup+capability shortcut, not a separate code path", () => {
@@ -58,8 +60,8 @@ describe("ProviderRegistry", () => {
     expect(() => registry.getCapabilities("unknown")).toThrowError(UnknownProviderError);
   });
 
-  it("createDefaultProviderRegistry registers exactly Claude + DeepSeek today", () => {
+  it("createDefaultProviderRegistry registers exactly Claude + DeepSeek + Codex today", () => {
     const registry = createDefaultProviderRegistry();
-    expect([...registry.listIds()].sort()).toEqual(["claude", "deepseek"]);
+    expect([...registry.listIds()].sort()).toEqual(["claude", "codex", "deepseek"]);
   });
 });

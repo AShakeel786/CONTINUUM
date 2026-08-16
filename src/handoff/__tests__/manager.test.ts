@@ -30,8 +30,8 @@ async function makeSessionManager(): Promise<SessionManager> {
   return new SessionManager(new FileSessionStore(await makeTmpDir()));
 }
 
-async function seedSession(sessionManager: SessionManager, providerId: "claude" | "deepseek" = "claude") {
-  const model = providerId === "claude" ? "claude-sonnet-5" : "deepseek-v4-pro";
+async function seedSession(sessionManager: SessionManager, providerId: "claude" | "deepseek" | "codex" = "claude") {
+  const model = providerId === "claude" ? "claude-sonnet-5" : providerId === "deepseek" ? "deepseek-v4-pro" : "gpt-5.6-sol";
   await sessionManager.createSession({
     sessionId: "sess-1",
     projectId: "proj-1",
@@ -49,7 +49,7 @@ describe("HandoffManager — provider selection", () => {
   it("listAvailableReceivingProviders lists every registered provider, does not pick one", async () => {
     const manager = new HandoffManager(await makeSessionManager(), createDefaultProviderRegistry());
     const choices = manager.listAvailableReceivingProviders();
-    expect(choices.map((c) => c.providerId).sort()).toEqual(["claude", "deepseek"]);
+    expect(choices.map((c) => c.providerId).sort()).toEqual(["claude", "codex", "deepseek"]);
   });
 
   it("prepareHandoff returns the session plus available choices together", async () => {
@@ -108,6 +108,72 @@ describe("HandoffManager — DeepSeek \u2192 Claude", () => {
     expect(result.rendered.protocol).toBe("anthropic-messages");
     expect(Array.isArray(result.rendered.system)).toBe(true);
     expect(result.rendered.cacheDirectives.length).toBeGreaterThan(0);
+  });
+});
+
+describe("HandoffManager — Codex as receiving provider", () => {
+  it("Claude → Codex renders Codex's openai-compatible (joined-string) shape and inherits task state", async () => {
+    const sessionManager = await makeSessionManager();
+    await seedSession(sessionManager, "claude");
+    const manager = new HandoffManager(sessionManager, createDefaultProviderRegistry());
+
+    const result = await manager.finalizeHandoff("sess-1", "codex", { tokenLimits });
+
+    expect(result.handoffPackage.sourceProvider.providerId).toBe("claude");
+    expect(result.handoffPackage.targetProvider.providerId).toBe("codex");
+    expect(result.handoffPackage.targetProvider.model).toBe("gpt-5.6-sol");
+    expect(result.rendered.protocol).toBe("openai-compatible");
+    expect(typeof result.rendered.system).toBe("string");
+    // No Anthropic cache directive for an OpenAI-compatible target.
+    expect(result.rendered.cacheDirectives).toEqual([]);
+    // Receiving Codex session inherits task state, does not re-audit.
+    expect(result.handoffPackage.completedWork).toEqual(["Wrote the core logic"]);
+    expect(result.handoffPackage.remainingWork).toEqual(["Add tests"]);
+    expect(result.session.activeProvider.providerId).toBe("codex");
+  });
+
+  it("DeepSeek → Codex works through the same mechanism (no special-casing)", async () => {
+    const sessionManager = await makeSessionManager();
+    await seedSession(sessionManager, "deepseek");
+    const manager = new HandoffManager(sessionManager, createDefaultProviderRegistry());
+
+    const result = await manager.finalizeHandoff("sess-1", "codex", { tokenLimits });
+
+    expect(result.handoffPackage.sourceProvider.providerId).toBe("deepseek");
+    expect(result.handoffPackage.targetProvider.providerId).toBe("codex");
+    expect(result.rendered.protocol).toBe("openai-compatible");
+    expect(result.session.lastHandoff?.toProvider.providerId).toBe("codex");
+  });
+});
+
+describe("HandoffManager — Codex as source provider", () => {
+  it("Codex → Claude renders Claude's Anthropic block-array shape with a cache directive", async () => {
+    const sessionManager = await makeSessionManager();
+    await seedSession(sessionManager, "codex");
+    const manager = new HandoffManager(sessionManager, createDefaultProviderRegistry());
+
+    const result = await manager.finalizeHandoff("sess-1", "claude", { tokenLimits });
+
+    expect(result.handoffPackage.sourceProvider.providerId).toBe("codex");
+    expect(result.handoffPackage.targetProvider.providerId).toBe("claude");
+    expect(result.rendered.protocol).toBe("anthropic-messages");
+    expect(Array.isArray(result.rendered.system)).toBe(true);
+    expect(result.rendered.cacheDirectives.length).toBeGreaterThan(0);
+    expect(result.session.activeProvider.providerId).toBe("claude");
+  });
+
+  it("Codex → DeepSeek renders openai-compatible joined string", async () => {
+    const sessionManager = await makeSessionManager();
+    await seedSession(sessionManager, "codex");
+    const manager = new HandoffManager(sessionManager, createDefaultProviderRegistry());
+
+    const result = await manager.finalizeHandoff("sess-1", "deepseek", { tokenLimits });
+
+    expect(result.handoffPackage.sourceProvider.providerId).toBe("codex");
+    expect(result.handoffPackage.targetProvider.providerId).toBe("deepseek");
+    expect(result.rendered.protocol).toBe("openai-compatible");
+    expect(typeof result.rendered.system).toBe("string");
+    expect(result.session.lastHandoff?.fromProvider.providerId).toBe("codex");
   });
 });
 

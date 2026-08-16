@@ -132,7 +132,12 @@ export interface EnvironmentOwnership {
 export interface NativeCliLaunch {
   readonly kind: "native";
   readonly executable: string;
-  readonly configDirName: string;
+  /**
+   * Optional Claude-specific config dir name. Only Claude-family CLIs read
+   * `CLAUDE_CONFIG_DIR`; a provider whose CLI uses its own config home (e.g.
+   * Codex's `~/.codex`) omits this and the launcher injects nothing.
+   */
+  readonly configDirName?: string;
   /**
    * Env vars to clear before launch, in case a previous session (a
    * different provider, or a different agent system entirely) left them
