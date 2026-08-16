@@ -17,6 +17,14 @@
 import { resolveSecret, type SecretRef } from "../providers/secrets.js";
 import type { MemoryCoreGatewayConfig } from "./memorycore-client.js";
 
+/**
+ * MemoryCore's own `/v3` isolation default (`DEFAULT_ISOLATION_ID`). The
+ * gateway rejects an empty-string `session_id` (`session_id: Too small —
+ * expected >=1 chars`), so a capture with no explicit session falls back to
+ * the gateway's built-in bucket rather than sending "".
+ */
+const DEFAULT_SESSION_ID = "default";
+
 type HttpMethod = "POST";
 
 interface WriteResult {
@@ -73,7 +81,7 @@ export async function captureConversation(
     team_id: cfg.teamId,
     user_id: cfg.userId,
     agent_id: cfg.agentId,
-    session_id: args.sessionId ?? cfg.sessionId ?? "",
+    session_id: args.sessionId ?? cfg.sessionId ?? DEFAULT_SESSION_ID,
     messages: args.messages,
   });
 }
