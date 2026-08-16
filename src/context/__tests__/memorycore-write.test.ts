@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { captureConversation, updateAtomicMemory } from "../memorycore-write.js";
+import { captureConversation, captureTurn, updateAtomicMemory } from "../memorycore-write.js";
 import { secretRef } from "../../providers/secrets.js";
 
 function jsonResponse(body: unknown) {
@@ -66,5 +66,45 @@ describe("MemoryCore Gateway write client", () => {
     const body = JSON.parse(init.body as string);
     expect(body.id).toBe("atom-1");
     expect(body.content).toBe("remember this");
+  });
+
+  it("captureTurn commits a turn to /capture (v1, raw body) and returns the pipeline-notify result", async () => {
+    process.env.TEST_WRITE_TOKEN = "sk-mem-test-fixture";
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({ l0_recorded: 2, scheduler_notified: true }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await captureTurn(baseCfg, {
+      userContent: "hello",
+      assistantContent: "hi there",
+      sessionKey: "sess-turn",
+    });
+
+    expect(res.l0Recorded).toBe(2);
+    expect(res.schedulerNotified).toBe(true);
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(String(url).endsWith("/capture")).toBe(true);
+    const headers = new Headers(init.headers);
+    expect(headers.get("authorization")).toBe("Bearer sk-mem-test-fixture");
+    const body = JSON.parse(init.body as string);
+    expect(body.user_content).toBe("hello");
+    expect(body.assistant_content).toBe("hi there");
+    expect(body.session_key).toBe("sess-turn");
+    // /capture is NOT the /v3 envelope — captureTurn unwraps the raw body itself.
+  });
+
+  it("captureTurn falls back to the configured session id when no sessionKey given", async () => {
+    process.env.TEST_WRITE_TOKEN = "sk-mem-test-fixture";
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ l0_recorded: 1, scheduler_notified: false }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const cfgWithSession = { ...baseCfg, sessionId: "cfg-session" };
+    await captureTurn(cfgWithSession, { userContent: "a", assistantContent: "b" });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string);
+    expect(body.session_key).toBe("cfg-session");
   });
 });

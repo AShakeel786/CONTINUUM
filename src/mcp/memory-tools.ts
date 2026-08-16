@@ -8,7 +8,7 @@
  */
 
 import { fetchStableFromMemoryCore, fetchDynamicRecallFromMemoryCore, type MemoryCoreGatewayConfig } from "../context/memorycore-client.js";
-import { captureConversation, updateAtomicMemory, writeCoreMemory } from "../context/memorycore-write.js";
+import { captureTurn, updateAtomicMemory, writeCoreMemory } from "../context/memorycore-write.js";
 import { jsonResult, textResult, type RegisteredTool, type ToolResult } from "./tools.js";
 
 /** A provider-independent gateway connection factory — injected so tests can point at a fake and production points at env-config. */
@@ -75,27 +75,37 @@ export function buildMemoryTools(provider: MemoryCoreProvider): RegisteredTool[]
     {
       definition: {
         name: "memory_capture",
-        description: "Store a conversation turn (L0 capture; triggers L1 extraction). Write.",
+        description: "Commit a completed conversation turn and trigger the async L0→L1→L2→L3 memory extraction pipeline. Write.",
         inputSchema: {
           type: "object",
           properties: {
-            role: { type: "string", description: "Message role (e.g. user, assistant)." },
-            content: { type: "string", description: "Message text." },
+            user_content: { type: "string", description: "The user's message in this turn." },
+            assistant_content: { type: "string", description: "The assistant's reply in this turn." },
+            session_key: { type: "string", description: "Optional session key (defaults to the configured session id)." },
           },
-          required: ["role", "content"],
+          required: ["user_content", "assistant_content"],
           additionalProperties: false,
         },
         access: "write",
       },
       handler: async (args) => {
-        const role = stringArg(args, "role");
-        const content = stringArg(args, "content");
-        if (!role || !content) return textResult("memory_capture requires \"role\" and \"content\".", true);
+        const userContent = stringArg(args, "user_content");
+        const assistantContent = stringArg(args, "assistant_content");
+        if (!userContent || !assistantContent) {
+          return textResult("memory_capture requires \"user_content\" and \"assistant_content\".", true);
+        }
         const cfg = await provider();
         if (!cfg) return textResult("MemoryCore is not configured. Capture unavailable.", true);
         try {
-          const res = await captureConversation(cfg, { messages: [{ role, content }] });
-          return jsonResult({ accepted: res.code === 0, code: res.code });
+          const res = await captureTurn(cfg, {
+            userContent,
+            assistantContent,
+            sessionKey: stringArg(args, "session_key"),
+          });
+          return jsonResult({
+            l0_recorded: res.l0Recorded,
+            scheduler_notified: res.schedulerNotified,
+          });
         } catch (err) {
           return textResult(`MemoryCore capture failed: ${errMessage(err)}`, true);
         }
