@@ -22,21 +22,36 @@ export async function runProvidersCommand(args: readonly string[], io: CliIo): P
 
   for (const metadata of ctx.providerMetadata.values()) {
     const entry = configuredById.get(metadata.providerId);
+
+    // Not wired into CONTINUUM yet: distinguish "native CLI is usable" from
+    // "not installed", rather than a flat (and misleading) "not configured".
     if (!entry) {
-      // When a CLI-auth provider's CLI is present but unconfigured, say so — a
-      // normal user should not have to guess whether the CLI exists.
-      let hint = "";
       if (metadata.cli.supported) {
         const installed = await ctx.cliAuthManager.checkInstalled(metadata.providerId);
-        if (installed === "installed") hint = ` (${metadata.cli.executable} CLI detected — run "continuum auth ${metadata.providerId}")`;
+        if (installed === "not-installed") {
+          out(`${metadata.providerId}: not installed (${metadata.cli.executable} not found)\n`);
+          continue;
+        }
+        const auth = await ctx.cliAuthManager.checkAuthenticated(metadata.providerId);
+        if (auth === "authenticated") {
+          out(`${metadata.providerId}: CLI detected — native login usable (run "continuum auth ${metadata.providerId}" to finish CONTINUUM wiring)\n`);
+        } else if (auth === "not-authenticated") {
+          out(`${metadata.providerId}: CLI detected — not authenticated (run "continuum auth ${metadata.providerId}")\n`);
+        } else {
+          out(`${metadata.providerId}: CLI detected — auth unknown (run "continuum auth ${metadata.providerId}")\n`);
+        }
+        continue;
       }
-      out(`${metadata.providerId}: not configured${hint}\n`);
+      out(`${metadata.providerId}: not configured (run "continuum auth ${metadata.providerId}")\n`);
       continue;
     }
+
     const result = entry.method === "api" ? await verifier.verifyApi(metadata) : await verifier.verifyCli(metadata);
-    const status = result.outcome === "ok" ? "ok" : result.outcome;
-    const ref = entry.method === "api" ? ` (${entry.credentialKey ?? "?"})` : "";
-    out(`${metadata.providerId}: ${entry.method} — ${status}${ref}\n`);
+    if (result.outcome === "ok") {
+      out(`${metadata.providerId}: authenticated (${entry.method})\n`);
+    } else {
+      out(`${metadata.providerId}: ${entry.method} — ${result.outcome} (${result.detail})\n`);
+    }
   }
   return 0;
 }

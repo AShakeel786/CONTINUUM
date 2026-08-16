@@ -56,8 +56,17 @@ describe("buildMcpAddArgs", () => {
     expect(codex![5]).toBe(process.execPath);
   });
 
-  it("returns undefined for a provider with no MCP declaration (deepseek)", () => {
-    expect(buildMcpAddArgs(deepseekProfile.cliLaunch)).toBeUndefined();
+  it("builds for DeepSeek (proxy-routed, now declares mcp) via its claude executable", () => {
+    const ds = buildMcpAddArgs(deepseekProfile.cliLaunch);
+    expect(ds).toBeDefined();
+    expect(ds![0]).toBe("claude"); // proxy-routed → claude executable
+    expect(ds![3]).toBe("continuum");
+    expect(ds![5]).toBe(process.execPath);
+  });
+
+  it("returns undefined for a descriptor with no MCP declaration", () => {
+    const noMcp = { ...codexProfile.cliLaunch, mcp: undefined };
+    expect(buildMcpAddArgs(noMcp)).toBeUndefined();
   });
 });
 

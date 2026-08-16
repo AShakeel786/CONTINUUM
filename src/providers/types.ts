@@ -115,6 +115,38 @@ export interface EnvironmentOwnership {
   readonly owns: readonly string[];
 }
 
+// ── Native context delivery (data, not behavior) ─────────────────────────
+//
+// How a native coding-agent CLI receives the assembled CONTINUUM context
+// (task objective + session-maintenance + handoff/resume state + repo map +
+// recalled memory). Declared on the profile so the adapter renders the
+// context into the CLI's own injection surface without switching on provider
+// id. This is the missing half the dogfood audit found: `prepareLaunch` built
+// the rendered context but discarded it for every native CLI launch.
+
+/**
+ * Claude Code family (native Claude + DeepSeek-proxy-routed): the task goal is
+ * the positional prompt, and the compact instructions/context are appended
+ * via a real, verified system-prompt flag (`claude --append-system-prompt`).
+ */
+export interface AppendSystemPromptDelivery {
+  readonly kind: "append-system-prompt";
+  /** The verified CLI flag that appends a system prompt (e.g. `--append-system-prompt`). */
+  readonly systemFlag: string;
+}
+
+/**
+ * Codex: the CLI has no `--system-prompt` flag. Everything — compact
+ * instructions/context followed by the task goal — is folded into the single
+ * positional `[PROMPT]`. On resume the prompt is appended after
+ * `resume <session_id>`.
+ */
+export interface PromptOnlyDelivery {
+  readonly kind: "prompt-only";
+}
+
+export type ContextDelivery = AppendSystemPromptDelivery | PromptOnlyDelivery;
+
 // ── CLI launch descriptor (data, not behavior) ──────────────────────────
 //
 // How THIS deployment routes a coding-agent CLI to reach the provider for
@@ -149,6 +181,10 @@ export interface NativeCliLaunch {
   readonly nativeResume?: NativeResumeDescriptor;
   /** MCP auto-connect capability (declared as data — see below). */
   readonly mcp?: McpRegistrationDescriptor;
+  /** How the CLI receives task + assembled context (declared as data). */
+  readonly contextDelivery?: ContextDelivery;
+  /** How the CLI receives the CONTINUUM MCP server config at launch (declared as data). */
+  readonly mcpLaunch?: McpLaunchSupply;
 }
 
 /**
@@ -171,6 +207,10 @@ export interface ProxyRoutedCliLaunch {
   readonly nativeResume?: NativeResumeDescriptor;
   /** MCP auto-connect capability (declared as data — see below). */
   readonly mcp?: McpRegistrationDescriptor;
+  /** How the CLI receives task + assembled context (declared as data). */
+  readonly contextDelivery?: ContextDelivery;
+  /** How the CLI receives the CONTINUUM MCP server config at launch (declared as data). */
+  readonly mcpLaunch?: McpLaunchSupply;
 }
 
 export type CliLaunchDescriptor = NativeCliLaunch | ProxyRoutedCliLaunch;
@@ -241,6 +281,30 @@ export interface McpRegistrationUnsupported {
 }
 export type McpRegistrationDescriptor = McpRegistrationCapability | McpRegistrationUnsupported;
 
+// ── MCP launch supply (data, not behavior) ────────────────────────────────
+//
+// How a native CLI receives the CONTINUUM `continuum-mcp` server config at
+// launch time, so `session_update`/`session_state` are available in BOTH
+// interactive and headless/SDK modes. Claude-family CLIs load project-scoped
+// MCP only when trusted interactively — in SDK/headless mode they skip it —
+// so they must be handed the server explicitly via a real, verified flag.
+// Codex reads its own global `~/.codex/config.toml` (registered there), so it
+// needs no launch flag.
+
+/** Claude Code family: pass the server config explicitly via `--mcp-config <json>`. */
+export interface McpLaunchFlagSupply {
+  readonly kind: "mcp-config-flag";
+  /** The verified CLI flag that loads MCP servers (e.g. `--mcp-config`). */
+  readonly flag: string;
+}
+
+/** Codex: MCP is read from the CLI's own global config; no launch flag needed. */
+export interface McpLaunchGlobalSupply {
+  readonly kind: "global-config";
+}
+
+export type McpLaunchSupply = McpLaunchFlagSupply | McpLaunchGlobalSupply;
+
 // ── Provider profile (pure data) ────────────────────────────────────────
 
 export interface ProviderProfile {
@@ -280,6 +344,24 @@ export interface CliLaunchContext {
   readonly resumeNativeSessionId?: string;
   /** When set (and the provider declares a `sessionIdFlag`), set a deterministic native session id for a fresh launch. */
   readonly setSessionId?: string;
+  /**
+   * The task objective, delivered as the CLI's prompt argument (or folded into
+   * it, per the profile's `contextDelivery`). Secret-free session goal text.
+   */
+  readonly taskPrompt?: string;
+  /**
+   * The compact, already-budgeted CONTINUUM context (session-maintenance +
+   * handoff/resume + repo map + recalled memory), delivered per the profile's
+   * `contextDelivery` mechanism. Secret-free by construction.
+   */
+  readonly contextSystem?: string;
+  /**
+   * Secret-free MCP server config (JSON) to hand the CLI via its declared
+   * `mcpLaunch` flag, e.g. `{"mcpServers":{"continuum":{...}}}`. Generated by
+   * the launcher from the existing `continuum-mcp` server command — never a
+   * literal credential.
+   */
+  readonly mcpConfig?: string;
 }
 
 /** A fully-resolved plan for launching a coding-agent CLI against this provider. */

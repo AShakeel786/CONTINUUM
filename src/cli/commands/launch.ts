@@ -35,6 +35,7 @@ import { buildToolRegistry } from "../../mcp/build.js";
 import { runApiAgent } from "../../api-agent/run.js";
 import { join } from "node:path";
 import { resolveDataDir } from "../../config/paths.js";
+import { isStdinTty } from "./common.js";
 
 /**
  * Runtime-only preflight (docker/containers/gateways/processes). Deliberately
@@ -130,6 +131,9 @@ export async function launchPrepared(ctx: { launcher: Launcher; providers: Provi
     }
   }
   const startedAt = Date.now();
+  if (!isStdinTty()) {
+    out("⚠️  No interactive terminal detected — the native agent's UI may not start here.\n    Run `continuum` from a terminal window, or use a non-interactive provider.\n");
+  }
   const result = await spawnCli(prep.plan);
   await recordNativeSessionAfterLaunch(ctx.launcher, prep, startedAt);
   return result.exitCode ?? 0;

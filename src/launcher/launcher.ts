@@ -36,9 +36,11 @@ import { resolveProviderAuthEnv } from "../auth/activation.js";
 import { buildContextEnvelope } from "../context/envelope.js";
 import { fetchDynamicRecallFromMemoryCore, fetchStableFromMemoryCore, type MemoryCoreGatewayConfig } from "../context/memorycore-client.js";
 import { allocateBudget } from "../token/budget.js";
-import { renderContextForProvider } from "../rendering/render.js";
+import { renderContextForProvider, renderedSystemToText } from "../rendering/render.js";
 import { buildResumeInstructionsBlock, buildSessionMaintenanceBlock } from "../handoff/resume-block.js";
 import { findRecentNativeSessionId } from "./native-session.js";
+import { resolveConfigDir } from "./config-dir.js";
+import { mcpServerCommand } from "../mcp/registration.js";
 import { repoMapBlock } from "../repo-map/repo-map.js";
 import { applyReversiblePruning } from "../context/pruning.js";
 import type { ContextBlock } from "../context/types.js";
@@ -237,7 +239,7 @@ export class Launcher {
         session = await this.deps.sessionManager.setActiveProvider(session.sessionId, to);
       }
     } else {
-      const goal = target.taskGoal ?? "(no explicit goal supplied)";
+      const goal = target.taskGoal ?? "(untitled)";
       session = await this.deps.sessionManager.createSession({
         sessionId: randomUUID(),
         projectId: project.id,
@@ -320,10 +322,19 @@ export class Launcher {
       : budget.envelope;
     const rendered = renderContextForProvider(finalEnvelope, adapter);
 
+    // Native-CLI context delivery: the same budgeted + rendered context the API
+    // agent receives as its first turn is also handed to a native CLI (task
+    // prompt + compact system/context), per the profile's declared delivery
+    // mechanism. This closes the dogfood gap where `rendered` was discarded for
+    // every native CLI launch.
+    const systemText = renderedSystemToText(rendered.system);
+    const contextSystem = [systemText, rendered.userPrefix].filter((s) => s.trim().length > 0).join("\n\n");
+    const taskPrompt = session.taskGoal;
+
     // Build the CLI launch plan (auth/env/session identity), merging resolved credentials.
     // Proxy user key (deepseek proxy-routed path) is sourced from the credential
     // backend, not a manual env var — see ctx.secrets below.
-    const launchCtx = await this.buildLaunchContext(adapter, metadata, project.defaultModel, project.path, resumeNativeSessionId, setSessionId);
+    const launchCtx = await this.buildLaunchContext(adapter, metadata, project.defaultModel, project.path, resumeNativeSessionId, setSessionId, taskPrompt, contextSystem);
     const basePlan = adapter.buildCliLaunchPlan(launchCtx);
     const authEnv = metadata.api.supported ? await this.resolveAuthEnvSafely(adapter, metadata) : {};
 
@@ -335,7 +346,9 @@ export class Launcher {
       env: { ...basePlan.env, ...authEnv },
       clearEnvVars: [...basePlan.clearEnvVars],
       workingDir: project.path,
-      configDir: basePlan.configDir,
+      // Resolve the bare config-dir *name* to an absolute home path so the CLI
+      // never creates a repo-local `.claude-*` dir (see config-dir.ts).
+      configDir: resolveConfigDir(basePlan.configDir),
       bypassPermissions: opts.permissionMode === "bypass",
     };
 
@@ -405,7 +418,7 @@ export class Launcher {
    * Falls back to `process.env` for any secret not in the store (which keeps
    * backward compatibility with an explicitly-exported key).
    */
-  private async buildLaunchContext(adapter: ProviderAdapter, metadata: ProviderAuthMetadata, modelAlias: string | undefined, workingDir: string, resumeNativeSessionId: string | undefined, setSessionId: string | undefined): Promise<import("../providers/types.js").CliLaunchContext> {
+  private async buildLaunchContext(adapter: ProviderAdapter, metadata: ProviderAuthMetadata, modelAlias: string | undefined, workingDir: string, resumeNativeSessionId: string | undefined, setSessionId: string | undefined, taskPrompt: string | undefined, contextSystem: string | undefined): Promise<import("../providers/types.js").CliLaunchContext> {
     const secrets: Record<string, string> = {};
     const launch = adapter.profile.cliLaunch;
     if (launch.kind === "proxy-routed") {
@@ -417,13 +430,35 @@ export class Launcher {
       if (stored) secrets[envVar] = stored;
       else if (process.env[envVar]) secrets[envVar] = process.env[envVar]!;
     }
+    const mcpConfig = this.buildMcpConfig(adapter);
     return {
       workingDir,
       modelAlias,
       secrets,
       ...(resumeNativeSessionId ? { resumeNativeSessionId } : {}),
       ...(setSessionId ? { setSessionId } : {}),
+      ...(taskPrompt ? { taskPrompt } : {}),
+      ...(contextSystem ? { contextSystem } : {}),
+      ...(mcpConfig ? { mcpConfig } : {}),
     };
+  }
+
+  /**
+   * Secret-free MCP server config JSON for the profile's declared
+   * `mcpLaunch` supply (Claude-family `--mcp-config <json>`). Reuses the
+   * existing `continuum-mcp` stdio server command — no credential, no file
+   * written, no unrelated MCP registrations touched. Returns undefined when
+   * the profile doesn't supply MCP at launch (Codex reads global config).
+   */
+  private buildMcpConfig(adapter: ProviderAdapter): string | undefined {
+    const launch = adapter.profile.cliLaunch;
+    const mcp = launch.mcp;
+    const supply = launch.mcpLaunch;
+    if (!mcp || !mcp.supported || !supply || supply.kind !== "mcp-config-flag") return undefined;
+    const [command, ...args] = mcpServerCommand();
+    return JSON.stringify({
+      mcpServers: { [mcp.serverName]: { type: "stdio", command, args } },
+    });
   }
 
   private async detectProjectOrThrow(cwd?: string): Promise<import("../registry/types.js").ProjectRecord> {

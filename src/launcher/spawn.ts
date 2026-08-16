@@ -12,12 +12,18 @@
 
 import { spawn } from "node:child_process";
 import type { LaunchPlan } from "./types.js";
+import { resolveConfigDir } from "./config-dir.js";
 
 export function spawnCli(plan: LaunchPlan): Promise<{ exitCode: number | null }> {
   return new Promise((resolve, reject) => {
     const env: NodeJS.ProcessEnv = { ...process.env, ...plan.env };
     for (const v of plan.clearEnvVars) delete env[v];
-    if (plan.configDir) env.CLAUDE_CONFIG_DIR = plan.configDir;
+    // Resolve the config dir to an absolute home path before spawn — a
+    // relative `CLAUDE_CONFIG_DIR` would make Claude Code create a fresh
+    // repo-local `.claude-*` dir (no MCP, no user CLAUDE.md). Belt-and-
+    // suspenders: the launcher already resolves it, but spawn is the last
+    // line of defense and must never hand a relative path to the CLI.
+    if (plan.configDir) env.CLAUDE_CONFIG_DIR = resolveConfigDir(plan.configDir);
 
     const child = spawn(plan.executable, [...plan.args], {
       cwd: plan.workingDir,

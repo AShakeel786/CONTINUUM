@@ -38,6 +38,8 @@ export const claudeManifest: ProviderManifest = {
       sessionIdFlag: "--session-id",
     },
     mcp: { supported: true, serverName: "continuum" },
+    contextDelivery: { kind: "append-system-prompt", systemFlag: "--append-system-prompt" },
+    mcpLaunch: { kind: "mcp-config-flag", flag: "--mcp-config" },
   },
   cli: {
     supported: true,
@@ -72,6 +74,9 @@ export const deepseekManifest: ProviderManifest = {
       sessionStore: { rootDir: "~/.claude-tencent/projects", extension: ".jsonl", idFrom: "basename" },
       sessionIdFlag: "--session-id",
     },
+    contextDelivery: { kind: "append-system-prompt", systemFlag: "--append-system-prompt" },
+    mcp: { supported: true, serverName: "continuum" },
+    mcpLaunch: { kind: "mcp-config-flag", flag: "--mcp-config" },
   },
   proxyUserKey: { envVar: "CONTINUUM_TENCENT_PROXY_USER_KEY", credentialName: "proxy-user-key" },
 };
@@ -98,6 +103,8 @@ export const codexManifest: ProviderManifest = {
       sessionStore: { rootDir: "~/.codex/sessions", extension: ".jsonl", idFrom: "session-meta", metaRecordType: "session_meta", metaPayloadField: "session_id" },
     },
     mcp: { supported: true, serverName: "continuum" },
+    contextDelivery: { kind: "prompt-only" },
+    mcpLaunch: { kind: "global-config" },
   },
   cli: {
     supported: true,

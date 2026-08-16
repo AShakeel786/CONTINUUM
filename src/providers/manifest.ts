@@ -32,6 +32,14 @@ export type ManifestAuth =
   | { readonly kind: "cli-session" }
   | { readonly kind: "proxy-routed"; readonly envVar: string; readonly proxyBaseUrl: string };
 
+export type ManifestContextDelivery =
+  | { readonly kind: "append-system-prompt"; readonly systemFlag: string }
+  | { readonly kind: "prompt-only" };
+
+export type ManifestMcpLaunch =
+  | { readonly kind: "mcp-config-flag"; readonly flag: string }
+  | { readonly kind: "global-config" };
+
 export type ManifestCliLaunch =
   | {
       readonly kind: "native";
@@ -39,6 +47,8 @@ export type ManifestCliLaunch =
       readonly clearEnvVars?: readonly string[];
       readonly nativeResume?: NativeResumeDescriptor;
       readonly mcp?: { readonly supported: true; readonly serverName: string } | { readonly supported: false };
+      readonly contextDelivery?: ManifestContextDelivery;
+      readonly mcpLaunch?: ManifestMcpLaunch;
     }
   | {
       readonly kind: "proxy-routed";
@@ -49,6 +59,8 @@ export type ManifestCliLaunch =
       readonly clearEnvVars?: readonly string[];
       readonly nativeResume?: NativeResumeDescriptor;
       readonly mcp?: { readonly supported: true; readonly serverName: string } | { readonly supported: false };
+      readonly contextDelivery?: ManifestContextDelivery;
+      readonly mcpLaunch?: ManifestMcpLaunch;
     };
 
 export interface ManifestCli {
@@ -171,6 +183,8 @@ function toCliLaunch(m: ProviderManifest): CliLaunchDescriptor {
       clearEnvVars: l.clearEnvVars ?? [],
       ...(l.nativeResume ? { nativeResume: l.nativeResume } : {}),
       ...(l.mcp ? { mcp: l.mcp } : {}),
+      ...(l.contextDelivery ? { contextDelivery: l.contextDelivery } : {}),
+      ...(l.mcpLaunch ? { mcpLaunch: l.mcpLaunch } : {}),
     };
   }
   return {
@@ -183,6 +197,8 @@ function toCliLaunch(m: ProviderManifest): CliLaunchDescriptor {
     clearEnvVars: l.clearEnvVars ?? [],
     ...(l.nativeResume ? { nativeResume: l.nativeResume } : {}),
     ...(l.mcp ? { mcp: l.mcp } : {}),
+    ...(l.contextDelivery ? { contextDelivery: l.contextDelivery } : {}),
+    ...(l.mcpLaunch ? { mcpLaunch: l.mcpLaunch } : {}),
   };
 }
 

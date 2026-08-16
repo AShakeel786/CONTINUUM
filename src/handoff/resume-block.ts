@@ -27,10 +27,11 @@ export function buildSessionMaintenanceBlock(session: TaskSession): ContextBlock
     content: [
       "<session-maintenance>",
       `You are working inside CONTINUUM task session ${session.sessionId}.`,
-      "Record meaningful progress as you go via the `session_update` MCP tool so the next agent can continue without re-auditing:",
+      "Record progress via the `session_update` MCP tool so the next agent can continue without re-auditing:",
       "- complete_work / add_remaining_work — one line each",
       "- record_decision — decisions the next agent must not re-litigate",
       "- record_relevant_file — files you materially changed or that matter now",
+      "You MUST call `session_update` after each meaningful unit of work, before any handoff, and before your final response whenever state changed — otherwise the handoff is incomplete.",
       "Never put tool output, code, or secrets into the session. Only record steps that actually matter.",
       "</session-maintenance>",
     ].join("\n"),

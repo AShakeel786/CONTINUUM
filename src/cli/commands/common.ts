@@ -68,3 +68,12 @@ export async function ensureBackendRecorded(ctx: CommandContext): Promise<void> 
   if (config.credentialBackendId === ctx.backend.id) return;
   await ctx.configStore.save({ ...config, credentialBackendId: ctx.backend.id, updatedAt: new Date().toISOString() });
 }
+
+/** True when stdin is a real interactive terminal (a human can type). */
+export function isStdinTty(): boolean {
+  return (process.stdin as { isTTY?: boolean }).isTTY === true;
+}
+
+/** Friendly, actionable explanation for commands that need an interactive terminal. */
+export const NON_TTY_HINT =
+  "The interactive UI needs a terminal. Run a command directly (e.g. `continuum launch <project>`, `continuum sessions`) or see `continuum --help`.";

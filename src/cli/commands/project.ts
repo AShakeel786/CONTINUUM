@@ -2,6 +2,7 @@
  * `continuum project <add|remove|list|show>` — project registry management.
  */
 
+import { basename } from "node:path";
 import { ProjectRegistry } from "../../registry/registry.js";
 import { normalizeProjectPath } from "../../registry/registry.js";
 import { ProjectRegistryStore } from "../../registry/store.js";
@@ -9,7 +10,7 @@ import { createProviderAuthMetadata } from "../../auth/provider-auth/index.js";
 import { loadUserManifests } from "../../providers/manifest-store.js";
 import { resolveDataDir } from "../../config/paths.js";
 import { createPrompt, noopOutput } from "../../auth/prompt.js";
-import { ProjectAlreadyExistsError, ProjectNotFoundError } from "../../registry/errors.js";
+import { ProjectAlreadyExistsError, ProjectNotFoundError, ProjectConflictError } from "../../registry/errors.js";
 import type { CliIo } from "../index.js";
 
 export async function runProjectCommand(args: readonly string[], io: CliIo): Promise<number> {
@@ -37,10 +38,14 @@ export async function runProjectCommand(args: readonly string[], io: CliIo): Pro
       return 0;
     }
     case "add": {
-      const name = argValue(rest, "--name", "-n") ?? rest[0];
-      const p = argValue(rest, "--path", "-p") ?? rest[1];
+      // Shorthand `continuum project add .` → register the current directory
+      // using its basename as the project name.
+      const dot = rest[0] === ".";
+      const name = dot ? basename(process.cwd()) : (argValue(rest, "--name", "-n") ?? rest[0]);
+      const p = dot ? process.cwd() : (argValue(rest, "--path", "-p") ?? rest[1]);
       if (!name || !p) {
         out("Usage: continuum project add <name> <path> [--alias <a>] [--provider <id>] [--model <m>]\n");
+        out("       continuum project add .   (register the current directory)\n");
         return 2;
       }
       const aliases = multiArgValues(rest, "--alias", "-a");
@@ -60,6 +65,34 @@ export async function runProjectCommand(args: readonly string[], io: CliIo): Pro
         return 0;
       } catch (err) {
         if (err instanceof ProjectAlreadyExistsError) {
+          out(`${err.message}\n`);
+          return 2;
+        }
+        throw err;
+      }
+    }
+    case "set-default": {
+      const key = rest[0];
+      const provider = rest[1];
+      if (!key || !provider) {
+        out("Usage: continuum project set-default <name|alias|id> <provider> [--model <m>]\n");
+        return 2;
+      }
+      const defaultModel = argValue(rest, "--model");
+      project.validateProvider(provider, knownProviders);
+      try {
+        const record = await project.update(key, {
+          defaultProvider: provider,
+          ...(defaultModel ? { defaultModel } : {}),
+        });
+        out(`Set default provider for "${record.name}" to ${provider}${record.defaultModel ? `/${record.defaultModel}` : ""}.\n`);
+        return 0;
+      } catch (err) {
+        if (err instanceof ProjectNotFoundError) {
+          out(`${err.message}\n`);
+          return 2;
+        }
+        if (err instanceof ProjectConflictError) {
           out(`${err.message}\n`);
           return 2;
         }
@@ -95,7 +128,8 @@ export async function runProjectCommand(args: readonly string[], io: CliIo): Pro
           return 0;
         }
         out(`${resolved.name}\n  path: ${resolved.path}\n`);
-        if (resolved.defaultProvider) out(`  default provider: ${resolved.defaultProvider}\n`);
+        if (resolved.defaultProvider) out(`  default provider: ${resolved.defaultProvider}${resolved.defaultModel ? `/${resolved.defaultModel}` : ""}\n`);
+        else out("  default provider: (none)\n");
         if (resolved.aliases.length) out(`  aliases: ${resolved.aliases.join(", ")}\n`);
         return 0;
       } catch (err) {
@@ -108,7 +142,7 @@ export async function runProjectCommand(args: readonly string[], io: CliIo): Pro
     }
     default:
       out(`Unknown subcommand "${sub}".\n`);
-      out("Usage: continuum project <add|remove|list|show>\n");
+      out("Usage: continuum project <add|remove|list|show|set-default>\n");
       return 2;
   }
 }

@@ -109,6 +109,21 @@ describe("runInteractiveMenu — project management", () => {
     expect(cap.text()).toContain('✓ Removed "Alpha"');
   });
 
+  it("sets a project's default provider via manage", async () => {
+    const registry = await makeRegistry([{ name: "Alpha", path: tmp() }]);
+    const cwd = tmp();
+    const cap = capture();
+    const decision = await runInteractiveMenu(
+      { projects: registry, providers: [], sessions: [], knownProviders: KNOWN, cwd },
+      createScriptedPrompt({ answers: ["3", "4", "1", "deepseek", "0", "0"] }),
+      cap.out,
+    );
+    expect(decision.kind).toBe("exit");
+    const list = await registry.list();
+    expect(list[0]!.defaultProvider).toBe("deepseek");
+    expect(cap.text()).toContain('Default provider for "Alpha" set to deepseek');
+  });
+
   it("offers to register the current directory when unregistered", async () => {
     const registry = await makeRegistry();
     const cwd = tmp();

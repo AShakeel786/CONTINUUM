@@ -35,6 +35,7 @@ const NATIVE_CLI_PROFILES = [claudeProfile, codexProfile] as const;
 export async function runDoctorCommand(args: readonly string[], io: CliIo): Promise<number> {
   const out = io.out ?? noopOutput();
   const repair = args.includes("--repair");
+  const verbose = args.includes("--verbose") || args.includes("-v");
   const ctx = await buildContext({ prompt: createPrompt() });
   const config = await ctx.configStore.load();
 
@@ -69,6 +70,39 @@ export async function runDoctorCommand(args: readonly string[], io: CliIo): Prom
     },
   });
 
+  const before = await healthDoctor.diagnose();
+
+  // Gather the memory + native-CLI surface up front, so a healthy `--repair`
+  // can collapse to a short no-op instead of printing the full report twice.
+  const memoryResolution = await resolveMemoryCoreConfig({ credentialManager: ctx.credentialManager });
+  const mcpHealth = await verifyMcpHealth(mcpServerCommand());
+
+  const nativeCli: { profileId: string; contractOk: boolean; contractDetail: string; mcpRegistered: boolean }[] = [];
+  for (const profile of NATIVE_CLI_PROFILES) {
+    const adapter = createProviderAdapter(profile);
+    const contract = await verifyCliContract(liveRuntime, adapter);
+    const registered = await isMcpRegistered(liveRuntime, profile.cliLaunch);
+    nativeCli.push({ profileId: profile.id, contractOk: contract.ok, contractDetail: contract.detail, mcpRegistered: registered });
+  }
+
+  const authHealthy = authReport.overall === "healthy";
+  const runtimeHealthy = before.overall === "healthy";
+  const memoryConfigured = memoryResolution.config !== undefined;
+  const mcpRepairPending = config.mcpAutoConfigure === true && nativeCli.some((n) => !n.mcpRegistered);
+  // Nothing `--repair` would actually change: auth + runtime healthy and no
+  // pending MCP registration. Memory config is a setup step, not a repair, so
+  // it doesn't block the collapse — it becomes a one-line hint instead.
+  const nothingToRepair = authHealthy && runtimeHealthy && !mcpRepairPending;
+
+  // Healthy `doctor --repair`: collapse to a short, honest no-op message.
+  if (repair && !verbose && nothingToRepair) {
+    out("Doctor: all checks healthy — nothing to repair.");
+    if (!memoryConfigured) out(" (MemoryCore not configured — run `continuum setup --memory`.)");
+    out("\n");
+    return 0;
+  }
+
+  // ── Full report ────────────────────────────────────────────────────────
   out(`Backend: ${authReport.backendId} (${authReport.backendSecurityLevel})\n`);
   out(`Overall: ${authReport.overall}\n`);
   if (authReport.findings.length === 0) {
@@ -79,12 +113,8 @@ export async function runDoctorCommand(args: readonly string[], io: CliIo): Prom
   }
 
   out(`\nRuntime stack:\n`);
-  const before = await healthDoctor.diagnose();
   for (const line of HealthDoctor.formatReport(before)) out(`${line}\n`);
 
-  // CONTINUUM-side memory config: the same unified resolution the launcher and
-  // MCP use, so `doctor` agrees with them on endpoint + token availability.
-  const memoryResolution = await resolveMemoryCoreConfig({ credentialManager: ctx.credentialManager });
   out(`\nMemory config (launch/MCP):\n`);
   if (memoryResolution.config) {
     const src = memoryResolution.config.serviceToken.envVar !== undefined ? `env ${memoryResolution.config.serviceToken.envVar}` : "secure credential store";
@@ -93,7 +123,6 @@ export async function runDoctorCommand(args: readonly string[], io: CliIo): Prom
     out(`  !! ${memoryResolution.reason}\n`);
   }
 
-  // Native CLI surface: MCP permission + functional health + session contract.
   out(`\nNative CLI (MCP + session contract):\n`);
   if (config.mcpAutoConfigure === undefined) {
     out("  MCP auto-configure: not yet decided (run `continuum setup`).\n");
@@ -102,22 +131,15 @@ export async function runDoctorCommand(args: readonly string[], io: CliIo): Prom
   } else {
     out("  MCP auto-configure: disabled (run: continuum mcp-setup to register manually)\n");
   }
-
-  // Functional MCP health (the CONTINUUM server itself — same for every CLI).
-  const mcpHealth = await verifyMcpHealth(mcpServerCommand());
   const healthIcon = mcpHealth.status === "reachable" ? "ok" : "!!";
   out(`  ${healthIcon} continuum-mcp: ${mcpHealth.status} (${mcpHealth.detail})\n`);
-
-  for (const profile of NATIVE_CLI_PROFILES) {
-    const adapter = createProviderAdapter(profile);
-    const contract = await verifyCliContract(liveRuntime, adapter);
-    out(`  ${contract.ok ? "ok" : "!! "} ${profile.id} session contract: ${contract.detail}\n`);
-    const registered = await isMcpRegistered(liveRuntime, profile.cliLaunch);
-    out(`  ${registered ? "ok" : "-- "} ${profile.id} MCP: ${registered ? "registered" : "not registered"}\n`);
+  for (const n of nativeCli) {
+    out(`  ${n.contractOk ? "ok" : "!! "} ${n.profileId} session contract: ${n.contractDetail}\n`);
+    out(`  ${n.mcpRegistered ? "ok" : "-- "} ${n.profileId} MCP: ${n.mcpRegistered ? "registered" : "not registered"}\n`);
   }
 
   if (!repair) {
-    return before.overall === "healthy" && authReport.overall === "healthy" ? 0 : 1;
+    return runtimeHealthy && authHealthy ? 0 : 1;
   }
 
   // MCP repair: only when auto-configure permission is enabled, and only
@@ -142,5 +164,5 @@ export async function runDoctorCommand(args: readonly string[], io: CliIo): Prom
   out(`\nAfter repair:\n`);
   for (const line of HealthDoctor.formatReport(after)) out(`${line}\n`);
 
-  return after.overall === "healthy" && authReport.overall === "healthy" ? 0 : 1;
+  return after.overall === "healthy" && authHealthy ? 0 : 1;
 }

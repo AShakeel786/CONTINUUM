@@ -77,7 +77,11 @@ class DataDrivenProviderAdapter implements ProviderAdapter {
 
   buildCliLaunchPlan(ctx: CliLaunchContext): CliLaunchPlan {
     const launch = this.profile.cliLaunch;
-    const args = this.sessionArgs(launch, ctx);
+    // Order matters: the MCP flag is variadic (`--mcp-config <configs...>`), so
+    // it must be followed by a flag (the system-prompt flag), never by the
+    // positional task prompt — otherwise the prompt would be swallowed as a
+    // config path. Hence: session args → mcp args → context args.
+    const args = [...this.sessionArgs(launch, ctx), ...this.mcpArgs(launch, ctx), ...this.contextArgs(launch, ctx)];
     switch (launch.kind) {
       case "native":
         return {
@@ -136,6 +140,50 @@ class DataDrivenProviderAdapter implements ProviderAdapter {
       return [nr.sessionIdFlag, ctx.setSessionId];
     }
     return [];
+  }
+
+  /**
+   * Hand the CONTINUUM MCP server config to the CLI via its declared
+   * `mcpLaunch` supply mechanism. Reads only the `McpLaunchSupply` data —
+   * never a provider id. `global-config` (Codex) adds nothing; a
+   * `mcp-config-flag` (Claude-family) adds `--mcp-config <json>` when the
+   * launcher supplied a secret-free server config.
+   */
+  private mcpArgs(launch: CliLaunchDescriptor, ctx: CliLaunchContext): readonly string[] {
+    const supply = launch.mcpLaunch;
+    if (!supply || supply.kind !== "mcp-config-flag") return [];
+    if (!ctx.mcpConfig) return [];
+    return [supply.flag, ctx.mcpConfig];
+  }
+
+  /**
+   * Render the task prompt + assembled context into the CLI's own injection
+   * surface, per the profile's declared `contextDelivery` mechanism. Reads
+   * only the `ContextDelivery` data — never a provider id. Returns [] when no
+   * task prompt was supplied (so a bare launch plan with no goal still has
+   * exactly its session args, preserving existing behavior).
+   */
+  private contextArgs(launch: CliLaunchDescriptor, ctx: CliLaunchContext): readonly string[] {
+    const delivery = launch.contextDelivery;
+    const task = ctx.taskPrompt;
+    if (!delivery || !task) return [];
+    const system = (ctx.contextSystem ?? "").trim();
+
+    switch (delivery.kind) {
+      case "append-system-prompt": {
+        const out: string[] = [];
+        // The system/context block is appended only when non-empty; the task
+        // goal is always the positional prompt.
+        if (system.length > 0) out.push(delivery.systemFlag, system);
+        out.push(task);
+        return out;
+      }
+      case "prompt-only": {
+        // Codex has no system-prompt flag: fold the compact context ahead of
+        // the task goal in the single positional prompt.
+        return [system.length > 0 ? `${system}\n\n${task}` : task];
+      }
+    }
   }
 
   getCapabilities(): ProviderCapabilities {

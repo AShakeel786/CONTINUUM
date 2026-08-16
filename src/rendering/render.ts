@@ -11,6 +11,17 @@ import type { ContextEnvelope } from "../context/types.js";
 import type { ProviderAdapter } from "../providers/types.js";
 import type { AnthropicSystemBlock, RenderedContext } from "./types.js";
 
+/**
+ * Flatten a rendered system section (either a single OpenAI-compatible joined
+ * string, or an array of Anthropic content blocks) into one plain-text string.
+ * Used by native-CLI context delivery (and anywhere else a caller needs the
+ * system text as a single string rather than wire-shaped blocks).
+ */
+export function renderedSystemToText(system: RenderedContext["system"]): string {
+  if (typeof system === "string") return system;
+  return system.map((b) => b.text).join("\n\n");
+}
+
 export function renderContextForProvider(envelope: ContextEnvelope, adapter: ProviderAdapter): RenderedContext {
   const capabilities = adapter.getCapabilities();
   const cacheDirectives = computeCacheDirectives(envelope, capabilities);

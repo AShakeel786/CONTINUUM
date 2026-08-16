@@ -43,6 +43,22 @@ export async function verifyCliContract(shell: CliShell, adapter: ProviderAdapte
   if (!helpText.includes(resumeToken)) missing.push(`resume token "${resumeToken}"`);
   if (nr.sessionIdFlag && !helpText.includes(nr.sessionIdFlag)) missing.push(`session-id flag "${nr.sessionIdFlag}"`);
 
+  // Context-delivery contract: a declared system-prompt flag (Claude-family
+  // `--append-system-prompt`) must actually exist in the CLI's help — never a
+  // guessed flag. `prompt-only` (Codex) declares no flag, so nothing to check.
+  const delivery = adapter.profile.cliLaunch.contextDelivery;
+  if (delivery && delivery.kind === "append-system-prompt" && !helpText.includes(delivery.systemFlag)) {
+    missing.push(`context-delivery flag "${delivery.systemFlag}"`);
+  }
+
+  // MCP-launch-supply contract: a declared MCP config flag (Claude-family
+  // `--mcp-config`) must actually exist in the CLI's help — never a guessed
+  // flag. `global-config` (Codex) declares no flag, so nothing to check.
+  const mcpSupply = adapter.profile.cliLaunch.mcpLaunch;
+  if (mcpSupply && mcpSupply.kind === "mcp-config-flag" && !helpText.includes(mcpSupply.flag)) {
+    missing.push(`mcp-supply flag "${mcpSupply.flag}"`);
+  }
+
   if (missing.length > 0) {
     return { providerId, ok: false, detail: `CLI drift: ${missing.join(", ")} not found in \`${executable} --help\`` };
   }

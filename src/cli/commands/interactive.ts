@@ -26,6 +26,7 @@ import { NoAuthenticatedAgentError, NoProjectError, ProviderNotAuthenticatedErro
 import type { CliIo } from "../index.js";
 import { buildLauncherContext } from "./launcher-context.js";
 import { checkPricing, ensureMcpRegistration, launchPrepared, runLaunchPreflight } from "./launch.js";
+import { isStdinTty, NON_TTY_HINT } from "./common.js";
 
 const HEADER = "CONTINUUM\n------------";
 
@@ -220,14 +221,14 @@ async function addProjectFlow(
   }
 }
 
-/** Minimal project management: list / remove / show details. */
+/** Minimal project management: list / remove / show details / set default. */
 async function manageProjectsFlow(deps: InteractiveMenuDeps, prompt: Prompt, out: PromptOutput): Promise<void> {
   for (;;) {
     const choice = await chooseNumber(
       prompt,
       out,
       "Manage projects:",
-      ["List projects", "Remove project", "Show project details"],
+      ["List projects", "Remove project", "Show project details", "Set default provider"],
       "Back",
     );
     if (choice === undefined) return;
@@ -241,7 +242,7 @@ async function manageProjectsFlow(deps: InteractiveMenuDeps, prompt: Prompt, out
         continue;
       }
       for (const p of projects) {
-        const def = p.defaultProvider ? ` [default: ${p.defaultProvider}]` : "";
+        const def = p.defaultProvider ? ` [default: ${p.defaultProvider}${p.defaultModel ? `/${p.defaultModel}` : ""}]` : "";
         out(`  - ${p.name}${def}\n    ${p.path}\n`);
       }
       continue;
@@ -272,23 +273,50 @@ async function manageProjectsFlow(deps: InteractiveMenuDeps, prompt: Prompt, out
       continue;
     }
 
-    // Show details.
-    if (projects.length === 0) {
-      out("\nNo projects to show.\n");
+    if (choice === 2) {
+      // Show details.
+      if (projects.length === 0) {
+        out("\nNo projects to show.\n");
+        continue;
+      }
+      const idx = await chooseNumber(prompt, out, "Show project:", projects.map((p) => p.name), "Back");
+      if (idx === undefined) continue;
+      const p = projects[idx]!;
+      out(`\n${p.name}\n  path: ${p.path}\n`);
+      out(p.defaultProvider ? `  default provider: ${p.defaultProvider}${p.defaultModel ? `/${p.defaultModel}` : ""}\n` : "  default provider: (none)\n");
+      if (p.aliases.length) out(`  aliases: ${p.aliases.join(", ")}\n`);
       continue;
     }
-    const idx = await chooseNumber(prompt, out, "Show project:", projects.map((p) => p.name), "Back");
+
+    // Set default provider.
+    if (projects.length === 0) {
+      out("\nNo projects to update.\n");
+      continue;
+    }
+    const idx = await chooseNumber(prompt, out, "Set default provider for:", projects.map((p) => p.name), "Back");
     if (idx === undefined) continue;
     const p = projects[idx]!;
-    out(`\n${p.name}\n  path: ${p.path}\n`);
-    if (p.defaultProvider) out(`  default provider: ${p.defaultProvider}\n`);
-    if (p.defaultModel) out(`  default model: ${p.defaultModel}\n`);
-    if (p.aliases.length) out(`  aliases: ${p.aliases.join(", ")}\n`);
+    const known = [...deps.knownProviders];
+    const provider = (await prompt.ask(`Default provider [${known.join("/")}]`, p.defaultProvider ?? "")).trim();
+    if (!provider) {
+      out("(cancelled)\n");
+      continue;
+    }
+    if (!deps.knownProviders.has(provider)) {
+      out(`Unknown provider "${provider}". Known: ${known.join(", ")}\n`);
+      continue;
+    }
+    const updated = await deps.projects.update(p.id, { defaultProvider: provider });
+    out(`✓ Default provider for "${p.name}" set to ${updated.defaultProvider}.\n`);
   }
 }
 
 export async function runInteractiveCommand(args: readonly string[], io: CliIo): Promise<number> {
   const out = io.out ?? noopOutput();
+  if (!isStdinTty()) {
+    out(`${NON_TTY_HINT}\n`);
+    return 2;
+  }
   const prompt = createPrompt();
   const ctx = await buildLauncherContext({ prompt });
 

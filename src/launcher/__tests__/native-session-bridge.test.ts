@@ -76,6 +76,22 @@ async function buildDeps(): Promise<{ deps: LauncherDeps; registry: ProjectRegis
   return { deps, registry, sessionManager };
 }
 
+/**
+ * The native-session args that precede the context-delivery tail. Native CLIs
+ * now receive task + context, so `plan.args` is `[...sessionArgs, ...context]`.
+ * This extracts just the session-identity head, keeping these tests focused on
+ * the native-session bridge rather than the (separately tested) context shape.
+ */
+function sessionArgsHead(args: readonly string[], providerId: string): readonly string[] {
+  if (providerId === "codex") {
+    // Codex: `resume <id> <prompt>` or just `<prompt>` (no session flags fresh).
+    return args[0] === "resume" ? args.slice(0, 2) : [];
+  }
+  // Claude/DeepSeek: `[...sessionFlags, "--mcp-config", <json>, "--append-system-prompt", <system>, <task>]`.
+  const idx = args.findIndex((a) => a === "--mcp-config" || a === "--append-system-prompt");
+  return idx === -1 ? args : args.slice(0, idx);
+}
+
 describe("native session bridge — first launch stores id", () => {
   it("recordNativeSessionId persists the provider-native id on the session", async () => {
     const { deps, registry, sessionManager } = await buildDeps();
@@ -88,8 +104,10 @@ describe("native session bridge — first launch stores id", () => {
 
     const reloaded = await sessionManager.loadSession(sessionId);
     expect(reloaded.nativeSessionIds?.codex).toBe("codex-native-uuid-1");
-    // No resume args on the FIRST launch (fresh native session).
-    expect(prep.plan.args).toEqual([]);
+    // No resume args on the FIRST launch (fresh native session); Codex folds
+    // task + context into a single positional prompt.
+    expect(sessionArgsHead(prep.plan.args, "codex")).toEqual([]);
+    expect(prep.plan.args.join("\n")).toContain("ship it");
   });
 });
 
@@ -102,7 +120,7 @@ describe("native session bridge — same-provider resume uses native resume", ()
     await launcher.recordNativeSessionId(first.session!.sessionId, "codex", "codex-native-uuid-1");
 
     const resume = await launcher.prepareLaunch({ sessionId: first.session!.sessionId }, { permissionMode: "safe" });
-    expect(resume.plan.args).toEqual(["resume", "codex-native-uuid-1"]);
+    expect(sessionArgsHead(resume.plan.args, "codex")).toEqual(["resume", "codex-native-uuid-1"]);
     expect(resume.nativeResume).toEqual({ providerId: "codex", nativeSessionId: "codex-native-uuid-1" });
   });
 
@@ -114,7 +132,7 @@ describe("native session bridge — same-provider resume uses native resume", ()
     await launcher.recordNativeSessionId(first.session!.sessionId, "claude", "claude-native-uuid-9");
 
     const resume = await launcher.prepareLaunch({ sessionId: first.session!.sessionId }, { permissionMode: "safe" });
-    expect(resume.plan.args).toEqual(["--resume", "claude-native-uuid-9"]);
+    expect(sessionArgsHead(resume.plan.args, "claude")).toEqual(["--resume", "claude-native-uuid-9"]);
   });
 });
 
@@ -131,7 +149,7 @@ describe("native session bridge — handoff preserves task, starts fresh target"
     const handoff = await launcher.prepareLaunch({ sessionId: first.session!.sessionId, providerId: "codex" }, { permissionMode: "safe" });
     expect(handoff.providerRef.providerId).toBe("codex");
     // No stored codex native id → fresh codex session (no resume args).
-    expect(handoff.plan.args).toEqual([]);
+    expect(sessionArgsHead(handoff.plan.args, "codex")).toEqual([]);
     expect(handoff.nativeResume).toBeUndefined();
     // CONTINUUM task preserved.
     expect(handoff.session!.taskGoal).toBe("ship the thing");
@@ -146,7 +164,7 @@ describe("native session bridge — handoff preserves task, starts fresh target"
 
     const toClaude = await launcher.prepareLaunch({ sessionId: first.session!.sessionId, providerId: "claude" }, { permissionMode: "safe" });
     // Fresh claude session, but with a deterministic session id (no --resume).
-    expect(toClaude.plan.args).toEqual(["--session-id", first.session!.sessionId]);
+    expect(sessionArgsHead(toClaude.plan.args, "claude")).toEqual(["--session-id", first.session!.sessionId]);
     expect(toClaude.nativeResume).toBeUndefined();
     expect(toClaude.providerRef.providerId).toBe("claude");
     // The codex native id is retained so a later codex handoff can resume it.
@@ -162,7 +180,7 @@ describe("native session bridge — deterministic Claude session identity", () =
     const prep = await launcher.prepareLaunch({ projectKey: p.id, taskGoal: "ship it" }, { permissionMode: "safe" });
     const sessionId = prep.session!.sessionId;
     // Deterministic native id (no --resume, no store-scan needed).
-    expect(prep.plan.args).toEqual(["--session-id", sessionId]);
+    expect(sessionArgsHead(prep.plan.args, "claude")).toEqual(["--session-id", sessionId]);
     expect((await sessionManager.loadSession(sessionId)).nativeSessionIds?.claude).toBe(sessionId);
   });
 
@@ -174,7 +192,7 @@ describe("native session bridge — deterministic Claude session identity", () =
     const sessionId = first.session!.sessionId;
     // After the deterministic first launch, resume must use --resume <id>.
     const resume = await launcher.prepareLaunch({ sessionId }, { permissionMode: "safe" });
-    expect(resume.plan.args).toEqual(["--resume", sessionId]);
+    expect(sessionArgsHead(resume.plan.args, "claude")).toEqual(["--resume", sessionId]);
     expect(resume.nativeResume).toEqual({ providerId: "claude", nativeSessionId: sessionId });
   });
 
@@ -185,7 +203,7 @@ describe("native session bridge — deterministic Claude session identity", () =
     const first = await launcher.prepareLaunch({ projectKey: p.id, taskGoal: "ship it" }, { permissionMode: "safe" });
     // No capture/record — codex keeps the store-scan fallback, no deterministic id.
     const resume = await launcher.prepareLaunch({ sessionId: first.session!.sessionId }, { permissionMode: "safe" });
-    expect(resume.plan.args).toEqual([]);
+    expect(sessionArgsHead(resume.plan.args, "codex")).toEqual([]);
     expect(resume.nativeResume).toBeUndefined();
   });
 });
