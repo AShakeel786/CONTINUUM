@@ -408,6 +408,8 @@ export class Launcher {
       memoryCoreNote,
       runtimeKind: adapter.getCapabilities().cliAvailable ? "cli" : "api",
       rendered,
+      contextWindowTokens: contextWindow,
+      contextTokensUsed: budget.inputTokensAfter.tokens,
       ...(resumeNativeSessionId ? { nativeResume: { providerId, nativeSessionId: resumeNativeSessionId } } : {}),
     };
   }

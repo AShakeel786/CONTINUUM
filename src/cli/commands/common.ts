@@ -74,6 +74,12 @@ export function isStdinTty(): boolean {
   return (process.stdin as { isTTY?: boolean }).isTTY === true;
 }
 
+/** Best-effort terminal column count; falls back to a sane 80-col default when unavailable (tests, pipes). */
+export function getTerminalColumns(): number {
+  const cols = process.stdout?.columns;
+  return typeof cols === "number" && cols > 0 ? cols : 80;
+}
+
 /** Friendly, actionable explanation for commands that need an interactive terminal. */
 export const NON_TTY_HINT =
   "The interactive UI needs a terminal. Run a command directly (e.g. `continuum launch <project>`, `continuum sessions`) or see `continuum --help`.";

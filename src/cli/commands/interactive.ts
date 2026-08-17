@@ -27,7 +27,8 @@ import type { ProviderAuthMethod } from "../../config/types.js";
 import type { CliIo } from "../index.js";
 import { buildLauncherContext } from "./launcher-context.js";
 import { checkPricing, ensureMcpRegistration, launchPrepared, runLaunchPreflight } from "./launch.js";
-import { isStdinTty, NON_TTY_HINT } from "./common.js";
+import { getTerminalColumns, isStdinTty, NON_TTY_HINT } from "./common.js";
+import { printHud } from "./hud.js";
 
 const HEADER = "CONTINUUM\n------------";
 
@@ -61,12 +62,6 @@ function isDirectory(p: string): boolean {
   } catch {
     return false;
   }
-}
-
-/** Best-effort terminal column count; falls back to a sane 80-col default when unavailable (tests, pipes). */
-function getTerminalColumns(): number {
-  const cols = process.stdout?.columns;
-  return typeof cols === "number" && cols > 0 ? cols : 80;
 }
 
 /** Present a numbered menu; returns the 0-based index, or undefined for exit/back. Labels may embed `\n` for a continuation line (indented to align under the first line). */
@@ -693,6 +688,7 @@ export async function runInteractiveCommand(args: readonly string[], io: CliIo):
     if (prep.memoryCoreNote) out(`ℹ️  ${prep.memoryCoreNote}\n`);
     if (prep.session) out(`Session: ${prep.session.sessionId}\n`);
     if (prep.nativeResume) out(`ℹ️  Resuming ${prep.nativeResume.providerId} native session ${prep.nativeResume.nativeSessionId}\n`);
+    await printHud(out, prep, { launcher: ctx.launcher, providers: ctx.providers }, getTerminalColumns());
 
     if (prep.session) {
       const pricingLines = await checkPricing(prep.session.sessionId, ctx.pricing, ctx.handoffManager);

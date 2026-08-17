@@ -36,7 +36,8 @@ import { runApiAgent } from "../../api-agent/run.js";
 import { ApiAgentError } from "../../api-agent/types.js";
 import { join } from "node:path";
 import { resolveDataDir } from "../../config/paths.js";
-import { isStdinTty } from "./common.js";
+import { getTerminalColumns, isStdinTty } from "./common.js";
+import { printHud } from "./hud.js";
 
 /**
  * Runtime-only preflight (docker/containers/gateways/processes). Deliberately
@@ -218,6 +219,7 @@ export async function runLaunchCommand(args: readonly string[], io: CliIo): Prom
     if (prep.memoryCoreNote) out(`ℹ️  ${prep.memoryCoreNote}\n`);
     if (prep.session) out(`Session: ${prep.session.sessionId}\n`);
     if (prep.nativeResume) out(`ℹ️  Resuming ${prep.nativeResume.providerId} native session ${prep.nativeResume.nativeSessionId}\n`);
+    await printHud(out, prep, { launcher, providers }, getTerminalColumns());
 
     // Peak-pricing handoff prompt: before launching, check the session's
     // active provider for a pricing transition; if a peak event fires, surface
@@ -271,6 +273,7 @@ export async function runResumeCommand(args: readonly string[], io: CliIo): Prom
     }
     if (prep.session) out(`Resuming session: ${prep.session.sessionId} [${prep.plan.providerId}]\n`);
     if (prep.nativeResume) out(`ℹ️  Resuming ${prep.nativeResume.providerId} native session ${prep.nativeResume.nativeSessionId}\n`);
+    await printHud(out, prep, { launcher, providers }, getTerminalColumns());
     await ensureMcpRegistration();
     return launchPrepared({ launcher, providers, sessionManager, dataDir }, prep, out);
   } catch (err) {
@@ -317,6 +320,7 @@ export async function runHandoffCommand(args: readonly string[], io: CliIo): Pro
 
     // Launch the receiving agent in the same project, continuing the session.
     const prep = await launcher.prepareLaunch({ sessionId, providerId: chosenId }, { permissionMode: "safe" });
+    await printHud(out, prep, { launcher, providers }, getTerminalColumns());
     await ensureMcpRegistration();
     return launchPrepared({ launcher, providers, sessionManager, dataDir }, prep, out);
   } catch (err) {

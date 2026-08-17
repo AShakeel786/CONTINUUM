@@ -58,4 +58,8 @@ export interface LaunchPreparation {
   readonly runtimeKind: LaunchRuntimeKind;
   /** The budgeted + provider-rendered context, for the API agent to send as its first turn. */
   readonly rendered: RenderedContext;
+  /** The target provider's context-window ceiling used for this launch's Token Manager budget (src/token/budget.ts). */
+  readonly contextWindowTokens: number;
+  /** Tokens actually occupied by the rendered context after budgeting/trimming — the Token Manager's own `inputTokensAfter` count, not re-estimated. */
+  readonly contextTokensUsed: number;
 }
