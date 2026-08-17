@@ -7,6 +7,7 @@
 
 import type { SessionManager } from "../session/manager.js";
 import type { SessionMode, TaskSession } from "../session/types.js";
+import type { ProjectRegistry } from "../registry/registry.js";
 
 export interface RecentSessionSummary {
   readonly sessionId: string;
@@ -104,37 +105,84 @@ export function formatSessionTime(iso: string | undefined, now: Date = new Date(
   return sameDay ? time : `${MONTHS[d.getMonth()]} ${d.getDate()}, ${time}`;
 }
 
+/** Shown for a project-mode session whose project can't be resolved (deleted, or a legacy session with no trustworthy path/id match). Never inferred from prompt text. */
+export const UNKNOWN_PROJECT_LABEL = "Unknown project";
+
 /**
- * One entry in the interactive "Choose session:" picker. The first line is the
- * provider + goal (with a `★ ` marker when this is the most recently active
- * session); the second line is `Last active: <local time>`. The goal is
- * truncated to fit `width` (terminal columns) so long goals never wrap into an
- * unreadable menu.
+ * Resolves the picker's project label for every session in one pass — one
+ * `ProjectRegistry.list()` load shared across all of them, rather than a
+ * `resolve()` (which reloads the whole registry) per session.
+ *
+ * Deliberately dynamic, not persisted on the session: `RecentSessionSummary`
+ * carries only `projectId`, and the *name* shown here always comes from the
+ * registry at read time. A project rename is reflected immediately, with no
+ * separate migration step, and there is no second name to go stale.
+ */
+export async function buildProjectLabels(
+  sessions: readonly RecentSessionSummary[],
+  projects: ProjectRegistry,
+): Promise<ReadonlyMap<string, string>> {
+  const byId = new Map((await projects.list()).map((p) => [p.id, p.name] as const));
+  const labels = new Map<string, string>();
+  for (const s of sessions) {
+    labels.set(s.sessionId, await resolveProjectLabel(s, byId, projects));
+  }
+  return labels;
+}
+
+async function resolveProjectLabel(
+  s: RecentSessionSummary,
+  byId: ReadonlyMap<string, string>,
+  projects: ProjectRegistry,
+): Promise<string> {
+  if (s.mode === "general") return "General";
+  if (s.mode === "current-directory") return "Current directory";
+  if (s.projectId) return byId.get(s.projectId) ?? UNKNOWN_PROJECT_LABEL;
+  // Legacy session predating the `projectId` field: only trust a
+  // workingDirectory that the registry itself resolves to a project (exact
+  // path or registered ancestor) — never a guess from the goal/prompt text.
+  try {
+    const detected = await projects.detect(s.workingDirectory);
+    if (detected) return detected.name;
+  } catch {
+    // fall through to unknown
+  }
+  return UNKNOWN_PROJECT_LABEL;
+}
+
+/**
+ * One entry in the interactive "Choose session:" picker. The first line is
+ * `[project] [provider] goal` (with a `★ ` marker when this is the most
+ * recently active session); the second line is `Last active: <local time>`.
+ * `projectLabel` is resolved separately (see `buildProjectLabels`) so this
+ * function stays pure/sync. The goal is truncated to fit `width` (terminal
+ * columns) so long goals never wrap into an unreadable menu.
  */
 export function formatSessionPickerLine(
   s: RecentSessionSummary,
-  opts: { readonly isNewest: boolean; readonly now?: Date; readonly width?: number },
+  opts: { readonly isNewest: boolean; readonly projectLabel: string; readonly now?: Date; readonly width?: number },
 ): string {
   const now = opts.now ?? new Date();
   const width = typeof opts.width === "number" && opts.width > 0 ? opts.width : 80;
   const marker = opts.isNewest ? "★ " : "  ";
+  const project = `[${opts.projectLabel}]`;
   const provider = `[${s.providerId}]`;
-  // Reserve "  N. " (number prefix) + marker + provider + the space before the goal.
-  const reserved = 5 + marker.length + provider.length + 1;
+  // Reserve "  N. " (number prefix) + marker + project + provider + the two spaces before the goal.
+  const reserved = 5 + marker.length + project.length + 1 + provider.length + 1;
   const goalMax = Math.max(16, width - reserved);
   const goal = s.taskGoal.length > goalMax ? `${s.taskGoal.slice(0, goalMax - 1)}…` : s.taskGoal;
   const time = formatSessionTime(s.updatedAt, now);
-  return `${marker}${provider} ${goal}\nLast active: ${time}${workspaceSuffix(s)}`;
+  return `${marker}${project} ${provider} ${goal}\nLast active: ${time}${workspaceSuffix(s)}`;
 }
 
 /**
- * Extra workspace context appended to the picker's second line so a
- * general/current-directory session never reads as an unlabeled
- * `(untitled)` entry. Project-mode sessions are unchanged (empty suffix) —
- * their picker line stays exactly as before this field existed.
+ * Extra workspace context appended to the picker's second line for a
+ * current-directory session (its full path — the `[Current directory]`
+ * label alone can't distinguish two such sessions in different folders).
+ * General/project-mode sessions are unchanged (empty suffix) — the project
+ * label already identifies them.
  */
 function workspaceSuffix(s: RecentSessionSummary): string {
-  if (s.mode === "general") return " · general session (no project)";
   if (s.mode === "current-directory") return ` · ${s.workingDirectory}`;
   return "";
 }

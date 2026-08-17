@@ -195,6 +195,25 @@ describe("Launcher — resume with stale protection", () => {
     expect(resume.staleReasons.some((r) => r.includes("HEAD changed"))).toBe(true);
     expect(realHead).toBeTruthy();
   });
+
+  it("resumes into the project's current registered path, not the session's originally-stored one, after a project rename/move", async () => {
+    const { deps, registry } = await buildDeps();
+    const originalDir = tmp();
+    const p = await registry.add({ name: "CARS", path: originalDir, defaultProvider: "claude" });
+    const launcher = new Launcher(deps);
+    const first = await launcher.prepareLaunch({ projectKey: p.id, taskGoal: "goal" }, { permissionMode: "safe" });
+    expect(first.plan.workingDir).toBe(originalDir);
+
+    // The project is later moved/renamed in the registry — resume must follow
+    // the registry's current path, never the stale directory captured at
+    // session creation.
+    const movedDir = tmp();
+    await registry.update(p.id, { name: "CARS-NEW", path: movedDir });
+
+    const resume = await launcher.prepareLaunch({ sessionId: first.session!.sessionId }, { permissionMode: "safe" });
+    expect(resume.plan.workingDir).toBe(movedDir);
+    expect(resume.plan.workingDir).not.toBe(originalDir);
+  });
 });
 
 describe("Launcher — MemoryCore degrade", () => {

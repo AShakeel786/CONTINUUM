@@ -18,7 +18,14 @@ import type { Prompt, PromptOutput } from "../../auth/prompt.js";
 import { ProjectRegistry, normalizeProjectPath } from "../../registry/registry.js";
 import type { ProjectRecord } from "../../registry/types.js";
 import { ProjectAlreadyExistsError, ProjectNotFoundError } from "../../registry/errors.js";
-import { compareTimestampsDesc, formatSessionPickerLine, listRecentSessions, type RecentSessionSummary } from "../../launcher/session-list.js";
+import {
+  buildProjectLabels,
+  compareTimestampsDesc,
+  formatSessionPickerLine,
+  listRecentSessions,
+  UNKNOWN_PROJECT_LABEL,
+  type RecentSessionSummary,
+} from "../../launcher/session-list.js";
 import type { LaunchPreparation } from "../../launcher/types.js";
 import { LocalDependencyUnavailableError, NoAuthenticatedAgentError, NoProjectError, ProviderNotAuthenticatedError } from "../../launcher/errors.js";
 import { AgentManager, AgentValidationError } from "../../agents/index.js";
@@ -236,7 +243,10 @@ async function resumeSessionFlow(deps: InteractiveMenuDeps, prompt: Prompt, out:
   }
   const now = new Date();
   const width = getTerminalColumns();
-  const labels = pool.map((s, i) => formatSessionPickerLine(s, { isNewest: i === 0, now, width }));
+  const projectLabels = await buildProjectLabels(pool, deps.projects);
+  const labels = pool.map((s, i) =>
+    formatSessionPickerLine(s, { isNewest: i === 0, now, width, projectLabel: projectLabels.get(s.sessionId) ?? UNKNOWN_PROJECT_LABEL }),
+  );
   const sessionIdx = await chooseNumber(prompt, out, "Choose session:", labels, "Back");
   if (sessionIdx === undefined) return "back";
   return { kind: "resume", sessionId: pool[sessionIdx]!.sessionId };

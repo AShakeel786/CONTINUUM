@@ -20,8 +20,25 @@ function tmp(): string {
   return mkdtempSync(join(tmpdir(), "cont-int-"));
 }
 
-function session(id: string, projectId: string, providerId: string, goal: string, updatedAt = "2026-01-02T00:00:00.000Z"): RecentSessionSummary {
-  return { sessionId: id, projectId, mode: "project", workingDirectory: "/w", providerId, taskGoal: goal, status: "active", updatedAt };
+function session(
+  id: string,
+  projectId: string | undefined,
+  providerId: string,
+  goal: string,
+  updatedAt = "2026-01-02T00:00:00.000Z",
+  overrides: Partial<RecentSessionSummary> = {},
+): RecentSessionSummary {
+  return {
+    sessionId: id,
+    ...(projectId ? { projectId } : {}),
+    mode: "project",
+    workingDirectory: "/w",
+    providerId,
+    taskGoal: goal,
+    status: "active",
+    updatedAt,
+    ...overrides,
+  };
 }
 
 function capture(): { out: (s: string) => void; text: () => string } {
@@ -105,6 +122,91 @@ describe("runInteractiveMenu — main menu", () => {
       cap.out,
     );
     expect(decision).toEqual({ kind: "resume", sessionId: "s1" });
+  });
+
+  it("shows the registered project name in the resume picker", async () => {
+    const registry = await makeRegistry([{ name: "PASSCARS", path: tmp() }]);
+    const passcars = (await registry.list())[0]!;
+    const cap = capture();
+    await runInteractiveMenu(
+      deps(registry, makeAgentManager(tmp()), [session("s1", passcars.id, "deepseek", "Fix exam selector")], tmp()),
+      createScriptedPrompt({ answers: ["2", "q"] }),
+      cap.out,
+    );
+    expect(cap.text()).toContain("★ [PASSCARS] [deepseek] Fix exam selector");
+  });
+
+  it("distinguishes sessions with the same agent and title across different projects", async () => {
+    const registry = await makeRegistry([
+      { name: "PASSCARS", path: tmp() },
+      { name: "CONTINUUM", path: tmp() },
+    ]);
+    const [passcars, continuum] = await registry.list();
+    const cap = capture();
+    await runInteractiveMenu(
+      deps(
+        registry,
+        makeAgentManager(tmp()),
+        [
+          session("s1", passcars!.id, "codex", "inspect src/session", "2026-08-17T00:00:00.000Z"),
+          session("s2", continuum!.id, "codex", "inspect src/session", "2026-08-16T00:00:00.000Z"),
+        ],
+        tmp(),
+      ),
+      createScriptedPrompt({ answers: ["2", "q"] }),
+      cap.out,
+    );
+    const text = cap.text();
+    expect(text).toContain("[PASSCARS] [codex] inspect src/session");
+    expect(text).toContain("[CONTINUUM] [codex] inspect src/session");
+  });
+
+  it("shows [Unknown project] for a legacy session with no resolvable project metadata", async () => {
+    const registry = await makeRegistry([{ name: "PASSCARS", path: tmp() }]);
+    const cap = capture();
+    await runInteractiveMenu(
+      deps(
+        registry,
+        makeAgentManager(tmp()),
+        // No projectId, and a workingDirectory that matches no registered project path.
+        [session("s1", undefined, "codex", "orphaned session", undefined, { workingDirectory: "/nowhere" })],
+        tmp(),
+      ),
+      createScriptedPrompt({ answers: ["2", "q"] }),
+      cap.out,
+    );
+    expect(cap.text()).toContain("[Unknown project] [codex] orphaned session");
+  });
+
+  it("resolves a legacy session with no projectId via a matching registered project path", async () => {
+    const projectDir = tmp();
+    const registry = await makeRegistry([{ name: "PASSCARS", path: projectDir }]);
+    const cap = capture();
+    await runInteractiveMenu(
+      deps(
+        registry,
+        makeAgentManager(tmp()),
+        [session("s1", undefined, "codex", "pre-migration session", undefined, { workingDirectory: projectDir })],
+        tmp(),
+      ),
+      createScriptedPrompt({ answers: ["2", "q"] }),
+      cap.out,
+    );
+    expect(cap.text()).toContain("[PASSCARS] [codex] pre-migration session");
+  });
+
+  it("reflects a project rename immediately (name resolved live, never persisted on the session)", async () => {
+    const registry = await makeRegistry([{ name: "OldName", path: tmp() }]);
+    const project = (await registry.list())[0]!;
+    await registry.update(project.id, { name: "NewName" });
+    const cap = capture();
+    await runInteractiveMenu(
+      deps(registry, makeAgentManager(tmp()), [session("s1", project.id, "codex", "rename check")], tmp()),
+      createScriptedPrompt({ answers: ["2", "q"] }),
+      cap.out,
+    );
+    expect(cap.text()).toContain("[NewName] [codex] rename check");
+    expect(cap.text()).not.toContain("OldName");
   });
 
   it("exits cleanly on zero/quit at the main menu", async () => {
