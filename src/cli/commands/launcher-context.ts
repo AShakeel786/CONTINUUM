@@ -36,6 +36,9 @@ export interface LauncherContext {
   readonly handoffManager: HandoffManager;
   readonly pricing: PricingAwarenessService;
   readonly credentialManager: CredentialManager;
+  readonly configStore: import("../../config/store.js").ConfigStore;
+  readonly cliAuthManager: import("../../auth/cli-auth-manager.js").CliAuthManager;
+  readonly authMetadata: ReadonlyMap<string, import("../../auth/types.js").ProviderAuthMetadata>;
   readonly dataDir: string;
 }
 
@@ -77,5 +80,17 @@ export async function buildLauncherContext(options: { dataDir?: string; prompt: 
   const handoffManager = new HandoffManager(sessionManager, providers);
   const pricing = new PricingAwarenessService(sessionManager, providers, createDefaultPricingSchedules());
 
-  return { launcher: new Launcher(deps), projects, providers, sessionManager, handoffManager, pricing, credentialManager, dataDir };
+  return {
+    launcher: new Launcher(deps),
+    projects,
+    providers,
+    sessionManager,
+    handoffManager,
+    pricing,
+    credentialManager,
+    configStore: ctx.configStore,
+    cliAuthManager,
+    authMetadata,
+    dataDir,
+  };
 }

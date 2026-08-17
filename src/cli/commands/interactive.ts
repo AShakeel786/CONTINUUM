@@ -2,14 +2,13 @@
  * `continuum` (bare) — the interactive front door.
  *
  * A terminal-native menu (no GUI) that reuses existing systems only:
- * project registry (list/add/remove/detect), launcher (provider usability +
+ * project registry (list/add/remove), agent management (add/remove/configure/
+ * list over the provider/auth/config graph), launcher (agent usability +
  * prepare), session list (resume), and the same preflight/pricing/launch
- * helpers the explicit `launch`/`resume` commands use. It owns no
- * provider/session/launch/registry logic of its own — only the ordering of
- * already-built pieces.
+ * helpers the explicit `launch`/`resume` commands use.
  *
- * First menu: existing projects → "+ Add project" → "Manage projects" →
- * (optional) "Register current directory as a project" → "0. Exit".
+ * Main menu: Start new task / Resume session / Manage projects /
+ * Manage AI agents / Exit.
  */
 
 import { statSync } from "node:fs";
@@ -23,6 +22,9 @@ import { compareTimestampsDesc, formatSessionPickerLine, listRecentSessions, typ
 import type { ProviderUsability } from "../../launcher/launcher.js";
 import type { LaunchPreparation } from "../../launcher/types.js";
 import { NoAuthenticatedAgentError, NoProjectError, ProviderNotAuthenticatedError } from "../../launcher/errors.js";
+import { AgentManager, AgentValidationError } from "../../agents/index.js";
+import type { AgentAuthFacts, AgentDescriptor } from "../../agents/index.js";
+import type { ProviderAuthMethod } from "../../config/types.js";
 import type { CliIo } from "../index.js";
 import { buildLauncherContext } from "./launcher-context.js";
 import { checkPricing, ensureMcpRegistration, launchPrepared, runLaunchPreflight } from "./launch.js";
@@ -32,10 +34,9 @@ const HEADER = "CONTINUUM\n------------";
 
 export interface InteractiveMenuDeps {
   readonly projects: ProjectRegistry;
-  readonly providers: readonly ProviderUsability[];
   readonly sessions: readonly RecentSessionSummary[];
-  readonly knownProviders: ReadonlySet<string>;
-  /** Launch directory — used to offer "register current directory". */
+  readonly agentManager: AgentManager;
+  /** Launch directory — used to offer "register current directory" when adding a project. */
   readonly cwd: string;
 }
 
@@ -43,6 +44,9 @@ export type InteractiveDecision =
   | { readonly kind: "new"; readonly projectId: string; readonly providerId: string; readonly taskGoal: string }
   | { readonly kind: "resume"; readonly sessionId: string }
   | { readonly kind: "exit" };
+
+/** Internal: a sub-flow returns a launch decision or "back" (return to the main menu). */
+type MenuResult = InteractiveDecision | "back";
 
 function isDirectory(p: string): boolean {
   try {
@@ -83,13 +87,10 @@ async function chooseNumber(
 }
 
 /**
- * The pure menu/decision half of the front door. Takes the live registry +
- * already-loaded data plus a prompt, and returns what to launch (or exit).
- * Project add/remove/manage and current-directory registration happen in the
- * loop here and always return to the project menu, so a newly added project
- * is immediately launchable. Kept side-effect-light (only the injected
- * `ProjectRegistry` is mutated) so it can be tested with a scripted prompt
- * and a temp-registry-backed ProjectRegistry.
+ * The pure menu/decision half of the front door. Takes the live registries +
+ * already-loaded sessions plus a prompt, and returns what to launch (or exit).
+ * Agent/project mutations go through the injected services and are immediately
+ * visible because each flow re-queries them when it runs.
  */
 export async function runInteractiveMenu(
   deps: InteractiveMenuDeps,
@@ -99,81 +100,73 @@ export async function runInteractiveMenu(
   out(`${HEADER}\n`);
 
   for (;;) {
-    const projects = await deps.projects.list();
-    const cwdDetected = deps.cwd ? await deps.projects.detect(deps.cwd) : undefined;
-    const registerCwd = !!deps.cwd && !cwdDetected;
-
-    const labels = [
-      ...projects.map((p) => p.name),
-      "+ Add project",
-      "Manage projects",
-      ...(registerCwd ? ["Register current directory as a project"] : []),
-    ];
-    const choice = await chooseNumber(prompt, out, "Choose project:", labels);
+    const choice = await chooseNumber(
+      prompt,
+      out,
+      "Main menu:",
+      ["Start new task", "Resume session", "Manage projects", "Manage AI agents"],
+      "Exit",
+    );
     if (choice === undefined) return { kind: "exit" };
 
-    if (choice < projects.length) {
-      return await chooseActionForProject(deps, projects[choice]!, prompt, out);
-    }
+    const result =
+      choice === 0
+        ? await startNewTaskFlow(deps, prompt, out)
+        : choice === 1
+          ? await resumeSessionFlow(deps, prompt, out)
+          : choice === 2
+            ? await (async (): Promise<MenuResult> => {
+                await manageProjectsFlow(deps, prompt, out);
+                return "back";
+              })()
+            : await (async (): Promise<MenuResult> => {
+                await manageAgentsFlow(deps, prompt, out);
+                return "back";
+              })();
 
-    const special = choice - projects.length;
-    if (special === 0) {
-      await addProjectFlow(deps, prompt, out);
-      continue;
-    }
-    if (special === 1) {
-      await manageProjectsFlow(deps, prompt, out);
-      continue;
-    }
-    // Register the current directory.
-    await addProjectFlow(deps, prompt, out, deps.cwd);
-    continue;
+    if (result === "back") continue;
+    return result;
   }
 }
 
-/** After a project is chosen: start a new task or resume a recent session. */
-async function chooseActionForProject(
-  deps: InteractiveMenuDeps,
-  project: ProjectRecord,
-  prompt: Prompt,
-  out: PromptOutput,
-): Promise<InteractiveDecision> {
-  const actionIdx = await chooseNumber(prompt, out, "Choose action:", ["Start new task", "Resume session"]);
-  if (actionIdx === undefined) return { kind: "exit" };
+/** Main menu → "Start new task": project → agent → goal. */
+async function startNewTaskFlow(deps: InteractiveMenuDeps, prompt: Prompt, out: PromptOutput): Promise<MenuResult> {
+  const projects = await deps.projects.list();
+  if (projects.length === 0) {
+    out("\nNo projects yet. Use 'Manage projects' to add one.\n");
+    return "back";
+  }
+  const projectIdx = await chooseNumber(prompt, out, "Choose project:", projects.map((p) => p.name), "Back");
+  if (projectIdx === undefined) return "back";
+  const project = projects[projectIdx]!;
 
-  if (actionIdx === 0) {
-    // Start a new task in the chosen project.
-    for (const d of deps.providers.filter((p) => !p.usable)) {
-      out(`  (${d.displayName} unavailable: ${d.reason ?? "not authenticated"})\n`);
-    }
-    const usable = deps.providers.filter((p) => p.usable);
-    if (usable.length === 0) {
-      out("\nNo usable provider. Authenticate one first (e.g. `continuum auth codex`).\n");
-      return { kind: "exit" };
-    }
-    const providerIdx = await chooseNumber(prompt, out, "Choose agent:", usable.map((p) => p.displayName));
-    if (providerIdx === undefined) return { kind: "exit" };
-    const taskGoal = await prompt.ask("Task goal (optional)", "");
-    return { kind: "new", projectId: project.id, providerId: usable[providerIdx]!.providerId, taskGoal };
+  const all = await deps.agentManager.listUsable();
+  const usable = all.filter((u) => u.usable);
+  const unusable = all.filter((u) => !u.usable);
+  for (const d of unusable) out(`  (${d.displayName} unavailable: ${d.reason ?? "not authenticated"})\n`);
+  if (usable.length === 0) {
+    out("\nNo usable agent. Authenticate one first (e.g. 'Manage AI agents' → Add/Configure).\n");
+    return "back";
   }
 
-  // Resume a recent session (scoped to the chosen project; fall back to all).
-  const scoped = deps.sessions.filter((s) => s.projectId === project.id);
-  const rawPool = scoped.length > 0 ? scoped : deps.sessions;
-  if (rawPool.length === 0) {
+  const agentIdx = await chooseNumber(prompt, out, "Choose agent:", usable.map((p) => p.displayName), "Back");
+  if (agentIdx === undefined) return "back";
+  const taskGoal = await prompt.ask("Task goal (optional)", "");
+  return { kind: "new", projectId: project.id, providerId: usable[agentIdx]!.providerId, taskGoal };
+}
+
+/** Main menu → "Resume session": pick the most-recent active session. */
+async function resumeSessionFlow(deps: InteractiveMenuDeps, prompt: Prompt, out: PromptOutput): Promise<MenuResult> {
+  const pool = [...deps.sessions].sort((a, b) => compareTimestampsDesc(a.updatedAt, b.updatedAt));
+  if (pool.length === 0) {
     out("\nNo sessions to resume yet.\n");
-    return { kind: "exit" };
+    return "back";
   }
-  if (scoped.length === 0) out(`\n(no sessions for "${project.name}" — showing all recent)\n`);
-
-  // Most recently active first — the picker never assumes its input is already
-  // sorted, so a future caller passing unsorted sessions can't break the marker.
-  const pool = [...rawPool].sort((a, b) => compareTimestampsDesc(a.updatedAt, b.updatedAt));
   const now = new Date();
   const width = getTerminalColumns();
   const labels = pool.map((s, i) => formatSessionPickerLine(s, { isNewest: i === 0, now, width }));
-  const sessionIdx = await chooseNumber(prompt, out, "Choose session:", labels);
-  if (sessionIdx === undefined) return { kind: "exit" };
+  const sessionIdx = await chooseNumber(prompt, out, "Choose session:", labels, "Back");
+  if (sessionIdx === undefined) return "back";
   return { kind: "resume", sessionId: pool[sessionIdx]!.sessionId };
 }
 
@@ -212,8 +205,9 @@ async function addProjectFlow(
   }
 
   const provider = (await prompt.ask("Default provider (optional)", "")).trim();
-  if (provider && !deps.knownProviders.has(provider)) {
-    out(`Unknown provider "${provider}". Known: ${[...deps.knownProviders].join(", ")}\n`);
+  const knownIds = await deps.agentManager.knownIds();
+  if (provider && !knownIds.has(provider)) {
+    out(`Unknown provider "${provider}". Known: ${[...knownIds].join(", ")}\n`);
     return;
   }
 
@@ -233,32 +227,24 @@ async function addProjectFlow(
   }
 }
 
-/** Minimal project management: list / remove / show details / set default. */
+/** Main menu → "Manage projects": Add / Remove / List / Back. */
 async function manageProjectsFlow(deps: InteractiveMenuDeps, prompt: Prompt, out: PromptOutput): Promise<void> {
   for (;;) {
     const choice = await chooseNumber(
       prompt,
       out,
       "Manage projects:",
-      ["List projects", "Remove project", "Show project details", "Set default provider"],
+      ["Add project", "Remove project", "List projects"],
       "Back",
     );
     if (choice === undefined) return;
 
-    const projects = await deps.projects.list();
-
     if (choice === 0) {
-      out("\nProjects:\n");
-      if (projects.length === 0) {
-        out("  (none)\n");
-        continue;
-      }
-      for (const p of projects) {
-        const def = p.defaultProvider ? ` [default: ${p.defaultProvider}${p.defaultModel ? `/${p.defaultModel}` : ""}]` : "";
-        out(`  - ${p.name}${def}\n    ${p.path}\n`);
-      }
+      await addProjectFlow(deps, prompt, out);
       continue;
     }
+
+    const projects = await deps.projects.list();
 
     if (choice === 1) {
       if (projects.length === 0) {
@@ -268,13 +254,13 @@ async function manageProjectsFlow(deps: InteractiveMenuDeps, prompt: Prompt, out
       const idx = await chooseNumber(prompt, out, "Remove project:", projects.map((p) => p.name), "Back");
       if (idx === undefined) continue;
       const p = projects[idx]!;
-      if (!(await prompt.confirm(`Remove "${p.name}"?`, false))) {
+      if (!(await prompt.confirm(`Remove "${p.name}"? This only unregisters it — the folder/files are never touched.`, false))) {
         out("(cancelled)\n");
         continue;
       }
       try {
         await deps.projects.remove(p.id);
-        out(`✓ Removed "${p.name}".\n`);
+        out(`✓ Removed "${p.name}" (its folder was not touched).\n`);
       } catch (err) {
         if (err instanceof ProjectNotFoundError) {
           out(`${err.message}\n`);
@@ -285,41 +271,232 @@ async function manageProjectsFlow(deps: InteractiveMenuDeps, prompt: Prompt, out
       continue;
     }
 
-    if (choice === 2) {
-      // Show details.
-      if (projects.length === 0) {
-        out("\nNo projects to show.\n");
-        continue;
-      }
-      const idx = await chooseNumber(prompt, out, "Show project:", projects.map((p) => p.name), "Back");
-      if (idx === undefined) continue;
-      const p = projects[idx]!;
-      out(`\n${p.name}\n  path: ${p.path}\n`);
-      out(p.defaultProvider ? `  default provider: ${p.defaultProvider}${p.defaultModel ? `/${p.defaultModel}` : ""}\n` : "  default provider: (none)\n");
-      if (p.aliases.length) out(`  aliases: ${p.aliases.join(", ")}\n`);
-      continue;
-    }
-
-    // Set default provider.
+    // List projects.
+    out("\nProjects:\n");
     if (projects.length === 0) {
-      out("\nNo projects to update.\n");
+      out("  (none)\n");
       continue;
     }
-    const idx = await chooseNumber(prompt, out, "Set default provider for:", projects.map((p) => p.name), "Back");
-    if (idx === undefined) continue;
-    const p = projects[idx]!;
-    const known = [...deps.knownProviders];
-    const provider = (await prompt.ask(`Default provider [${known.join("/")}]`, p.defaultProvider ?? "")).trim();
-    if (!provider) {
-      out("(cancelled)\n");
+    for (const p of projects) {
+      const def = p.defaultProvider ? ` [default: ${p.defaultProvider}${p.defaultModel ? `/${p.defaultModel}` : ""}]` : "";
+      out(`  - ${p.name}${def}\n    ${p.path}\n`);
+    }
+  }
+}
+
+/** Main menu → "Manage AI agents": Add / Remove / Configure / List / Back. */
+async function manageAgentsFlow(deps: InteractiveMenuDeps, prompt: Prompt, out: PromptOutput): Promise<void> {
+  for (;;) {
+    const choice = await chooseNumber(
+      prompt,
+      out,
+      "Manage AI agents:",
+      ["Add AI agent", "Remove AI agent", "Configure AI agent", "List agents"],
+      "Back",
+    );
+    if (choice === undefined) return;
+
+    if (choice === 0) {
+      await addAgentFlow(deps, prompt, out);
       continue;
     }
-    if (!deps.knownProviders.has(provider)) {
-      out(`Unknown provider "${provider}". Known: ${known.join(", ")}\n`);
+    if (choice === 1) {
+      await removeAgentFlow(deps, prompt, out);
       continue;
     }
-    const updated = await deps.projects.update(p.id, { defaultProvider: provider });
-    out(`✓ Default provider for "${p.name}" set to ${updated.defaultProvider}.\n`);
+    if (choice === 2) {
+      await configureAgentFlow(deps, prompt, out);
+      continue;
+    }
+    await listAgentsFlow(deps, prompt, out);
+  }
+}
+
+async function listAgentsFlow(deps: InteractiveMenuDeps, prompt: Prompt, out: PromptOutput): Promise<void> {
+  const agents = await deps.agentManager.listDescriptors();
+  out("\nAI agents:\n");
+  if (agents.length === 0) {
+    out("  (none)\n");
+    return;
+  }
+  for (const a of agents) out(formatAgentLine(a));
+}
+
+function formatAgentLine(a: AgentDescriptor): string {
+  const source = a.source === "builtin" ? "built-in" : "custom";
+  const auth = [a.auth.cli ? "CLI" : "", a.auth.api ? "API" : ""].filter(Boolean).join("+") || "none";
+  const config = a.configured ? `configured (${a.configuredMethod})` : "not configured";
+  const status = a.usable ? "usable" : `unavailable${a.reason ? `: ${a.reason}` : ""}`;
+  const launch = a.launchKind === "cli" ? "cli" : a.launchKind === "direct-api" ? "api" : "none";
+  const cli = a.auth.cli ? ` CLI=${a.cliInstalled === false ? "not-installed" : a.cliInstalled === true ? "installed" : "unknown"}` : "";
+  return `  - ${a.displayName} (${a.providerId}) [${source}] auth=${auth} launch=${launch} ${config} ${status}${cli}\n`;
+}
+
+async function addAgentFlow(deps: InteractiveMenuDeps, prompt: Prompt, out: PromptOutput): Promise<void> {
+  const descriptors = await deps.agentManager.listDescriptors();
+  const unconfigured = descriptors.filter((d) => !d.configured);
+  const labels = [...unconfigured.map((d) => `${d.displayName} (${d.providerId})`), "+ New custom agent"];
+  const choice = await chooseNumber(prompt, out, "Add AI agent:", labels, "Back");
+  if (choice === undefined) return;
+
+  if (choice < unconfigured.length) {
+    await configureAgentById(deps, prompt, out, unconfigured[choice]!.providerId);
+    return;
+  }
+  await addCustomAgentFlow(deps, prompt, out);
+}
+
+async function configureAgentFlow(deps: InteractiveMenuDeps, prompt: Prompt, out: PromptOutput): Promise<void> {
+  const descriptors = await deps.agentManager.listDescriptors();
+  if (descriptors.length === 0) {
+    out("\nNo agents to configure.\n");
+    return;
+  }
+  const idx = await chooseNumber(
+    prompt,
+    out,
+    "Configure AI agent:",
+    descriptors.map((d) => `${d.displayName} (${d.providerId})`),
+    "Back",
+  );
+  if (idx === undefined) return;
+  await configureAgentById(deps, prompt, out, descriptors[idx]!.providerId);
+}
+
+async function removeAgentFlow(deps: InteractiveMenuDeps, prompt: Prompt, out: PromptOutput): Promise<void> {
+  const descriptors = await deps.agentManager.listDescriptors();
+  if (descriptors.length === 0) {
+    out("\nNo agents to remove.\n");
+    return;
+  }
+  const idx = await chooseNumber(
+    prompt,
+    out,
+    "Remove AI agent:",
+    descriptors.map((d) => `${d.displayName} (${d.providerId})`),
+    "Back",
+  );
+  if (idx === undefined) return;
+  const d = descriptors[idx]!;
+  const note = d.source === "user" ? "This also removes its CONTINUUM manifest/config (never its CLI)." : "This removes only CONTINUUM's registration/auth (never the CLI or its own login).";
+  if (!(await prompt.confirm(`Remove "${d.displayName}"? ${note}`, false))) {
+    out("(cancelled)\n");
+    return;
+  }
+  try {
+    const result = await deps.agentManager.remove(d.providerId);
+    out(`✓ Removed "${d.displayName}"${result.removedManifest ? " (manifest removed)" : ""}.\n`);
+  } catch (err) {
+    if (err instanceof AgentValidationError) {
+      out(`${err.message}\n`);
+      return;
+    }
+    throw err;
+  }
+}
+
+/** Run auth setup for one existing agent, asking CLI-vs-API when both are supported. */
+async function configureAgentById(deps: InteractiveMenuDeps, prompt: Prompt, out: PromptOutput, providerId: string): Promise<void> {
+  const descriptor = (await deps.agentManager.listDescriptors()).find((d) => d.providerId === providerId);
+  if (!descriptor) {
+    out(`Unknown agent "${providerId}".\n`);
+    return;
+  }
+  const preferred = await chooseAuthMethod(descriptor.auth, prompt);
+  try {
+    const updated = await deps.agentManager.configure(providerId, preferred);
+    if (!updated) {
+      out(`(cancelled: no credential provided for ${descriptor.displayName})\n`);
+      return;
+    }
+    out(`✓ ${updated.displayName} configured via ${updated.configuredMethod}.\n`);
+  } catch (err) {
+    if (err instanceof AgentValidationError) {
+      out(`${err.message}\n`);
+      return;
+    }
+    throw err;
+  }
+}
+
+async function chooseAuthMethod(auth: AgentAuthFacts, prompt: Prompt): Promise<ProviderAuthMethod | undefined> {
+  if (auth.api && auth.cli) {
+    const answer = (await prompt.ask("Authenticate via [cli/api]", "cli")).trim().toLowerCase();
+    return answer === "api" ? "api" : "cli";
+  }
+  if (auth.api) return "api";
+  if (auth.cli) return "cli";
+  return undefined;
+}
+
+/** Wizard-driven custom agent creation, reusing the user-manifest architecture. */
+async function addCustomAgentFlow(deps: InteractiveMenuDeps, prompt: Prompt, out: PromptOutput): Promise<void> {
+  out("\n— Add custom AI agent —\n");
+
+  const id = (await prompt.ask("Agent id (lowercase, e.g. 'gemini')")).trim().toLowerCase();
+  if (!id) {
+    out("(cancelled: no id)\n");
+    return;
+  }
+  const displayName = (await prompt.ask("Display name", id)).trim() || id;
+  const protocol = (await prompt.ask("Protocol [openai-compatible/anthropic-messages]", "openai-compatible")).trim();
+  if (protocol !== "openai-compatible" && protocol !== "anthropic-messages") {
+    out(`Invalid protocol "${protocol}".\n`);
+    return;
+  }
+  const baseUrl = (await prompt.ask("Base URL")).trim();
+  if (!baseUrl) {
+    out("(cancelled: no base URL)\n");
+    return;
+  }
+  const authKind = (await prompt.ask("Auth kind [api-key/bearer-token/cli-session]", "api-key")).trim();
+  if (authKind !== "api-key" && authKind !== "bearer-token" && authKind !== "cli-session") {
+    out(`Invalid auth kind "${authKind}".\n`);
+    return;
+  }
+  let envVar: string | undefined;
+  if (authKind === "api-key" || authKind === "bearer-token") {
+    envVar = (await prompt.ask("Env var name for the key (e.g. GEMINI_API_KEY)")).trim();
+    if (!envVar) {
+      out("(cancelled: no env var)\n");
+      return;
+    }
+  }
+  const model = (await prompt.ask("Default model")).trim();
+  if (!model) {
+    out("(cancelled: no model)\n");
+    return;
+  }
+  let cliExecutable: string | undefined;
+  if (authKind === "cli-session") {
+    cliExecutable = (await prompt.ask("CLI executable (e.g. gemini)")).trim();
+    if (!cliExecutable) {
+      out("(cancelled: a CLI executable is required for cli-session auth)\n");
+      return;
+    }
+  }
+
+  try {
+    const added = await deps.agentManager.addCustom({
+      id,
+      displayName,
+      protocol,
+      baseUrl,
+      auth: authKind,
+      envVar,
+      model,
+      cliExecutable,
+    });
+    out(`✓ Added agent "${added.displayName}" (${added.providerId})${added.configured ? `, configured via ${added.configuredMethod}` : ""}.\n`);
+    if (added.configured && !added.usable) {
+      out(`⚠️  Configured, but not launchable right now: ${added.reason ?? "no launch path"}. It will be listed but excluded from the task agent picker.\n`);
+    }
+  } catch (err) {
+    if (err instanceof AgentValidationError) {
+      out(`${err.message}\n`);
+      return;
+    }
+    throw err;
   }
 }
 
@@ -330,25 +507,29 @@ export async function runInteractiveCommand(args: readonly string[], io: CliIo):
     return 2;
   }
   const prompt = createPrompt();
-  const ctx = await buildLauncherContext({ prompt });
+  let ctx = await buildLauncherContext({ prompt });
 
-  const [providers, sessions] = await Promise.all([
-    ctx.launcher.listProviderUsability(),
-    listRecentSessions(ctx.sessionManager, 20),
-  ]);
+  const agentManager = new AgentManager({
+    dataDir: ctx.dataDir,
+    configStore: ctx.configStore,
+    credentialManager: ctx.credentialManager,
+    prompt,
+    output: out,
+  });
+
+  const sessions = await listRecentSessions(ctx.sessionManager, 20);
 
   const decision = await runInteractiveMenu(
-    {
-      projects: ctx.projects,
-      providers,
-      sessions,
-      knownProviders: new Set(ctx.providers.listIds()),
-      cwd: process.cwd(),
-    },
+    { projects: ctx.projects, sessions, agentManager, cwd: process.cwd() },
     prompt,
     out,
   );
   if (decision.kind === "exit") return 0;
+
+  // Rebuild the launcher context so any agent added/removed/configured during
+  // this session is reflected in the launch graph (the launcher was built at
+  // startup, before the menu mutated the provider graph).
+  ctx = await buildLauncherContext({ prompt });
 
   try {
     for (const warning of await runLaunchPreflight()) out(`⚠️  ${warning}\n`);

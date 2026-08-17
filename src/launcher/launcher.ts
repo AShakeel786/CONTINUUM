@@ -46,7 +46,10 @@ import { applyReversiblePruning } from "../context/pruning.js";
 import type { ContextBlock } from "../context/types.js";
 import type { Prompt, PromptOutput } from "../auth/prompt.js";
 import { NoAuthenticatedAgentError, NoProjectError, ProviderNotAuthenticatedError } from "./errors.js";
+import { computeProviderUsability, type ProviderUsability } from "./usability.js";
 import type { LaunchOptions, LaunchPlan, LaunchPreparation } from "./types.js";
+
+export type { ProviderUsability } from "./usability.js";
 
 export interface LauncherDeps {
   readonly projects: ProjectRegistry;
@@ -70,15 +73,6 @@ export interface LauncherDeps {
 }
 
 export type SpawnFn = (plan: LaunchPlan) => Promise<{ exitCode: number | null }>;
-
-/** Per-provider usability, including a human-readable display name and (when unusable) a reason — powers the interactive provider picker. */
-export interface ProviderUsability {
-  readonly providerId: string;
-  readonly displayName: string;
-  readonly model: string;
-  readonly usable: boolean;
-  readonly reason?: string;
-}
 
 const DEFAULT_OUTPUT_RESERVE = 8192;
 const REPO_MAP_BUDGET_TOKENS = 1200;
@@ -133,33 +127,10 @@ export class Launcher {
     adapter: ProviderAdapter,
     metadata: ProviderAuthMetadata,
   ): Promise<{ usable: boolean; reason?: string }> {
-    // CLI-based providers (cli auth or cli-session) must have their CLI installed + authenticated.
-    if (metadata.cli.supported) {
-      try {
-        const installed = await this.deps.cliAuthManager.checkInstalled(adapter.profile.id);
-        if (installed === "not-installed") return { usable: false, reason: `${adapter.profile.id} CLI not installed` };
-        const status = await this.deps.cliAuthManager.checkAuthenticated(adapter.profile.id);
-        if (status !== "authenticated") return { usable: false, reason: `${adapter.profile.id} not authenticated` };
-      } catch {
-        return { usable: false, reason: `${adapter.profile.id} auth check failed` };
-      }
-      return { usable: true };
-    }
-    // API-key providers must have a stored, non-empty credential.
-    if (metadata.api.supported) {
-      const has = await this.deps.credentialManager.hasCredential(adapter.profile.id, "api-key");
-      if (!has) return { usable: false, reason: `${adapter.profile.id} has no stored API key` };
-      // Proxy-routed providers additionally need the proxy user key (unless an
-      // env var already provides it).
-      if (metadata.proxyUserKey?.supported) {
-        const hasProxy =
-          (await this.deps.credentialManager.hasCredential(adapter.profile.id, metadata.proxyUserKey.credentialName)) ||
-          !!process.env[metadata.proxyUserKey.envVar];
-        if (!hasProxy) return { usable: false, reason: `${adapter.profile.id} has no proxy user key` };
-      }
-      return { usable: true };
-    }
-    return { usable: false, reason: `${adapter.profile.id} declares no usable auth` };
+    return computeProviderUsability(adapter, metadata, {
+      cliAuthManager: this.deps.cliAuthManager,
+      credentialManager: this.deps.credentialManager,
+    });
   }
 
   /**
