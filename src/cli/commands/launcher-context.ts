@@ -26,6 +26,8 @@ import type { Prompt } from "../../auth/prompt.js";
 import { buildContext } from "./common.js";
 import { buildRepoMap, FileRepoMapCache } from "../../repo-map/repo-map.js";
 import { FilePruneStore } from "../../context/pruning.js";
+import { makeEnsureProxyReady } from "../../health/launch-guard.js";
+import { DEFAULT_OPTIONS, DEFAULT_POLICY, liveRuntime } from "../../health/adapters.js";
 import path from "node:path";
 
 export interface LauncherContext {
@@ -42,7 +44,7 @@ export interface LauncherContext {
   readonly dataDir: string;
 }
 
-export async function buildLauncherContext(options: { dataDir?: string; prompt: Prompt }): Promise<LauncherContext> {
+export async function buildLauncherContext(options: { dataDir?: string; prompt: Prompt; onDependencyProgress?: (line: string) => void }): Promise<LauncherContext> {
   const ctx = await buildContext({ prompt: options.prompt, dataDir: options.dataDir });
   const dataDir = options.dataDir ?? resolveDataDir();
 
@@ -75,6 +77,8 @@ export async function buildLauncherContext(options: { dataDir?: string; prompt: 
     memoryCoreReason: memoryResolution.reason,
     repoMapBuilder: (projectPath, query, budgetTokens) => buildRepoMap(projectPath, query, { budgetTokens }, repoMapCache),
     pruneStore: new FilePruneStore(dataDir),
+    ensureProxyReady: makeEnsureProxyReady({ runtime: liveRuntime, options: DEFAULT_OPTIONS, policy: DEFAULT_POLICY }),
+    ...(options.onDependencyProgress ? { onDependencyProgress: options.onDependencyProgress } : {}),
   };
 
   const handoffManager = new HandoffManager(sessionManager, providers);

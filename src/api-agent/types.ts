@@ -43,9 +43,28 @@ export class AgentLoopError extends Error {
   }
 }
 
+/**
+ * How a failed API call was classified — mirrors the distinctions the
+ * health layer already makes for local dependencies (checks.ts), applied
+ * here to CONTINUUM's own direct-API HTTP client (runner.ts). Only
+ * "dns" | "connection-refused" | "timeout" | "rate-limit" | "server-error"
+ * are ever retried; "tls" | "auth" | "http-error" are config/credential
+ * problems a retry cannot fix.
+ */
+export type NetworkFailureKind = "dns" | "connection-refused" | "timeout" | "tls" | "auth" | "rate-limit" | "server-error" | "http-error";
+
 export class ApiAgentError extends Error {
-  constructor(detail: string) {
+  readonly kind?: NetworkFailureKind;
+  /** `host:port` only — never the full URL with query/path that could carry incidental data. */
+  readonly host?: string;
+  readonly retryable: boolean;
+  readonly attempts?: number;
+  constructor(detail: string, opts?: { kind?: NetworkFailureKind; host?: string; retryable?: boolean; attempts?: number }) {
     super(detail);
     this.name = "ApiAgentError";
+    this.kind = opts?.kind;
+    this.host = opts?.host;
+    this.retryable = opts?.retryable ?? false;
+    this.attempts = opts?.attempts;
   }
 }

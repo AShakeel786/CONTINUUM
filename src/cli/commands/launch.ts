@@ -11,7 +11,7 @@
 
 import { createPrompt, noopOutput } from "../../auth/prompt.js";
 import { spawnCli } from "../../launcher/spawn.js";
-import { NoAuthenticatedAgentError, NoProjectError, ProviderNotAuthenticatedError } from "../../launcher/errors.js";
+import { LocalDependencyUnavailableError, NoAuthenticatedAgentError, NoProjectError, ProviderNotAuthenticatedError } from "../../launcher/errors.js";
 import { listRecentSessions } from "../../launcher/session-list.js";
 import { suggestHandoffOnPeakEvent } from "../../pricing/handoff-suggestion.js";
 import type { Launcher } from "../../launcher/launcher.js";
@@ -33,6 +33,7 @@ import { claudeProfile } from "../../providers/profiles/claude.js";
 import { codexProfile } from "../../providers/profiles/codex.js";
 import { buildToolRegistry } from "../../mcp/build.js";
 import { runApiAgent } from "../../api-agent/run.js";
+import { ApiAgentError } from "../../api-agent/types.js";
 import { join } from "node:path";
 import { resolveDataDir } from "../../config/paths.js";
 import { isStdinTty } from "./common.js";
@@ -108,6 +109,34 @@ async function recordNativeSessionAfterLaunch(launcher: Launcher, prep: LaunchPr
 }
 
 /**
+ * Final API-agent failure report — provider, endpoint, local-vs-external,
+ * exact classification, recovery attempts, and next actionable step. Built
+ * entirely from `ApiAgentError`'s own fields, which never carry secrets
+ * (auth headers/keys are never part of `.message`/`.host`).
+ */
+function formatApiAgentFailure(providerLabel: string, err: ApiAgentError): string {
+  const host = err.host ?? "unknown host";
+  const local = err.host ? /^(127\.0\.0\.1|localhost|\[?::1\]?)(:|$)/.test(err.host) : false;
+  const nextStep =
+    err.kind === "auth"
+      ? "Re-authenticate this provider and retry."
+      : err.kind === "tls"
+        ? "Check the provider's base URL/certificate configuration and retry."
+        : err.kind === "http-error"
+          ? "Check the provider configuration (base URL/model) and retry."
+          : local
+            ? "Check whether the local service is running (`continuum doctor`) and retry."
+            : "Check your network connection and retry.";
+  return (
+    `✗ ${providerLabel} API connection failed\n` +
+    `  endpoint: ${host} (${local ? "local" : "external"})\n` +
+    `  failure: ${err.kind ?? "unknown"}${err.attempts ? ` after ${err.attempts} attempt(s)` : ""}\n` +
+    `  ${err.message}\n` +
+    `  next: ${nextStep}\n`
+  );
+}
+
+/**
  * Carry a prepared launch: API providers run the generic CONTINUUM API agent;
  * CLI providers spawn their native binary (with native-session capture).
  */
@@ -126,6 +155,10 @@ export async function launchPrepared(ctx: { launcher: Launcher; providers: Provi
       if (result.finalContent) out(`\n${result.finalContent}\n`);
       return 0;
     } catch (err) {
+      if (err instanceof ApiAgentError) {
+        out(formatApiAgentFailure(adapter.profile.displayName, err));
+        return 1;
+      }
       out(`API agent error: ${err instanceof Error ? err.message : String(err)}\n`);
       return 1;
     }
@@ -152,7 +185,10 @@ export async function ensureMcpRegistration(): Promise<void> {
 export async function runLaunchCommand(args: readonly string[], io: CliIo): Promise<number> {
   const out = io.out ?? noopOutput();
   const prompt = createPrompt();
-  const { launcher, pricing, handoffManager, providers, sessionManager, dataDir } = await buildLauncherContext({ prompt });
+  const { launcher, pricing, handoffManager, providers, sessionManager, dataDir } = await buildLauncherContext({
+    prompt,
+    onDependencyProgress: (line) => out(`ℹ️  ${line}\n`),
+  });
 
   const projectKey = args.find((a) => !a.startsWith("-"));
   const providerId = opt(args, "--provider", "-p");
@@ -194,7 +230,7 @@ export async function runLaunchCommand(args: readonly string[], io: CliIo): Prom
     await ensureMcpRegistration();
     return launchPrepared({ launcher, providers, sessionManager, dataDir }, prep, out);
   } catch (err) {
-    if (err instanceof NoProjectError || err instanceof ProviderNotAuthenticatedError || err instanceof NoAuthenticatedAgentError) {
+    if (err instanceof NoProjectError || err instanceof ProviderNotAuthenticatedError || err instanceof NoAuthenticatedAgentError || err instanceof LocalDependencyUnavailableError) {
       out(`${err.message}\n`);
       return 2;
     }
@@ -210,7 +246,10 @@ export async function runResumeCommand(args: readonly string[], io: CliIo): Prom
   const recentN = Number(opt(args, "--recent") ?? "nan");
 
   const prompt = createPrompt();
-  const { launcher, sessionManager, providers, dataDir } = await buildLauncherContext({ prompt });
+  const { launcher, sessionManager, providers, dataDir } = await buildLauncherContext({
+    prompt,
+    onDependencyProgress: (line) => out(`ℹ️  ${line}\n`),
+  });
 
   let targetSessionId = sessionId;
   if (!targetSessionId && Number.isFinite(recentN)) {
@@ -235,7 +274,7 @@ export async function runResumeCommand(args: readonly string[], io: CliIo): Prom
     await ensureMcpRegistration();
     return launchPrepared({ launcher, providers, sessionManager, dataDir }, prep, out);
   } catch (err) {
-    if (err instanceof NoAuthenticatedAgentError || err instanceof ProviderNotAuthenticatedError) {
+    if (err instanceof NoAuthenticatedAgentError || err instanceof ProviderNotAuthenticatedError || err instanceof LocalDependencyUnavailableError) {
       out(`${err.message}\n`);
       return 2;
     }
@@ -251,7 +290,10 @@ export async function runHandoffCommand(args: readonly string[], io: CliIo): Pro
     return 2;
   }
   const prompt = createPrompt();
-  const { launcher, handoffManager, sessionManager, providers, dataDir } = await buildLauncherContext({ prompt });
+  const { launcher, handoffManager, sessionManager, providers, dataDir } = await buildLauncherContext({
+    prompt,
+    onDependencyProgress: (line) => out(`ℹ️  ${line}\n`),
+  });
 
   try {
     // Which *available authenticated* agents can take over — never auto-select.
@@ -278,7 +320,7 @@ export async function runHandoffCommand(args: readonly string[], io: CliIo): Pro
     await ensureMcpRegistration();
     return launchPrepared({ launcher, providers, sessionManager, dataDir }, prep, out);
   } catch (err) {
-    if (err instanceof NoAuthenticatedAgentError) {
+    if (err instanceof NoAuthenticatedAgentError || err instanceof LocalDependencyUnavailableError) {
       out(`${err.message}\n`);
       return 2;
     }

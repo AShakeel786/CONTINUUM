@@ -47,7 +47,8 @@ import { repoMapBlock } from "../repo-map/repo-map.js";
 import { applyReversiblePruning } from "../context/pruning.js";
 import type { ContextBlock } from "../context/types.js";
 import type { Prompt, PromptOutput } from "../auth/prompt.js";
-import { NoAuthenticatedAgentError, NoProjectError, ProviderNotAuthenticatedError } from "./errors.js";
+import { LocalDependencyUnavailableError, NoAuthenticatedAgentError, NoProjectError, ProviderNotAuthenticatedError } from "./errors.js";
+import type { ProxyReadiness } from "../health/launch-guard.js";
 import { computeProviderUsability, type ProviderUsability } from "./usability.js";
 import type { LaunchOptions, LaunchPlan, LaunchPreparation } from "./types.js";
 
@@ -72,6 +73,15 @@ export interface LauncherDeps {
   readonly repoMapBuilder?: (projectPath: string, query: string, budgetTokens: number) => Promise<import("../repo-map/repo-map.js").RepoMapResult>;
   /** Optional prune store (Token Efficiency Phase 4); when absent, pruning stays destructive. */
   readonly pruneStore?: import("../context/pruning.js").PruneStore;
+  /**
+   * Optional local-dependency readiness/self-heal gate for proxy-routed
+   * launches (the Tencent MemoryProxy — see health/launch-guard.ts). When
+   * absent, proxy-routed launches proceed unchecked (prior behavior) — this
+   * only tightens an existing gap, it never becomes a hard requirement.
+   */
+  readonly ensureProxyReady?: (proxyBaseUrl: string, onProgress?: (line: string) => void) => Promise<ProxyReadiness>;
+  /** Progress lines from `ensureProxyReady` (see above) — stateful, not raw retry spam. */
+  readonly onDependencyProgress?: (line: string) => void;
 }
 
 export type SpawnFn = (plan: LaunchPlan) => Promise<{ exitCode: number | null }>;
@@ -196,6 +206,20 @@ export class Launcher {
     if (!usable.usable) {
       if (metadata.cli.supported) throw new ProviderNotAuthenticatedError(providerId, usable.reason ?? "not authenticated");
       throw new ProviderNotAuthenticatedError(providerId, usable.reason ?? "no API key");
+    }
+
+    // Local-dependency readiness (Tencent MemoryProxy): a proxy-routed launch
+    // is doomed before it starts if the proxy isn't reachable — the provider
+    // CLI would spawn straight into its own uncontrolled connection-refused
+    // retry loop, which CONTINUUM can neither see nor stop. Check + bounded
+    // self-heal HERE, before any session is created or mutated below, so a
+    // failure never disturbs existing session/handoff state and a retry
+    // after fixing the dependency resumes cleanly.
+    if (adapter.profile.cliLaunch.kind === "proxy-routed" && this.deps.ensureProxyReady) {
+      const readiness = await this.deps.ensureProxyReady(adapter.profile.cliLaunch.proxyBaseUrl, this.deps.onDependencyProgress);
+      if (!readiness.ready) {
+        throw new LocalDependencyUnavailableError(providerId, adapter.profile.cliLaunch.proxyBaseUrl, sessionMode, readiness.detail, readiness.repairAttempted);
+      }
     }
 
     const model = adapter.resolveModel(project.defaultModel);

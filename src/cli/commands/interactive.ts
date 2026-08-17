@@ -21,7 +21,7 @@ import { ProjectAlreadyExistsError, ProjectNotFoundError } from "../../registry/
 import { compareTimestampsDesc, formatSessionPickerLine, listRecentSessions, type RecentSessionSummary } from "../../launcher/session-list.js";
 import type { ProviderUsability } from "../../launcher/launcher.js";
 import type { LaunchPreparation } from "../../launcher/types.js";
-import { NoAuthenticatedAgentError, NoProjectError, ProviderNotAuthenticatedError } from "../../launcher/errors.js";
+import { LocalDependencyUnavailableError, NoAuthenticatedAgentError, NoProjectError, ProviderNotAuthenticatedError } from "../../launcher/errors.js";
 import { AgentManager, AgentValidationError } from "../../agents/index.js";
 import type { AgentAuthFacts, AgentDescriptor } from "../../agents/index.js";
 import type { ProviderAuthMethod } from "../../config/types.js";
@@ -534,7 +534,7 @@ export async function runInteractiveCommand(args: readonly string[], io: CliIo):
     return 2;
   }
   const prompt = createPrompt();
-  let ctx = await buildLauncherContext({ prompt });
+  let ctx = await buildLauncherContext({ prompt, onDependencyProgress: (line) => out(`ℹ️  ${line}\n`) });
 
   const agentManager = new AgentManager({
     dataDir: ctx.dataDir,
@@ -556,7 +556,7 @@ export async function runInteractiveCommand(args: readonly string[], io: CliIo):
   // Rebuild the launcher context so any agent added/removed/configured during
   // this session is reflected in the launch graph (the launcher was built at
   // startup, before the menu mutated the provider graph).
-  ctx = await buildLauncherContext({ prompt });
+  ctx = await buildLauncherContext({ prompt, onDependencyProgress: (line) => out(`ℹ️  ${line}\n`) });
 
   try {
     for (const warning of await runLaunchPreflight()) out(`⚠️  ${warning}\n`);
@@ -591,7 +591,7 @@ export async function runInteractiveCommand(args: readonly string[], io: CliIo):
       out,
     );
   } catch (err) {
-    if (err instanceof NoProjectError || err instanceof ProviderNotAuthenticatedError || err instanceof NoAuthenticatedAgentError) {
+    if (err instanceof NoProjectError || err instanceof ProviderNotAuthenticatedError || err instanceof NoAuthenticatedAgentError || err instanceof LocalDependencyUnavailableError) {
       out(`${err.message}\n`);
       return 2;
     }

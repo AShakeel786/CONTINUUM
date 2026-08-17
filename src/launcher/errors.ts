@@ -51,3 +51,37 @@ export class NoProjectError extends LaunchError {
     this.name = "NoProjectError";
   }
 }
+
+/**
+ * A proxy-routed provider's local dependency (the Tencent MemoryProxy) is
+ * unreachable even after CONTINUUM's own bounded self-heal attempt — thrown
+ * BEFORE any session is created or mutated (see Launcher.prepareLaunch), so
+ * a retry after fixing the dependency always resumes cleanly. `detail` is
+ * built entirely from HealthCheckResult/RepairOutcome text, which is
+ * documented as always safe to print (no secrets).
+ */
+export class LocalDependencyUnavailableError extends LaunchError {
+  readonly providerId: string;
+  readonly endpoint: string;
+  readonly sessionMode: string;
+  constructor(providerId: string, endpoint: string, sessionMode: string, detail: string, repairAttempted: boolean) {
+    const host = (() => {
+      try {
+        const u = new URL(endpoint);
+        return u.port ? `${u.hostname}:${u.port}` : u.hostname;
+      } catch {
+        return endpoint;
+      }
+    })();
+    super(
+      "local-dependency-unavailable",
+      `Provider "${providerId}" (${sessionMode} session) requires a local service at ${host} (local, not external) that is still unavailable` +
+        `${repairAttempted ? " after an automatic recovery attempt" : ""}: ${detail}\n` +
+        `Next step: run \`continuum doctor --repair\` for a detailed report, or start the Tencent memory stack manually, then retry the launch.`,
+    );
+    this.name = "LocalDependencyUnavailableError";
+    this.providerId = providerId;
+    this.endpoint = endpoint;
+    this.sessionMode = sessionMode;
+  }
+}

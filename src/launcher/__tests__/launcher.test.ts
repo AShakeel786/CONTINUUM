@@ -17,7 +17,8 @@ import { SessionManager } from "../../session/manager.js";
 import { FileSessionStore } from "../../session/store.js";
 import { createDefaultProviderAuthMetadata } from "../../auth/provider-auth/index.js";
 import { createScriptedPrompt } from "../../auth/prompt.js";
-import { ProviderNotAuthenticatedError, NoAuthenticatedAgentError, NoProjectError } from "../errors.js";
+import { ProviderNotAuthenticatedError, NoAuthenticatedAgentError, NoProjectError, LocalDependencyUnavailableError } from "../errors.js";
+import { HandoffManager } from "../../handoff/manager.js";
 import type { LauncherDeps } from "../launcher.js";
 import type { CliAuthAdapter, CredentialBackend } from "../../auth/types.js";
 
@@ -72,6 +73,8 @@ async function buildDeps(opts: {
   withMemoryCore?: boolean;
   dataDir?: string;
   sessionDir?: string;
+  ensureProxyReady?: LauncherDeps["ensureProxyReady"];
+  onDependencyProgress?: LauncherDeps["onDependencyProgress"];
 } = {}): Promise<{ deps: LauncherDeps; backend: FakeBackend; registry: ProjectRegistry; sessions: FileSessionStore }> {
   const dataDir = opts.dataDir ?? tmp();
   const sessionDir = opts.sessionDir ?? tmp();
@@ -116,6 +119,8 @@ async function buildDeps(opts: {
     sessionManager,
     prompt: createScriptedPrompt({}),
     sessionBaseDir: sessionDir,
+    ...(opts.ensureProxyReady ? { ensureProxyReady: opts.ensureProxyReady } : {}),
+    ...(opts.onDependencyProgress ? { onDependencyProgress: opts.onDependencyProgress } : {}),
   };
   if (opts.withMemoryCore) {
     deps.memoryCore = {
@@ -299,5 +304,123 @@ describe("Launcher — handoff target choice", () => {
     const ids = available.map((a) => a.providerId);
     expect(ids).toContain("claude"); // cli authenticated
     expect(ids).toContain("deepseek"); // api key present
+  });
+});
+
+// ── Local-dependency readiness gate (root cause: ConnectionRefused / retry-loop) ──
+//
+// DeepSeek is CONTINUUM's one proxy-routed provider (Tencent MemoryProxy).
+// These tests prove: the gate only engages for proxy-routed providers, it
+// runs before any session state is touched (so a block never loses task or
+// handoff state), a ready proxy is a no-op, and project/general/current-
+// directory launch behavior for the unaffected (non-proxy) case is unchanged.
+
+describe("Launcher — proxy readiness gate (DeepSeek)", () => {
+  it("blocks a fresh DeepSeek launch when ensureProxyReady reports not-ready, before creating any session", async () => {
+    const ensureProxyReady = async () => ({ ready: false, detail: "proxy unreachable (127.0.0.1:8096) — no automatic repair available", repairAttempted: true });
+    const { deps, sessions } = await buildDeps({ ensureProxyReady });
+    const launcher = new Launcher(deps);
+
+    await expect(
+      launcher.prepareLaunch({ mode: "general", cwd: tmp(), providerId: "deepseek", taskGoal: "explore" }, { permissionMode: "safe" }),
+    ).rejects.toThrow(LocalDependencyUnavailableError);
+
+    // No session was ever created — nothing to lose, retry after fixing the
+    // proxy starts completely clean.
+    expect(await sessions.listSessionIds()).toEqual([]);
+  });
+
+  it("never even calls ensureProxyReady for Claude (cli-session auth, not proxy-routed)", async () => {
+    let called = false;
+    const ensureProxyReady = async () => {
+      called = true;
+      return { ready: true, detail: "", repairAttempted: false };
+    };
+    const { deps } = await buildDeps({ ensureProxyReady });
+    const launcher = new Launcher(deps);
+    const prep = await launcher.prepareLaunch({ mode: "general", cwd: tmp(), providerId: "claude", taskGoal: "explore" }, { permissionMode: "safe" });
+
+    expect(prep.session).toBeDefined();
+    expect(called).toBe(false);
+  });
+
+  it("proceeds normally (no error, no visible delay) when ensureProxyReady reports ready", async () => {
+    const ensureProxyReady = async () => ({ ready: true, detail: "proxy healthy", repairAttempted: false });
+    const { deps } = await buildDeps({ ensureProxyReady });
+    const launcher = new Launcher(deps);
+    const prep = await launcher.prepareLaunch({ mode: "general", cwd: tmp(), providerId: "deepseek", taskGoal: "explore" }, { permissionMode: "safe" });
+    expect(prep.session).toBeDefined();
+    expect(prep.providerRef.providerId).toBe("deepseek");
+  });
+
+  it("surfaces onDependencyProgress lines from ensureProxyReady (stateful UX, not raw retry spam)", async () => {
+    const progress: string[] = [];
+    const ensureProxyReady = async (_url: string, onProgress?: (line: string) => void) => {
+      onProgress?.("Proxy unavailable at 127.0.0.1:8096 — checking service…");
+      onProgress?.("Recovered in 1.2s — resuming session.");
+      return { ready: true, detail: "proxy recovered", repairAttempted: true };
+    };
+    const { deps } = await buildDeps({ ensureProxyReady, onDependencyProgress: (line) => progress.push(line) });
+    const launcher = new Launcher(deps);
+    await launcher.prepareLaunch({ mode: "general", cwd: tmp(), providerId: "deepseek", taskGoal: "explore" }, { permissionMode: "safe" });
+    expect(progress).toEqual(["Proxy unavailable at 127.0.0.1:8096 — checking service…", "Recovered in 1.2s — resuming session."]);
+  });
+
+  it("blocks a resume when the proxy is down without mutating the existing session (session survives a transient outage)", async () => {
+    // First, launch successfully while the proxy is healthy.
+    const readyState = { ready: true };
+    const ensureProxyReady = async () => ({ ready: readyState.ready, detail: readyState.ready ? "healthy" : "proxy down", repairAttempted: false });
+    const { deps } = await buildDeps({ ensureProxyReady });
+    const launcher = new Launcher(deps);
+    const first = await launcher.prepareLaunch({ mode: "general", cwd: tmp(), providerId: "deepseek", taskGoal: "explore" }, { permissionMode: "safe" });
+    const sessionId = first.session!.sessionId;
+    const before = await deps.sessionManager.loadSession(sessionId);
+
+    // Proxy goes down; resuming the SAME session must fail without touching it.
+    readyState.ready = false;
+    await expect(launcher.prepareLaunch({ sessionId }, { permissionMode: "safe" })).rejects.toThrow(LocalDependencyUnavailableError);
+
+    const after = await deps.sessionManager.loadSession(sessionId);
+    expect(after.revision).toBe(before.revision);
+    expect(after.taskGoal).toBe(before.taskGoal);
+    expect(after.status).toBe(before.status);
+
+    // Proxy recovers; the exact same session resumes cleanly — nothing lost.
+    readyState.ready = true;
+    const resumed = await launcher.prepareLaunch({ sessionId }, { permissionMode: "safe" });
+    expect(resumed.session!.sessionId).toBe(sessionId);
+  });
+
+  it("handoff survives a transient outage: a blocked handoff-to-DeepSeek keeps the recorded handoff and stays resumable", async () => {
+    const readyState = { ready: true };
+    const ensureProxyReady = async () => ({ ready: readyState.ready, detail: readyState.ready ? "healthy" : "proxy down", repairAttempted: false });
+    const { deps } = await buildDeps({ ensureProxyReady, authenticated: { claude: true } });
+    const launcher = new Launcher(deps);
+    const handoffManager = new HandoffManager(deps.sessionManager, deps.providers);
+
+    // Start on Claude.
+    const first = await launcher.prepareLaunch({ mode: "general", cwd: tmp(), providerId: "claude", taskGoal: "explore" }, { permissionMode: "safe" });
+    const sessionId = first.session!.sessionId;
+
+    // Proxy is down when the handoff to DeepSeek is attempted — mirrors
+    // runHandoffCommand's real sequence: finalizeHandoff commits first, then
+    // prepareLaunch is what actually gates on proxy readiness.
+    readyState.ready = false;
+    await handoffManager.finalizeHandoff(sessionId, "deepseek", { tokenLimits: { contextWindow: 100_000, reservedOutput: 4096 } });
+    await expect(launcher.prepareLaunch({ sessionId, providerId: "deepseek" }, { permissionMode: "safe" })).rejects.toThrow(LocalDependencyUnavailableError);
+
+    // The handoff record and provider switch are NOT lost — that's durable,
+    // intentional state (finalizeHandoff already committed it). What matters
+    // for "survives the outage" is that nothing is corrupted and a retry
+    // after the proxy recovers resumes the exact same session cleanly.
+    const midOutage = await deps.sessionManager.loadSession(sessionId);
+    expect(midOutage.activeProvider.providerId).toBe("deepseek");
+    expect(midOutage.lastHandoff?.toProvider.providerId).toBe("deepseek");
+
+    readyState.ready = true;
+    const resumed = await launcher.prepareLaunch({ sessionId }, { permissionMode: "safe" });
+    expect(resumed.session!.sessionId).toBe(sessionId);
+    expect(resumed.session!.activeProvider.providerId).toBe("deepseek");
+    expect(resumed.session!.lastHandoff?.toProvider.providerId).toBe("deepseek");
   });
 });
