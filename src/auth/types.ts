@@ -61,6 +61,21 @@ export interface ApiAuthUnsupported {
 }
 export type ApiAuthDescriptor = ApiAuthCapability | ApiAuthUnsupported;
 
+/**
+ * Environment isolation for a CLI's install/auth *checks*. Some native CLIs
+ * (Claude Code) read their auth state from a config dir that the ambient
+ * process env can point elsewhere (e.g. a proxy session sets
+ * `CLAUDE_CONFIG_DIR`/`ANTHROPIC_*`/`CLAUDE_CODE_SIMPLE`). Without isolation,
+ * a status command run against that ambient env reports the *proxy* state, so
+ * a genuinely authenticated native CLI is misreported as "not authenticated".
+ */
+export interface CliAuthCheckEnv {
+  /** Bare config-dir name (e.g. `.claude-anthropic`) to resolve and set as `CLAUDE_CONFIG_DIR` for the check. */
+  readonly configDirName?: string;
+  /** Env vars to unset for the check so ambient proxy/session vars can't hijack it. */
+  readonly clearEnvVars?: readonly string[];
+}
+
 export interface CliAuthCapability {
   readonly supported: true;
   readonly executable: string;
@@ -68,6 +83,7 @@ export interface CliAuthCapability {
   readonly statusArgs?: readonly string[];
   readonly loginArgs: readonly string[];
   readonly logoutArgs?: readonly string[];
+  readonly authEnv?: CliAuthCheckEnv;
 }
 export interface CliAuthUnsupported {
   readonly supported: false;

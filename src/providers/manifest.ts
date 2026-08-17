@@ -22,7 +22,7 @@ import type {
   ProviderProfile,
 } from "./types.js";
 import { secretRef } from "./secrets.js";
-import type { CliAuthCapability, ProviderAuthMetadata } from "../auth/types.js";
+import type { CliAuthCapability, CliAuthCheckEnv, ProviderAuthMetadata } from "../auth/types.js";
 
 export const MANIFEST_SCHEMA_VERSION = 1;
 
@@ -233,6 +233,19 @@ function envOwns(m: ProviderManifest): readonly string[] {
   return [...owns];
 }
 
+/**
+ * Auth-check isolation for native Claude-family CLIs that read their login from
+ * a `CLAUDE_CONFIG_DIR`. Only a *native* CLI with a declared `configDirName`
+ * gets this — proxy-routed providers (DeepSeek) and config-dir-less CLIs
+ * (Codex) keep the ambient env, which is their correct behavior.
+ */
+function toCliAuthCheckEnv(m: ProviderManifest): CliAuthCheckEnv | undefined {
+  const launch = m.cliLaunch;
+  if (!launch || launch.kind !== "native" || !launch.configDirName) return undefined;
+  const clearEnvVars = [...new Set([...(launch.clearEnvVars ?? []), "CLAUDE_CODE_SIMPLE"])];
+  return { configDirName: launch.configDirName, clearEnvVars };
+}
+
 /** Convert a validated manifest into `ProviderAuthMetadata`. */
 export function manifestToAuthMetadata(m: ProviderManifest): ProviderAuthMetadata {
   const api =
@@ -240,6 +253,7 @@ export function manifestToAuthMetadata(m: ProviderManifest): ProviderAuthMetadat
       ? { supported: true as const, envVar: m.auth.envVar! }
       : { supported: false as const };
 
+  const authEnv = toCliAuthCheckEnv(m);
   const cli: ProviderAuthMetadata["cli"] = m.cli
     ? {
         supported: true,
@@ -248,6 +262,7 @@ export function manifestToAuthMetadata(m: ProviderManifest): ProviderAuthMetadat
         ...(m.cli.statusArgs ? { statusArgs: m.cli.statusArgs } : {}),
         loginArgs: m.cli.loginArgs,
         ...(m.cli.logoutArgs ? { logoutArgs: m.cli.logoutArgs } : {}),
+        ...(authEnv ? { authEnv } : {}),
       }
     : { supported: false };
 
@@ -264,6 +279,7 @@ export function manifestToAuthMetadata(m: ProviderManifest): ProviderAuthMetadat
 /** Convert a validated manifest into a `CliAuthCapability` (undefined when no CLI auth). */
 export function manifestToCliAuthCapability(m: ProviderManifest): CliAuthCapability | undefined {
   if (!m.cli) return undefined;
+  const authEnv = toCliAuthCheckEnv(m);
   return {
     supported: true,
     executable: m.cli.executable,
@@ -271,5 +287,6 @@ export function manifestToCliAuthCapability(m: ProviderManifest): CliAuthCapabil
     ...(m.cli.statusArgs ? { statusArgs: m.cli.statusArgs } : {}),
     loginArgs: m.cli.loginArgs,
     ...(m.cli.logoutArgs ? { logoutArgs: m.cli.logoutArgs } : {}),
+    ...(authEnv ? { authEnv } : {}),
   };
 }
