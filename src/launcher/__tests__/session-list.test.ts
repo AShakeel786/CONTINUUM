@@ -67,6 +67,8 @@ describe("formatSessionPickerLine", () => {
   const summary = {
     sessionId: "s1",
     projectId: "p",
+    mode: "project" as const,
+    workingDirectory: "/w",
     providerId: "deepseek",
     taskGoal: "NisfDeen RLS Batch 4 audit",
     status: "active",
@@ -89,6 +91,23 @@ describe("formatSessionPickerLine", () => {
     const line = formatSessionPickerLine(long, { isNewest: true, now, width: 60 });
     expect(line.split("\n")[0]!.length).toBeLessThanOrEqual(60);
     expect(line).toContain("…");
+  });
+
+  it("leaves a project-mode session's picker line unchanged (no workspace suffix)", () => {
+    const line = formatSessionPickerLine(summary, { isNewest: true, now, width: 80 });
+    expect(line).toMatch(/^★ \[deepseek\] NisfDeen RLS Batch 4 audit\nLast active: \d{1,2}:\d{2} [AP]M$/);
+  });
+
+  it("labels a general session, so an untitled goal is never unidentifiable", () => {
+    const general = { ...summary, mode: "general" as const, taskGoal: "(untitled)" };
+    const line = formatSessionPickerLine(general, { isNewest: true, now, width: 80 });
+    expect(line).toContain("general session (no project)");
+  });
+
+  it("shows the working directory for a current-directory session", () => {
+    const currentDir = { ...summary, mode: "current-directory" as const, workingDirectory: "/Users/home/some/repo" };
+    const line = formatSessionPickerLine(currentDir, { isNewest: true, now, width: 80 });
+    expect(line).toContain("/Users/home/some/repo");
   });
 });
 
@@ -122,5 +141,34 @@ describe("listRecentSessions", () => {
     const recent = await listRecentSessions(manager, 10);
     expect(Number.isNaN(new Date(recent[0]!.updatedAt).getTime())).toBe(false);
     expect(recent[0]!.updatedAt).not.toBe("1970-01-01T00:00:00.000Z");
+  });
+
+  it("defaults a legacy session (predating `mode`) to mode='project' and surfaces it in the summary", async () => {
+    const store = new FileSessionStore(tmp());
+    const manager = new SessionManager(store);
+    // makeSession's fixture never sets `mode` — reproduces an on-disk file
+    // written before the field existed.
+    await store.save(makeSession({ sessionId: "legacy-mode" }));
+
+    const recent = await listRecentSessions(manager, 10);
+    expect(recent[0]!.mode).toBe("project");
+    expect(recent[0]!.projectId).toBe("p");
+  });
+
+  it("round-trips a general session's mode and workingDirectory with no projectId", async () => {
+    const store = new FileSessionStore(tmp());
+    const manager = new SessionManager(store);
+    await manager.createSession({
+      sessionId: "gen-1",
+      mode: "general",
+      workingDirectory: "/wherever",
+      activeProvider: { providerId: "claude", model: "m" },
+      taskGoal: "explore",
+    });
+
+    const recent = await listRecentSessions(manager, 10);
+    expect(recent[0]!.mode).toBe("general");
+    expect(recent[0]!.workingDirectory).toBe("/wherever");
+    expect(recent[0]!.projectId).toBeUndefined();
   });
 });

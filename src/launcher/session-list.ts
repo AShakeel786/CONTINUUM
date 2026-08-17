@@ -6,11 +6,14 @@
  */
 
 import type { SessionManager } from "../session/manager.js";
-import type { TaskSession } from "../session/types.js";
+import type { SessionMode, TaskSession } from "../session/types.js";
 
 export interface RecentSessionSummary {
   readonly sessionId: string;
-  readonly projectId: string;
+  /** Set only for `mode === "project"`. */
+  readonly projectId?: string;
+  readonly mode: SessionMode;
+  readonly workingDirectory: string;
   readonly providerId: string;
   readonly taskGoal: string;
   readonly status: string;
@@ -66,7 +69,9 @@ export function compareTimestampsDesc(a: string, b: string): number {
 function summarize(s: TaskSession, updatedAt: string): RecentSessionSummary {
   return {
     sessionId: s.sessionId,
-    projectId: s.projectId,
+    ...(s.projectId ? { projectId: s.projectId } : {}),
+    mode: s.mode,
+    workingDirectory: s.workingDirectory,
     providerId: s.activeProvider.providerId,
     taskGoal: s.taskGoal,
     status: s.status,
@@ -119,7 +124,19 @@ export function formatSessionPickerLine(
   const goalMax = Math.max(16, width - reserved);
   const goal = s.taskGoal.length > goalMax ? `${s.taskGoal.slice(0, goalMax - 1)}…` : s.taskGoal;
   const time = formatSessionTime(s.updatedAt, now);
-  return `${marker}${provider} ${goal}\nLast active: ${time}`;
+  return `${marker}${provider} ${goal}\nLast active: ${time}${workspaceSuffix(s)}`;
+}
+
+/**
+ * Extra workspace context appended to the picker's second line so a
+ * general/current-directory session never reads as an unlabeled
+ * `(untitled)` entry. Project-mode sessions are unchanged (empty suffix) —
+ * their picker line stays exactly as before this field existed.
+ */
+function workspaceSuffix(s: RecentSessionSummary): string {
+  if (s.mode === "general") return " · general session (no project)";
+  if (s.mode === "current-directory") return ` · ${s.workingDirectory}`;
+  return "";
 }
 
 /**

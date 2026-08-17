@@ -140,6 +140,57 @@ describe("MCP session/project tools", () => {
     expect((res.result as { isError?: boolean }).isError).toBe(true);
   });
 
+  it("session_state for a general-mode (no-project) session surfaces mode/workingDirectory and never leaks a project id", async () => {
+    const dataDir = tmp();
+    const registry = await buildToolRegistry({ dataDir, memoryProvider: async () => undefined });
+    const projects = new ProjectRegistry(new ProjectRegistryStore(dataDir));
+    const sessionManager = new SessionManager(new FileSessionStore(join(dataDir, "sessions")));
+    await sessionManager.createSession({
+      sessionId: "sess-general",
+      mode: "general",
+      workingDirectory: "/wherever",
+      activeProvider: { providerId: "claude", model: "claude-sonnet-5" },
+      taskGoal: "explore an idea",
+    });
+
+    const res = await handleRequest(
+      { jsonrpc: "2.0", id: 11, method: "tools/call", params: { name: "session_state", arguments: { sessionId: "sess-general" } } },
+      { name: "x", version: "1", registry },
+    );
+    const result = (res.result as { content: Array<{ text: string }> }).content[0]!.text;
+    expect(result).toContain('"mode":"general"');
+    expect(result).toContain("/wherever");
+    expect(result).not.toContain("projectId");
+    expect(result).not.toContain("__continuum-general__");
+    // A general-mode session must never register a project.
+    expect(await projects.list()).toHaveLength(0);
+  });
+
+  it("session_recent surfaces mode/workingDirectory for a current-directory session with no projectId", async () => {
+    const dataDir = tmp();
+    const registry = await buildToolRegistry({ dataDir, memoryProvider: async () => undefined });
+    const projects = new ProjectRegistry(new ProjectRegistryStore(dataDir));
+    const sessionManager = new SessionManager(new FileSessionStore(join(dataDir, "sessions")));
+    await sessionManager.createSession({
+      sessionId: "sess-curdir",
+      mode: "current-directory",
+      workingDirectory: "/repo/here",
+      activeProvider: { providerId: "claude", model: "claude-sonnet-5" },
+      taskGoal: "quick fix",
+    });
+
+    const res = await handleRequest(
+      { jsonrpc: "2.0", id: 12, method: "tools/call", params: { name: "session_recent", arguments: {} } },
+      { name: "x", version: "1", registry },
+    );
+    const result = (res.result as { content: Array<{ text: string }> }).content[0]!.text;
+    expect(result).toContain('"mode":"current-directory"');
+    expect(result).toContain("/repo/here");
+    expect(result).not.toContain("__continuum-current-directory__");
+    // Current-directory sessions are never registered as a project either.
+    expect(await projects.list()).toHaveLength(0);
+  });
+
   it("project_list does not include any credential/secret field", async () => {
     const dataDir = tmp();
     const projects = new ProjectRegistry(new ProjectRegistryStore(dataDir));

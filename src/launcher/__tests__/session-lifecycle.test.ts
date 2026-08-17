@@ -13,6 +13,7 @@ function makeSession(partial: Partial<TaskSession>): TaskSession {
     sessionId: "s1",
     revision: 1,
     projectId: "p",
+    mode: "project",
     workingDirectory: "/w",
     activeProvider: { providerId: "codex", model: "m" },
     taskGoal: "fix it",

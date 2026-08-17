@@ -18,6 +18,16 @@ export const SESSION_SCHEMA_VERSION = 1;
 
 export type SessionStatus = "active" | "paused" | "handoff-pending" | "completed" | "abandoned";
 
+/**
+ * How this session is anchored:
+ *  - "project"          → tied to a registered `ProjectRecord` (`projectId` set).
+ *  - "general"           → no project, no fixed directory anchor (Tencent-style
+ *    "no project" mode); `workingDirectory` is just where the launch happened.
+ *  - "current-directory" → anchored to the launch cwd like a project (repo
+ *    map/git fingerprint still apply), but never registered in ProjectRegistry.
+ */
+export type SessionMode = "project" | "general" | "current-directory";
+
 export interface ProviderRef {
   readonly providerId: string;
   readonly model: string;
@@ -92,7 +102,9 @@ export interface TaskSession {
    */
   readonly revision: number;
 
-  readonly projectId: string;
+  /** Set only for `mode === "project"` — absent for general/current-directory sessions. */
+  readonly projectId?: string;
+  readonly mode: SessionMode;
   readonly workingDirectory: string;
   readonly activeProvider: ProviderRef;
   readonly taskGoal: string;
@@ -128,7 +140,10 @@ export interface TaskSession {
 
 export interface CreateSessionInput {
   readonly sessionId: string;
-  readonly projectId: string;
+  /** Set only for `mode === "project"` (or omitted `mode`, which defaults to "project"). */
+  readonly projectId?: string;
+  /** Defaults to "project" when omitted, for backward compatibility with existing callers. */
+  readonly mode?: SessionMode;
   readonly workingDirectory: string;
   readonly activeProvider: ProviderRef;
   readonly taskGoal: string;

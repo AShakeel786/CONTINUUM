@@ -21,13 +21,17 @@ export interface SaveOptions {
   readonly expectedRevision?: number;
 }
 
-/** Identity migration for the only schema version that exists so far — the extension point future versions hook into. */
+/**
+ * Identity migration for schema version, plus a field-level backfill: sessions
+ * persisted before `mode` existed always had a `projectId` and were
+ * implicitly project-anchored, so a missing `mode` defaults to "project".
+ */
 function migrate(session: TaskSession): TaskSession {
   if (session.schemaVersion > SESSION_SCHEMA_VERSION) {
     throw new UnsupportedSchemaVersionError(session.schemaVersion, SESSION_SCHEMA_VERSION);
   }
-  // session.schemaVersion === SESSION_SCHEMA_VERSION (1): no migration needed yet.
-  return session;
+  if (session.mode) return session;
+  return { ...session, mode: "project" };
 }
 
 export class FileSessionStore {

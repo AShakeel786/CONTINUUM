@@ -67,6 +67,8 @@ export function buildSessionTools(deps: SessionToolDeps): RegisteredTool[] {
           return jsonResult({
             sessionId: s.sessionId,
             projectId: s.projectId,
+            mode: s.mode,
+            workingDirectory: s.workingDirectory,
             status: s.status,
             provider: s.activeProvider.providerId,
             model: s.activeProvider.model,
@@ -96,7 +98,7 @@ export function buildSessionTools(deps: SessionToolDeps): RegisteredTool[] {
       handler: async (args) => {
         const limit = typeof args.limit === "number" ? args.limit : 20;
         const sessions = await listRecentSessions(sessionManager, limit);
-        return jsonResult(sessions.map((s) => ({ sessionId: s.sessionId, projectId: s.projectId, provider: s.providerId, status: s.status, goal: s.taskGoal.slice(0, 80) })));
+        return jsonResult(sessions.map((s) => ({ sessionId: s.sessionId, projectId: s.projectId, mode: s.mode, workingDirectory: s.workingDirectory, provider: s.providerId, status: s.status, goal: s.taskGoal.slice(0, 80) })));
       },
     },
     {

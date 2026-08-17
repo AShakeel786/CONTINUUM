@@ -23,6 +23,7 @@ function fixtureSession(overrides: Partial<TaskSession> = {}): TaskSession {
     sessionId: "sess-1",
     revision: 1,
     projectId: "proj-1",
+    mode: "project",
     workingDirectory: "C:\\fake\\project",
     activeProvider: { providerId: "claude", model: "claude-sonnet-5" },
     taskGoal: "Fix the bug",
@@ -116,6 +117,16 @@ describe("FileSessionStore — save/load", () => {
     const store = new FileSessionStore(await makeTmpDir());
     await store.save(fixtureSession({ schemaVersion: SESSION_SCHEMA_VERSION + 1 }));
     await expect(store.load("sess-1")).rejects.toThrow(UnsupportedSchemaVersionError);
+  });
+
+  it("backfills mode='project' on load for a session file written before `mode` existed", async () => {
+    const store = new FileSessionStore(await makeTmpDir());
+    const legacy = fixtureSession() as unknown as Record<string, unknown>;
+    delete legacy.mode; // simulate an on-disk file predating the `mode` field
+    await store.save(legacy as unknown as TaskSession);
+    const loaded = await store.load("sess-1");
+    expect(loaded.mode).toBe("project");
+    expect(loaded.projectId).toBe("proj-1");
   });
 
   it("listSessionIds returns an empty array for a directory that doesn't exist yet, not an error", async () => {

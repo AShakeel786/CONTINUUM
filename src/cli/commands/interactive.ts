@@ -41,7 +41,15 @@ export interface InteractiveMenuDeps {
 }
 
 export type InteractiveDecision =
-  | { readonly kind: "new"; readonly projectId: string; readonly providerId: string; readonly taskGoal: string }
+  | {
+      readonly kind: "new";
+      /** Set only when a registered project was chosen; mutually exclusive with `mode`. */
+      readonly projectId?: string;
+      /** Set only for a no-project launch ("General" or "Current directory"); mutually exclusive with `projectId`. */
+      readonly mode?: "general" | "current-directory";
+      readonly providerId: string;
+      readonly taskGoal: string;
+    }
   | { readonly kind: "resume"; readonly sessionId: string }
   | { readonly kind: "exit" };
 
@@ -129,16 +137,29 @@ export async function runInteractiveMenu(
   }
 }
 
-/** Main menu → "Start new task": project → agent → goal. */
+const WORKSPACE_GENERAL_LABEL = "General / No Project";
+const WORKSPACE_CURRENT_DIR_LABEL = "Current Directory";
+
+/** Main menu → "Start new task": workspace (project / general / current directory) → agent → goal. */
 async function startNewTaskFlow(deps: InteractiveMenuDeps, prompt: Prompt, out: PromptOutput): Promise<MenuResult> {
   const projects = await deps.projects.list();
-  if (projects.length === 0) {
-    out("\nNo projects yet. Use 'Manage projects' to add one.\n");
-    return "back";
+  const workspaceLabels = [
+    WORKSPACE_GENERAL_LABEL,
+    `${WORKSPACE_CURRENT_DIR_LABEL}\n(${deps.cwd})`,
+    ...projects.map((p) => p.name),
+  ];
+  const workspaceIdx = await chooseNumber(prompt, out, "Choose workspace:", workspaceLabels, "Back");
+  if (workspaceIdx === undefined) return "back";
+
+  let projectId: string | undefined;
+  let mode: "general" | "current-directory" | undefined;
+  if (workspaceIdx === 0) {
+    mode = "general";
+  } else if (workspaceIdx === 1) {
+    mode = "current-directory";
+  } else {
+    projectId = projects[workspaceIdx - 2]!.id;
   }
-  const projectIdx = await chooseNumber(prompt, out, "Choose project:", projects.map((p) => p.name), "Back");
-  if (projectIdx === undefined) return "back";
-  const project = projects[projectIdx]!;
 
   const all = await deps.agentManager.listUsable();
   const usable = all.filter((u) => u.usable);
@@ -152,7 +173,13 @@ async function startNewTaskFlow(deps: InteractiveMenuDeps, prompt: Prompt, out: 
   const agentIdx = await chooseNumber(prompt, out, "Choose agent:", usable.map((p) => p.displayName), "Back");
   if (agentIdx === undefined) return "back";
   const taskGoal = await prompt.ask("Task goal (optional)", "");
-  return { kind: "new", projectId: project.id, providerId: usable[agentIdx]!.providerId, taskGoal };
+  return {
+    kind: "new",
+    ...(projectId ? { projectId } : {}),
+    ...(mode ? { mode } : {}),
+    providerId: usable[agentIdx]!.providerId,
+    taskGoal,
+  };
 }
 
 /** Main menu → "Resume session": pick the most-recent active session. */
@@ -538,7 +565,12 @@ export async function runInteractiveCommand(args: readonly string[], io: CliIo):
     const prep: LaunchPreparation =
       decision.kind === "new"
         ? await ctx.launcher.prepareLaunch(
-            { projectKey: decision.projectId, providerId: decision.providerId, taskGoal: decision.taskGoal || undefined },
+            {
+              ...(decision.projectId ? { projectKey: decision.projectId } : {}),
+              ...(decision.mode ? { mode: decision.mode } : {}),
+              providerId: decision.providerId,
+              taskGoal: decision.taskGoal || undefined,
+            },
             { permissionMode: "safe" },
           )
         : await ctx.launcher.prepareLaunch({ sessionId: decision.sessionId }, { permissionMode: "safe" });

@@ -158,6 +158,13 @@ export async function runLaunchCommand(args: readonly string[], io: CliIo): Prom
   const providerId = opt(args, "--provider", "-p");
   const taskGoal = opt(args, "--task", "-t");
   const bypass = args.includes("--bypass-permissions") || args.includes("--dangerously-bypass");
+  // No-project launches (see src/launcher/launcher.ts's SessionMode): "general"
+  // has no fixed directory anchor; "current-directory" anchors to the launch
+  // cwd without registering it as a project. Mutually exclusive with a
+  // positional project key.
+  const general = args.includes("--general");
+  const currentDir = args.includes("--current-dir") || args.includes("--here");
+  const mode: "general" | "current-directory" | undefined = general ? "general" : currentDir ? "current-directory" : undefined;
 
   try {
     // Preflight: surface stack problems BEFORE the interactive session starts.
@@ -165,7 +172,7 @@ export async function runLaunchCommand(args: readonly string[], io: CliIo): Prom
     for (const warning of await runLaunchPreflight()) out(`⚠️  ${warning}\n`);
 
     const prep = await launcher.prepareLaunch(
-      { ...(projectKey ? { projectKey } : {}), providerId, taskGoal },
+      { ...(mode ? {} : projectKey ? { projectKey } : {}), ...(mode ? { mode } : {}), providerId, taskGoal },
       { permissionMode: bypass ? "bypass" : "safe" },
     );
 

@@ -8,6 +8,7 @@ function session(): TaskSession {
     sessionId: "sess-abc",
     revision: 1,
     projectId: "p",
+    mode: "project",
     workingDirectory: "/w",
     activeProvider: { providerId: "claude", model: "m" },
     taskGoal: "goal",

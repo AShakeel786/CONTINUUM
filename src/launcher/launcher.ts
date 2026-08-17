@@ -22,7 +22,9 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { basename } from "node:path";
 import type { ProjectRegistry } from "../registry/registry.js";
+import type { ProjectRecord } from "../registry/types.js";
 import type { ProviderRegistry } from "../providers/registry.js";
 import type { ProviderAdapter } from "../providers/types.js";
 import type { CredentialManager } from "../auth/credential-manager.js";
@@ -30,7 +32,7 @@ import type { CliAuthManager } from "../auth/cli-auth-manager.js";
 import type { AuthVerifier } from "../auth/auth-verifier.js";
 import type { ProviderAuthMetadata } from "../auth/types.js";
 import type { SessionManager } from "../session/manager.js";
-import type { ProviderRef, TaskSession } from "../session/types.js";
+import type { ProviderRef, SessionMode, TaskSession } from "../session/types.js";
 import { captureGitFingerprint, compareGitFingerprints } from "../session/git-fingerprint.js";
 import { resolveProviderAuthEnv } from "../auth/activation.js";
 import { buildContextEnvelope } from "../context/envelope.js";
@@ -76,6 +78,16 @@ export type SpawnFn = (plan: LaunchPlan) => Promise<{ exitCode: number | null }>
 
 const DEFAULT_OUTPUT_RESERVE = 8192;
 const REPO_MAP_BUDGET_TOKENS = 1200;
+
+/**
+ * Synthetic, never-persisted `ProjectRecord` ids for no-project launches.
+ * These never touch `ProjectRegistry` — they only satisfy the internal
+ * plumbing (`LaunchPlan.workingDir`, repo-map, scope provider) that already
+ * expects a `ProjectRecord`-shaped anchor, so no parallel launch path is
+ * needed for general/current-directory sessions.
+ */
+const GENERAL_PROJECT_ID = "__continuum-general__";
+const CURRENT_DIRECTORY_PROJECT_ID = "__continuum-current-directory__";
 
 export class Launcher {
   constructor(private readonly deps: LauncherDeps) {}
@@ -139,7 +151,7 @@ export class Launcher {
    * everything for the caller to inspect and/or spawn. Safe-by-default.
    */
   async prepareLaunch(
-    target: { projectKey?: string; cwd?: string; providerId?: string; taskGoal?: string; sessionId?: string },
+    target: { projectKey?: string; cwd?: string; providerId?: string; taskGoal?: string; sessionId?: string; mode?: "general" | "current-directory" },
     opts: LaunchOptions,
   ): Promise<LaunchPreparation> {
     // Resume path: the session already knows its project + active provider.
@@ -147,11 +159,20 @@ export class Launcher {
       ? await this.deps.sessionManager.loadSession(target.sessionId)
       : undefined;
 
-    const project = target.projectKey
-      ? await this.deps.projects.resolve(target.projectKey)
-      : existingSession
-        ? await this.deps.projects.resolve(existingSession.projectId)
-        : await this.detectProjectOrThrow(target.cwd);
+    // Session mode resolution: a resumed session's own `mode` is authoritative
+    // (a caller's `target.mode` never overrides an existing session's anchor).
+    // Otherwise an explicit `target.mode` requests a no-project launch; absent
+    // both, this is the existing project-resolution path, unchanged.
+    const sessionMode: SessionMode = existingSession ? existingSession.mode : target.mode ?? "project";
+
+    const project: ProjectRecord =
+      sessionMode !== "project"
+        ? this.buildVirtualProject(sessionMode, existingSession ? existingSession.workingDirectory : target.cwd ?? process.cwd())
+        : target.projectKey
+          ? await this.deps.projects.resolve(target.projectKey)
+          : existingSession
+            ? await this.deps.projects.resolve(existingSession.projectId!)
+            : await this.detectProjectOrThrow(target.cwd);
 
     // Resume: keep the session's active provider unless an explicit override
     // is given (e.g. a handoff to a different agent).
@@ -184,7 +205,9 @@ export class Launcher {
     let session: TaskSession | undefined;
     let stale = false;
     let staleReasons: readonly string[] = [];
-    const currentGit = await captureGitFingerprint(project.path);
+    // "general" sessions have no fixed repo anchor — skip fingerprinting so a
+    // free-roaming session is never flagged stale against an arbitrary cwd.
+    const currentGit = sessionMode === "general" ? undefined : await captureGitFingerprint(project.path);
 
     if (existingSession) {
       session = existingSession;
@@ -195,7 +218,7 @@ export class Launcher {
       if (!providerChanging) {
         await this.deps.sessionManager.markActive(session.sessionId).catch(() => {});
       }
-      if (session.git) {
+      if (session.git && currentGit) {
         const cmp = compareGitFingerprints(session.git, currentGit);
         stale = cmp.stale;
         staleReasons = cmp.reasons;
@@ -220,7 +243,8 @@ export class Launcher {
       const goal = target.taskGoal ?? "(untitled)";
       session = await this.deps.sessionManager.createSession({
         sessionId: randomUUID(),
-        projectId: project.id,
+        ...(sessionMode === "project" ? { projectId: project.id } : {}),
+        mode: sessionMode,
         workingDirectory: project.path,
         activeProvider: providerRef,
         taskGoal: goal,
@@ -258,7 +282,7 @@ export class Launcher {
     ];
     // Repo intelligence map (Token Efficiency Phase 2) — navigation-only context;
     // a build failure never blocks the launch.
-    if (this.deps.repoMapBuilder) {
+    if (this.deps.repoMapBuilder && sessionMode !== "general") {
       try {
         const map = await this.deps.repoMapBuilder(project.path, session.taskGoal, REPO_MAP_BUDGET_TOKENS);
         const block = repoMapBlock(map, session.taskGoal);
@@ -439,11 +463,30 @@ export class Launcher {
     });
   }
 
-  private async detectProjectOrThrow(cwd?: string): Promise<import("../registry/types.js").ProjectRecord> {
+  private async detectProjectOrThrow(cwd?: string): Promise<ProjectRecord> {
     const dir = cwd ?? process.cwd();
     const detected = await this.deps.projects.detect(dir);
     if (!detected) throw new NoProjectError();
     return detected;
+  }
+
+  /**
+   * A `ProjectRecord`-shaped stand-in for general/current-directory launches —
+   * never written to `ProjectRegistry`. Exists only so the rest of
+   * `prepareLaunch` (and `LaunchPlan.workingDir`/repo-map/scope-provider,
+   * which all key off `ProjectRecord.path`) needs no parallel code path for
+   * "no project" launches.
+   */
+  private buildVirtualProject(mode: "general" | "current-directory", dir: string): ProjectRecord {
+    const timestamp = new Date().toISOString();
+    return {
+      id: mode === "general" ? GENERAL_PROJECT_ID : CURRENT_DIRECTORY_PROJECT_ID,
+      name: mode === "general" ? "General (no project)" : `Current directory (${basename(dir)})`,
+      path: dir,
+      aliases: [],
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
   }
 
   /**

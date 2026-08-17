@@ -21,7 +21,7 @@ function tmp(): string {
 }
 
 function session(id: string, projectId: string, providerId: string, goal: string, updatedAt = "2026-01-02T00:00:00.000Z"): RecentSessionSummary {
-  return { sessionId: id, projectId, providerId, taskGoal: goal, status: "active", updatedAt };
+  return { sessionId: id, projectId, mode: "project", workingDirectory: "/w", providerId, taskGoal: goal, status: "active", updatedAt };
 }
 
 function capture(): { out: (s: string) => void; text: () => string } {
@@ -81,8 +81,9 @@ describe("runInteractiveMenu — main menu", () => {
     const alpha = (await registry.list())[0]!;
     const cap = capture();
     const decision = await runInteractiveMenu(
+      // Start new task → workspace #3 (General, Current directory, then Alpha) → agent #1 → goal.
       deps(registry, makeAgentManager(tmp()), [], tmp()),
-      createScriptedPrompt({ answers: ["1", "1", "1", "ship it"] }),
+      createScriptedPrompt({ answers: ["1", "3", "1", "ship it"] }),
       cap.out,
     );
     expect(decision).toEqual({ kind: "new", projectId: alpha.id, providerId: "claude", taskGoal: "ship it" });
@@ -121,8 +122,8 @@ describe("runInteractiveMenu — start new task", () => {
     const cap = capture();
     const decision = await runInteractiveMenu(
       deps(registry, makeAgentManager(tmp()), [], tmp()),
-      // Start new → project Alpha → agent #1 (claude; deepseek is unusable) → goal
-      createScriptedPrompt({ answers: ["1", "1", "1", "do it"] }),
+      // Start new → workspace #3 (Alpha, after General/Current directory) → agent #1 (claude; deepseek is unusable) → goal
+      createScriptedPrompt({ answers: ["1", "3", "1", "do it"] }),
       cap.out,
     );
     expect(decision.kind).toBe("new");
@@ -130,6 +131,37 @@ describe("runInteractiveMenu — start new task", () => {
     expect(text).toContain("DeepSeek unavailable");
     expect(text).toContain("1. Claude");
     expect(text).not.toContain("1. DeepSeek");
+  });
+
+  it("offers General / No Project as the first workspace choice with no project registration", async () => {
+    const registry = await makeRegistry([{ name: "Alpha", path: tmp() }]);
+    const cap = capture();
+    const decision = await runInteractiveMenu(
+      deps(registry, makeAgentManager(tmp()), [], tmp()),
+      // Start new → workspace #1 (General) → agent #1 (claude) → goal
+      createScriptedPrompt({ answers: ["1", "1", "1", "explore something"] }),
+      cap.out,
+    );
+    expect(decision).toEqual({ kind: "new", mode: "general", providerId: "claude", taskGoal: "explore something" });
+    expect(cap.text()).toContain("General / No Project");
+    // The workspace choice must never register a project.
+    expect(await registry.list()).toHaveLength(1);
+  });
+
+  it("offers Current Directory as the second workspace choice, anchored to launch cwd, with no project registration", async () => {
+    const registry = await makeRegistry([{ name: "Alpha", path: tmp() }]);
+    const cap = capture();
+    const launchCwd = tmp();
+    const decision = await runInteractiveMenu(
+      deps(registry, makeAgentManager(tmp()), [], launchCwd),
+      // Start new → workspace #2 (Current directory) → agent #1 (claude) → goal
+      createScriptedPrompt({ answers: ["1", "2", "1", "quick fix"] }),
+      cap.out,
+    );
+    expect(decision).toEqual({ kind: "new", mode: "current-directory", providerId: "claude", taskGoal: "quick fix" });
+    expect(cap.text()).toContain("Current Directory");
+    expect(cap.text()).toContain(launchCwd);
+    expect(await registry.list()).toHaveLength(1);
   });
 });
 

@@ -13,6 +13,7 @@ function fixtureSession(overrides: Partial<TaskSession> = {}): TaskSession {
     sessionId: "sess-1",
     revision: 1,
     projectId: "proj-1",
+    mode: "project",
     workingDirectory: "C:\\fake\\project",
     activeProvider: { providerId: "claude", model: "claude-sonnet-5" },
     taskGoal: "Fix the deploy script",

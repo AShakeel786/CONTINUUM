@@ -44,6 +44,19 @@ async function seedSession(sessionManager: SessionManager, providerId: "claude" 
   await sessionManager.addRemainingWork("sess-1", "Add tests");
 }
 
+/** A general-mode (no project) session — handoff must work identically to a project-anchored one. */
+async function seedGeneralSession(sessionManager: SessionManager, providerId: "claude" | "deepseek" | "codex" = "claude") {
+  const model = providerId === "claude" ? "claude-sonnet-5" : providerId === "deepseek" ? "deepseek-v4-pro" : "gpt-5.6-sol";
+  await sessionManager.createSession({
+    sessionId: "sess-general",
+    mode: "general",
+    workingDirectory: "/wherever",
+    activeProvider: { providerId, model },
+    taskGoal: "Explore an idea",
+  });
+  await sessionManager.addCompletedWork("sess-general", "Sketched the approach");
+}
+
 const tokenLimits = { contextWindow: 100_000, reservedOutput: 4096 };
 
 describe("HandoffManager — provider selection", () => {
@@ -109,6 +122,22 @@ describe("HandoffManager — DeepSeek \u2192 Claude", () => {
     expect(result.rendered.protocol).toBe("anthropic-messages");
     expect(Array.isArray(result.rendered.system)).toBe(true);
     expect(result.rendered.cacheDirectives.length).toBeGreaterThan(0);
+  });
+});
+
+describe("HandoffManager — no-project (general mode) session", () => {
+  it("hands off a projectId-less session exactly like a project-anchored one", async () => {
+    const sessionManager = await makeSessionManager();
+    await seedGeneralSession(sessionManager, "claude");
+    const manager = new HandoffManager(sessionManager, createDefaultProviderRegistry());
+
+    const result = await manager.finalizeHandoff("sess-general", "deepseek", { tokenLimits });
+
+    expect(result.session.mode).toBe("general");
+    expect(result.session.projectId).toBeUndefined();
+    expect(result.session.activeProvider.providerId).toBe("deepseek");
+    expect(result.session.lastHandoff?.toProvider.providerId).toBe("deepseek");
+    expect(result.rendered.system as string).toContain("Explore an idea");
   });
 });
 

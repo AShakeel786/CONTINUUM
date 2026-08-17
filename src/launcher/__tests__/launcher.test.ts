@@ -210,6 +210,86 @@ describe("Launcher — MemoryCore degrade", () => {
   });
 });
 
+describe("Launcher — General / No-Project mode", () => {
+  it("prepares a fresh launch with no project registration, no git fingerprint, and mode='general'", async () => {
+    const { deps, registry } = await buildDeps();
+    const cwd = tmp();
+    const launcher = new Launcher(deps);
+    const prep = await launcher.prepareLaunch({ mode: "general", cwd, providerId: "claude", taskGoal: "explore" }, { permissionMode: "safe" });
+
+    expect(prep.session).toBeDefined();
+    expect(prep.session!.mode).toBe("general");
+    expect(prep.session!.projectId).toBeUndefined();
+    expect(prep.session!.workingDirectory).toBe(cwd);
+    expect(prep.session!.git).toBeUndefined();
+    expect(prep.plan.workingDir).toBe(cwd);
+    // Never touches the project registry.
+    expect(await registry.list()).toHaveLength(0);
+  });
+
+  it("allows normal provider selection and never injects a project default", async () => {
+    const { deps } = await buildDeps();
+    const launcher = new Launcher(deps);
+    const prep = await launcher.prepareLaunch({ mode: "general", cwd: tmp(), providerId: "deepseek", taskGoal: "chat" }, { permissionMode: "safe" });
+    expect(prep.providerRef.providerId).toBe("deepseek");
+  });
+
+  it("resumes a general session using its own stored working directory, without a projectId lookup", async () => {
+    const { deps } = await buildDeps();
+    const cwd = tmp();
+    const launcher = new Launcher(deps);
+    const first = await launcher.prepareLaunch({ mode: "general", cwd, providerId: "claude", taskGoal: "explore" }, { permissionMode: "safe" });
+    const sessionId = first.session!.sessionId;
+
+    const resumed = await launcher.prepareLaunch({ sessionId }, { permissionMode: "safe" });
+    expect(resumed.session!.sessionId).toBe(sessionId);
+    expect(resumed.session!.mode).toBe("general");
+    expect(resumed.plan.workingDir).toBe(cwd);
+    expect(resumed.stale).toBe(false);
+  });
+});
+
+describe("Launcher — Current Directory mode", () => {
+  it("anchors the session to the launch cwd, keeps git fingerprinting, and never registers a project", async () => {
+    const { deps, registry } = await buildDeps();
+    const repoDir = tmp();
+    const { execSync } = await import("node:child_process");
+    execSync("git init -q", { cwd: repoDir });
+    execSync("git -c user.email=t@t -c user.name=t commit -q --allow-empty -m init", { cwd: repoDir });
+
+    const launcher = new Launcher(deps);
+    const prep = await launcher.prepareLaunch({ mode: "current-directory", cwd: repoDir, providerId: "claude", taskGoal: "quick fix" }, { permissionMode: "safe" });
+
+    expect(prep.session!.mode).toBe("current-directory");
+    expect(prep.session!.projectId).toBeUndefined();
+    expect(prep.session!.workingDirectory).toBe(repoDir);
+    expect(prep.session!.git).toBeDefined();
+    expect(prep.session!.git!.repoRoot).toBeTruthy();
+    expect(await registry.list()).toHaveLength(0);
+  });
+
+  it("resumes a current-directory session against its stored directory and still detects staleness", async () => {
+    const { deps } = await buildDeps();
+    const repoDir = tmp();
+    const { execSync } = await import("node:child_process");
+    execSync("git init -q", { cwd: repoDir });
+    execSync("git -c user.email=t@t -c user.name=t commit -q --allow-empty -m init", { cwd: repoDir });
+
+    const launcher = new Launcher(deps);
+    const first = await launcher.prepareLaunch({ mode: "current-directory", cwd: repoDir, providerId: "claude", taskGoal: "quick fix" }, { permissionMode: "safe" });
+    const session = first.session!;
+
+    await deps.sessionManager.updateGitFingerprint(session.sessionId, {
+      ...session.git!,
+      headSha: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+    });
+
+    const resumed = await launcher.prepareLaunch({ sessionId: session.sessionId }, { permissionMode: "safe" });
+    expect(resumed.session!.mode).toBe("current-directory");
+    expect(resumed.stale).toBe(true);
+  });
+});
+
 describe("Launcher — handoff target choice", () => {
   it("lists only authenticated providers and never auto-selects", async () => {
     const { deps, registry } = await buildDeps({ authenticated: { claude: true } });
