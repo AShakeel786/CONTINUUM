@@ -19,7 +19,7 @@ import { delimiter, isAbsolute, join } from "node:path";
 import type { CliAuthManager } from "../auth/cli-auth-manager.js";
 import type { CredentialManager } from "../auth/credential-manager.js";
 import type { ProviderAuthMetadata } from "../auth/types.js";
-import type { ProviderAdapter } from "../providers/types.js";
+import type { LaunchRoute, ProviderAdapter } from "../providers/types.js";
 
 /** Per-provider usability, including a human-readable display name and (when unusable) a reason. */
 export interface ProviderUsability {
@@ -28,10 +28,15 @@ export interface ProviderUsability {
   readonly model: string;
   readonly usable: boolean;
   readonly reason?: string;
+  /** Which launch route was evaluated (dual-route providers only). */
+  readonly route?: LaunchRoute;
 }
 
 /** How CONTINUUM would launch/run this provider. */
 export type LaunchKind = "cli" | "direct-api" | "none";
+
+/** Coarse, menu-facing availability state for a provider. */
+export type ProviderAvailability = "ready" | "needs-authentication" | "not-installed" | "not-configured" | "unavailable";
 
 export interface ProviderEvaluation {
   readonly usable: boolean;
@@ -41,6 +46,8 @@ export interface ProviderEvaluation {
   readonly cliInstalled?: boolean;
   /** For CLI-launchable providers with their own auth adapter: whether the CLI is authenticated. */
   readonly cliAuthenticated?: boolean;
+  /** Which launch route was evaluated (dual-route providers only). */
+  readonly route?: LaunchRoute;
 }
 
 export interface UsabilityDeps {
@@ -48,6 +55,22 @@ export interface UsabilityDeps {
   readonly credentialManager: CredentialManager;
   /** Overridable in tests; defaults to a PATH/absolute-path lookup. */
   readonly findExecutable?: (executable: string) => string | undefined;
+  /** For dual-route providers: which route to evaluate (default "direct"). */
+  readonly route?: LaunchRoute;
+}
+
+/**
+ * Map an evaluation to a coarse, actionable menu state. "needs-authentication"
+ * means the provider is installed but its own CLI login is missing (fixable via
+ * a sign-in flow); "not-configured" means a credential/config is missing;
+ * "not-installed" means the CLI binary is absent.
+ */
+export function availabilityOf(e: ProviderEvaluation): ProviderAvailability {
+  if (e.usable) return "ready";
+  if (e.cliInstalled === false) return "not-installed";
+  if (e.cliAuthenticated === false) return "needs-authentication";
+  if (e.launchKind === "none") return "unavailable";
+  return "not-configured";
 }
 
 /** Best-effort, side-effect-free "is this executable reachable on PATH (or an absolute path)?" */
@@ -84,6 +107,7 @@ export async function evaluateProvider(
   deps: UsabilityDeps,
 ): Promise<ProviderEvaluation> {
   const id = adapter.profile.id;
+  const route = deps.route ?? "direct";
 
   // 1. Providers with their own CLI auth (Claude, Codex): the CLI must be
   //    installed *and* authenticated.
@@ -100,22 +124,23 @@ export async function evaluateProvider(
   }
 
   // 2. CLI-launchable providers without their own CLI auth adapter (e.g.
-  //    DeepSeek, proxy-routed through the `claude` CLI): the declared launch
-  //    executable must be detected, plus the required API/proxy credentials.
+  //    DeepSeek, whose `claude` CLI is redirected to a remote endpoint or an
+  //    optional proxy): the declared launch executable must be detected, plus
+  //    the credential(s) required by the selected route.
   if (adapter.profile.capabilities.cliAvailable) {
-    const executable = adapter.profile.cliLaunch.executable;
+    const executable = adapter.resolveCliLaunch(route).executable;
     const findExecutable = deps.findExecutable ?? findExecutableOnPath;
     const installed = findExecutable(executable) !== undefined;
     if (!installed) {
       return { usable: false, reason: `${id} CLI not installed (${executable} not found)`, launchKind: "cli", cliInstalled: false };
     }
-    const cred = await checkCredentials(id, metadata, deps);
-    if (!cred.ok) return { usable: false, reason: cred.reason, launchKind: "cli", cliInstalled: true };
-    return { usable: true, launchKind: "cli", cliInstalled: true };
+    const cred = await checkCredentials(id, metadata, deps, route);
+    if (!cred.ok) return { usable: false, reason: cred.reason, launchKind: "cli", cliInstalled: true, route };
+    return { usable: true, launchKind: "cli", cliInstalled: true, route };
   }
 
   // 3. Direct-API providers: require a compatible runtime + stored credential.
-  return evaluateDirectApi(adapter, metadata, deps);
+  return evaluateDirectApi(adapter, metadata, deps, route);
 }
 
 /** Kept for the Launcher, which only needs the usable/reason pair. */
@@ -132,6 +157,7 @@ async function evaluateDirectApi(
   adapter: ProviderAdapter,
   metadata: ProviderAuthMetadata,
   deps: UsabilityDeps,
+  route: LaunchRoute,
 ): Promise<ProviderEvaluation> {
   const id = adapter.profile.id;
   if (!isDirectApiCompatible(adapter)) {
@@ -140,9 +166,9 @@ async function evaluateDirectApi(
   if (!metadata.api.supported) {
     return { usable: false, reason: `${id} declares no usable auth`, launchKind: "none" };
   }
-  const cred = await checkCredentials(id, metadata, deps);
-  if (!cred.ok) return { usable: false, reason: cred.reason, launchKind: "direct-api" };
-  return { usable: true, launchKind: "direct-api" };
+  const cred = await checkCredentials(id, metadata, deps, route);
+  if (!cred.ok) return { usable: false, reason: cred.reason, launchKind: "direct-api", route };
+  return { usable: true, launchKind: "direct-api", route };
 }
 
 /**
@@ -158,16 +184,23 @@ async function checkCredentials(
   id: string,
   metadata: ProviderAuthMetadata,
   deps: UsabilityDeps,
+  route: LaunchRoute,
 ): Promise<{ ok: boolean; reason?: string }> {
-  if (metadata.api.supported) {
-    const has = await deps.credentialManager.hasCredential(id, "api-key");
-    if (!has) return { ok: false, reason: `${id} has no stored API key` };
-  }
-  if (metadata.proxyUserKey?.supported) {
+  // Optional proxy route: only the proxy-local user key is required — the
+  // proxy holds the upstream key server-side, so the provider's own API key
+  // is irrelevant to a proxy CLI launch (and must not be injected into it).
+  if (route === "proxy" && metadata.proxyUserKey?.supported) {
     const hasProxy =
       (await deps.credentialManager.hasCredential(id, metadata.proxyUserKey.credentialName)) ||
       !!process.env[metadata.proxyUserKey.envVar];
     if (!hasProxy) return { ok: false, reason: `${id} has no proxy user key` };
+    return { ok: true };
+  }
+
+  // Direct route (default): only the provider's own API key is required.
+  if (metadata.api.supported) {
+    const has = await deps.credentialManager.hasCredential(id, "api-key");
+    if (!has) return { ok: false, reason: `${id} has no stored API key` };
   }
   if (!metadata.api.supported && !metadata.proxyUserKey?.supported) {
     return { ok: false, reason: `${id} declares no usable auth` };

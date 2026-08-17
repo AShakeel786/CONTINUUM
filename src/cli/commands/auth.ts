@@ -13,9 +13,11 @@ export async function runAuthCommand(args: readonly string[], io: CliIo): Promis
   const out = io.out ?? noopOutput();
   const providerId = args.find((a) => !a.startsWith("-"));
   const remove = args.includes("--remove");
+  // Opt-in proxy routing for dual-route providers (DeepSeek → Tencent MemoryProxy).
+  const proxy = args.includes("--proxy");
 
   if (!providerId) {
-    out("Usage: continuum auth <provider> [--remove]\n");
+    out("Usage: continuum auth <provider> [--remove] [--proxy]\n");
     return 2;
   }
 
@@ -36,7 +38,10 @@ export async function runAuthCommand(args: readonly string[], io: CliIo): Promis
 
   if (remove) {
     await setup.remove(metadata);
-    await ctx.configStore.save(setup.removeConfigEntry(config, providerId));
+    const next = setup.removeConfigEntry(config, providerId);
+    const proxyRouting = { ...(next.proxyRouting ?? {}) };
+    delete proxyRouting[providerId];
+    await ctx.configStore.save({ ...next, proxyRouting });
     out(`Removed stored auth for ${providerId}.\n`);
     return 0;
   }
@@ -47,16 +52,28 @@ export async function runAuthCommand(args: readonly string[], io: CliIo): Promis
       out(`No key provided for ${providerId}; nothing stored.\n`);
       return 0;
     }
-    await ctx.configStore.save(setup.applyConfigEntry(config, providerId, result.method, result.credentialUri));
+    let next = setup.applyConfigEntry(config, providerId, result.method, result.credentialUri);
     out(`✓ ${providerId} configured via ${result.method}.\n`);
 
-    // Proxy-routed providers (deepseek) also need the proxy user key, set
-    // through the same masked prompt + secure backend — never a manual env.
-    if (metadata.proxyUserKey?.supported) {
+    // The optional proxy user key is only collected when the provider is
+    // explicitly routed through the proxy — a normal (direct) setup never
+    // touches the Tencent path.
+    if (metadata.proxyUserKey?.supported && proxy) {
       const proxyUri = await setup.setupProxyUserKey(metadata);
       if (proxyUri) out(`✓ ${providerId} proxy user key stored (${metadata.proxyUserKey.credentialName}).\n`);
       else out(`(no proxy user key provided for ${providerId}; it can be set later)\n`);
     }
+
+    // Persist the routing choice.
+    const proxyRouting = { ...(next.proxyRouting ?? {}) };
+    if (proxy && metadata.proxyUserKey?.supported) {
+      proxyRouting[providerId] = "proxy";
+    } else {
+      delete proxyRouting[providerId];
+    }
+    next = { ...next, proxyRouting };
+    await ctx.configStore.save(next);
+    out(`✓ ${providerId} routing: ${proxy && metadata.proxyUserKey?.supported ? "proxy" : "direct"}.\n`);
     return 0;
   } catch (err) {
     if (err instanceof UnknownProviderError) {

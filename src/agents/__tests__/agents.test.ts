@@ -82,7 +82,7 @@ describe("AgentManager — list", () => {
 });
 
 describe("AgentManager — add", () => {
-  it("adds an API agent (deepseek) storing a key + proxy key and recording config", async () => {
+  it("adds an API agent (deepseek) in direct mode storing only the API key (no proxy key)", async () => {
     const dataDir = tmp();
     const backend = new FakeBackend();
     const configStore = new ConfigStore(dataDir);
@@ -99,10 +99,36 @@ describe("AgentManager — add", () => {
     const d = await mgr.add("deepseek");
     expect(d?.configured).toBe(true);
     expect(d?.configuredMethod).toBe("api");
+    expect(d?.route).toBe("direct");
+    expect(backend.peek("continuum:deepseek:api-key")).toBe("sk-deepseek-key");
+    // Direct mode never collects the proxy user key.
+    expect(backend.peek("continuum:deepseek:proxy-user-key")).toBeUndefined();
+    const config = await configStore.load();
+    expect(config.providers.some((p) => p.providerId === "deepseek" && p.method === "api")).toBe(true);
+    expect(config.proxyRouting?.["deepseek"]).toBeUndefined();
+  });
+
+  it("adds an API agent (deepseek) in proxy mode storing both the key and the proxy key", async () => {
+    const dataDir = tmp();
+    const backend = new FakeBackend();
+    const configStore = new ConfigStore(dataDir);
+    const credentialManager = new CredentialManager(backend);
+    const prompt = createScriptedPrompt({ secrets: ["sk-deepseek-key", "proxy-key-123"] });
+    const mgr = new AgentManager({
+      dataDir,
+      configStore,
+      credentialManager,
+      prompt,
+      buildCliAuthManager: () => makeCliManager(),
+    });
+
+    const d = await mgr.add("deepseek", undefined, "proxy");
+    expect(d?.configured).toBe(true);
+    expect(d?.route).toBe("proxy");
     expect(backend.peek("continuum:deepseek:api-key")).toBe("sk-deepseek-key");
     expect(backend.peek("continuum:deepseek:proxy-user-key")).toBe("proxy-key-123");
     const config = await configStore.load();
-    expect(config.providers.some((p) => p.providerId === "deepseek" && p.method === "api")).toBe(true);
+    expect(config.proxyRouting?.["deepseek"]).toBe("proxy");
   });
 
   it("adds a CLI agent (codex) without storing any credential", async () => {

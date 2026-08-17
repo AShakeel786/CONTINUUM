@@ -59,15 +59,40 @@ export const deepseekManifest: ProviderManifest = {
   baseUrl: "https://api.deepseek.com",
   auth: { kind: "api-key", envVar: "DEEPSEEK_API_KEY" },
   models: { default: "deepseek-v4-pro", aliases: { flash: "deepseek-v4-flash" } },
-  capabilities: { thinking: "supported", tools: true, promptCache: "openai-automatic", cliAvailable: true, notes: "Claude Code routed through the Tencent/DeepSeek proxy. Requires DEEPSEEK_API_KEY plus a proxy user key (run `continuum auth deepseek`)." },
-  environment: { owns: ["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"] },
+  capabilities: {
+    thinking: "supported",
+    tools: true,
+    promptCache: "openai-automatic",
+    cliAvailable: true,
+    notes: "Claude Code redirected to DeepSeek's own Anthropic-compatible endpoint (https://api.deepseek.com/anthropic). Requires only DEEPSEEK_API_KEY — no Docker/Tencent/MemoryProxy. An optional Tencent MemoryProxy route is available via `continuum auth deepseek --proxy`.",
+  },
+  environment: { owns: ["DEEPSEEK_API_KEY", "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"] },
   cliLaunch: {
+    kind: "redirected",
+    configDirName: ".claude-deepseek",
+    baseUrl: "https://api.deepseek.com/anthropic",
+    authTokenEnvVar: "DEEPSEEK_API_KEY",
+    clearEnvVars: ["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"],
+    nativeResume: {
+      supported: true,
+      resume: { kind: "flag", flag: "--resume" },
+      sessionStore: { rootDir: "~/.claude-deepseek/projects", extension: ".jsonl", idFrom: "basename" },
+      sessionIdFlag: "--session-id",
+    },
+    contextDelivery: { kind: "append-system-prompt", systemFlag: "--append-system-prompt" },
+    mcp: { supported: true, serverName: "continuum" },
+    mcpLaunch: { kind: "mcp-config-flag", flag: "--mcp-config" },
+  },
+  // Optional Tencent MemoryProxy route — only used when explicitly enabled
+  // (`continuum auth deepseek --proxy`, or config.proxyRouting.deepseek="proxy").
+  // Never inferred merely because Tencent code/containers exist on the machine.
+  proxyCliLaunch: {
     kind: "proxy-routed",
     configDirName: ".claude-tencent",
     proxyBaseUrl: "http://127.0.0.1:8096",
     proxyPathSuffix: "/claude-code/default",
     proxyUserKeyEnvVar: "CONTINUUM_TENCENT_PROXY_USER_KEY",
-    clearEnvVars: [],
+    clearEnvVars: ["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"],
     nativeResume: {
       supported: true,
       resume: { kind: "flag", flag: "--resume" },

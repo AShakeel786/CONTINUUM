@@ -112,6 +112,13 @@ export async function runDoctorCommand(args: readonly string[], io: CliIo): Prom
     out(`${f.healthy ? "  ok" : "  !! "} ${f.providerId} [${f.method}]: ${f.detail}\n`);
   }
 
+  // DeepSeek routing is reported independently: direct (standalone, no Tencent)
+  // vs the optional Tencent MemoryProxy path. A missing Tencent stack must
+  // never make standalone DeepSeek unhealthy.
+  out(`\nProvider routing:\n`);
+  const deepseekRoute = config.proxyRouting?.["deepseek"] ?? "direct";
+  out(`  deepseek: ${deepseekRoute === "proxy" ? "Tencent MemoryProxy (optional)" : "direct (standalone — no Tencent/Docker)"}\n`);
+
   out(`\nRuntime stack:\n`);
   for (const line of HealthDoctor.formatReport(before)) out(`${line}\n`);
 

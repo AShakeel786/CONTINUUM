@@ -5,9 +5,12 @@ import { deepseekProfile } from "../profiles/deepseek.js";
 import { codexProfile } from "../profiles/codex.js";
 
 const ORIGINAL = process.env.CONTINUUM_TENCENT_PROXY_USER_KEY;
+const ORIGINAL_DS = process.env.DEEPSEEK_API_KEY;
 afterEach(() => {
   if (ORIGINAL === undefined) delete process.env.CONTINUUM_TENCENT_PROXY_USER_KEY;
   else process.env.CONTINUUM_TENCENT_PROXY_USER_KEY = ORIGINAL;
+  if (ORIGINAL_DS === undefined) delete process.env.DEEPSEEK_API_KEY;
+  else process.env.DEEPSEEK_API_KEY = ORIGINAL_DS;
 });
 
 describe("native resume args (data-driven, no provider switch)", () => {
@@ -21,9 +24,16 @@ describe("native resume args (data-driven, no provider switch)", () => {
     expect(plan.args).toEqual(["resume", "codex-123"]);
   });
 
-  it("DeepSeek proxy-routed path builds --resume <id> (Claude Code semantics) and still injects proxy env", () => {
-    process.env.CONTINUUM_TENCENT_PROXY_USER_KEY = "sk-proxy-test";
+  it("DeepSeek direct path builds --resume <id> (Claude Code semantics) and injects the upstream key env", () => {
+    process.env.DEEPSEEK_API_KEY = "sk-ds-api-test";
     const plan = createProviderAdapter(deepseekProfile).buildCliLaunchPlan({ workingDir: "/x", resumeNativeSessionId: "ds-123" });
+    expect(plan.args).toEqual(["--resume", "ds-123"]);
+    expect(plan.env.ANTHROPIC_BASE_URL).toBe("https://api.deepseek.com/anthropic");
+  });
+
+  it("DeepSeek proxy path (route=proxy) builds --resume <id> and injects proxy env", () => {
+    process.env.CONTINUUM_TENCENT_PROXY_USER_KEY = "sk-proxy-test";
+    const plan = createProviderAdapter(deepseekProfile).buildCliLaunchPlan({ workingDir: "/x", resumeNativeSessionId: "ds-123", route: "proxy" });
     expect(plan.args).toEqual(["--resume", "ds-123"]);
     expect(plan.env.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:8096/claude-code/default");
   });
@@ -31,7 +41,7 @@ describe("native resume args (data-driven, no provider switch)", () => {
   it("builds empty args when no resume id is requested (fresh native session)", () => {
     expect(createProviderAdapter(claudeProfile).buildCliLaunchPlan({ workingDir: "/x" }).args).toEqual([]);
     expect(createProviderAdapter(codexProfile).buildCliLaunchPlan({ workingDir: "/x" }).args).toEqual([]);
-    process.env.CONTINUUM_TENCENT_PROXY_USER_KEY = "sk-proxy-test";
+    process.env.DEEPSEEK_API_KEY = "sk-ds-api-test";
     expect(createProviderAdapter(deepseekProfile).buildCliLaunchPlan({ workingDir: "/x" }).args).toEqual([]);
   });
 
@@ -53,7 +63,7 @@ describe("native resume args (data-driven, no provider switch)", () => {
     const claude = createProviderAdapter(claudeProfile).buildCliLaunchPlan({ workingDir: "/x", setSessionId: "sess-1" });
     expect(claude.args).toEqual(["--session-id", "sess-1"]);
 
-    process.env.CONTINUUM_TENCENT_PROXY_USER_KEY = "sk-proxy-test";
+    process.env.DEEPSEEK_API_KEY = "sk-ds-api-test";
     const ds = createProviderAdapter(deepseekProfile).buildCliLaunchPlan({ workingDir: "/x", setSessionId: "sess-2" });
     expect(ds.args).toEqual(["--session-id", "sess-2"]);
 

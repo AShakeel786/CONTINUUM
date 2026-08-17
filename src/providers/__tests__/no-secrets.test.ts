@@ -57,11 +57,17 @@ describe("no secrets in provider profiles", () => {
     }
   });
 
-  it("proxy-routed cliLaunch descriptors reference a SecretRef, never an inline key", () => {
+  it("redirected/proxy cliLaunch descriptors reference a SecretRef, never an inline key", () => {
     const launch = deepseekProfile.cliLaunch;
-    expect(launch.kind).toBe("proxy-routed");
-    if (launch.kind === "proxy-routed") {
-      expect(Object.keys(launch.proxyUserKeySecret)).toEqual(["envVar"]);
+    expect(launch.kind).toBe("redirected");
+    if (launch.kind === "redirected") {
+      expect(Object.keys(launch.authTokenSecret)).toEqual(["envVar"]);
+    }
+    // The optional proxy route also references a SecretRef, never an inline key.
+    const proxy = deepseekProfile.proxyCliLaunch;
+    expect(proxy).toBeDefined();
+    if (proxy) {
+      expect(Object.keys(proxy.proxyUserKeySecret)).toEqual(["envVar"]);
     }
   });
 

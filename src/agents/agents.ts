@@ -31,7 +31,7 @@ import { ConfigStore } from "../config/store.js";
 import type { ProviderAuthMethod } from "../config/types.js";
 import type { Prompt, PromptOutput } from "../auth/prompt.js";
 import { UnknownProviderError } from "../providers/errors.js";
-import { evaluateProvider, type LaunchKind, type ProviderUsability } from "../launcher/usability.js";
+import { availabilityOf, evaluateProvider, type LaunchKind, type ProviderAvailability, type ProviderUsability } from "../launcher/usability.js";
 import { AgentValidationError } from "./errors.js";
 
 export type { ProviderUsability };
@@ -53,6 +53,10 @@ export interface AgentDescriptor {
   readonly launchKind: LaunchKind;
   readonly cliInstalled?: boolean;
   readonly cliAuthenticated?: boolean;
+  /** Which launch route this provider uses (dual-route providers only). */
+  readonly route?: "direct" | "proxy";
+  /** Coarse menu-facing state (ready / needs-authentication / not-installed / …). */
+  readonly availability: ProviderAvailability;
   readonly usable: boolean;
   readonly reason?: string;
 }
@@ -150,15 +154,18 @@ export class AgentManager {
   /** Fresh list of usable providers — the same shape the Launcher's picker uses. */
   async listUsable(): Promise<readonly ProviderUsability[]> {
     await this.reload();
+    const config = await this.deps.configStore.load();
     const out: ProviderUsability[] = [];
     for (const id of this.providers.listIds()) {
       const adapter = this.providers.get(id);
       const metadata = this.authMetadata.get(id);
       if (!metadata) continue;
+      const route = this.routeFor(config, id);
       const evaluation = await evaluateProvider(adapter, metadata, {
         cliAuthManager: this.cliAuthManager,
         credentialManager: this.deps.credentialManager,
         findExecutable: this.deps.findExecutable,
+        route,
       });
       out.push({
         providerId: id,
@@ -166,9 +173,15 @@ export class AgentManager {
         model: adapter.resolveModel(),
         usable: evaluation.usable,
         reason: evaluation.reason,
+        route,
       });
     }
     return out;
+  }
+
+  /** Resolve the launch route for a provider (direct default; proxy only when configured). */
+  private routeFor(config: import("../config/types.js").ContinuumConfig, providerId: string): "direct" | "proxy" {
+    return config.proxyRouting?.[providerId] ?? "direct";
   }
 
   /** The current set of known provider ids (fresh). */
@@ -178,10 +191,10 @@ export class AgentManager {
   }
 
   /** Run auth setup for an existing provider and record the config entry (validated first). */
-  async add(providerId: string, preferredMethod?: ProviderAuthMethod): Promise<AgentDescriptor | undefined> {
+  async add(providerId: string, preferredMethod?: ProviderAuthMethod, route?: "direct" | "proxy"): Promise<AgentDescriptor | undefined> {
     await this.reload();
     const metadata = this.requireMetadata(providerId);
-    const configured = await this.setupAndRecord(metadata, preferredMethod);
+    const configured = await this.setupAndRecord(metadata, preferredMethod, route);
     if (!configured) return undefined;
     return (await this.describe()).find((d) => d.providerId === providerId);
   }
@@ -205,8 +218,8 @@ export class AgentManager {
   }
 
   /** (Re)run auth setup for an agent (add/configure share the same path). */
-  async configure(providerId: string, preferredMethod?: ProviderAuthMethod): Promise<AgentDescriptor | undefined> {
-    return this.add(providerId, preferredMethod);
+  async configure(providerId: string, preferredMethod?: ProviderAuthMethod, route?: "direct" | "proxy"): Promise<AgentDescriptor | undefined> {
+    return this.add(providerId, preferredMethod, route);
   }
 
   /**
@@ -226,7 +239,10 @@ export class AgentManager {
     await setup.remove(metadata);
     const config = await this.deps.configStore.load();
     const hadEntry = config.providers.some((e) => e.providerId === providerId);
-    await this.deps.configStore.save(setup.removeConfigEntry(config, providerId));
+    const next = setup.removeConfigEntry(config, providerId);
+    const proxyRouting = { ...(next.proxyRouting ?? {}) };
+    delete proxyRouting[providerId];
+    await this.deps.configStore.save({ ...next, proxyRouting });
     // Only user-defined agents have a manifest file to remove; bundled agents
     // keep their built-in identity and are simply un-configured here.
     const isUser = !BUNDLED_IDS.has(providerId);
@@ -244,7 +260,7 @@ export class AgentManager {
   }
 
   /** Validate-then-save auth for one provider. Returns false when the user cancelled (no API key). */
-  private async setupAndRecord(metadata: ProviderAuthMetadata, preferredMethod?: ProviderAuthMethod): Promise<boolean> {
+  private async setupAndRecord(metadata: ProviderAuthMetadata, preferredMethod?: ProviderAuthMethod, route?: "direct" | "proxy"): Promise<boolean> {
     const setup = new ProviderSetup({
       credentialManager: this.deps.credentialManager,
       cliAuthManager: this.cliAuthManager,
@@ -262,12 +278,24 @@ export class AgentManager {
     const validation = result.method === "api" ? await verifier.verifyApi(metadata) : await verifier.verifyCli(metadata);
     if (validation.outcome !== "ok") throw new AgentValidationError(metadata.providerId, validation.detail);
 
-    if (metadata.proxyUserKey?.supported) {
+    // The optional proxy user key is only collected when the provider is
+    // explicitly routed through the proxy — never as a side effect of a normal
+    // (direct) setup.
+    if (metadata.proxyUserKey?.supported && route === "proxy") {
       await setup.setupProxyUserKey(metadata);
     }
 
     const config = await this.deps.configStore.load();
-    await this.deps.configStore.save(setup.applyConfigEntry(config, metadata.providerId, result.method, result.credentialUri));
+    const next = setup.applyConfigEntry(config, metadata.providerId, result.method, result.credentialUri);
+    // Persist the explicit routing choice for dual-route providers; absent/other
+    // defaults to "direct" (standalone).
+    const proxyRouting = { ...(config.proxyRouting ?? {}) };
+    if (route === "proxy" && metadata.proxyUserKey?.supported) {
+      proxyRouting[metadata.providerId] = "proxy";
+    } else {
+      delete proxyRouting[metadata.providerId];
+    }
+    await this.deps.configStore.save({ ...next, proxyRouting });
     return true;
   }
 
@@ -279,10 +307,12 @@ export class AgentManager {
       const adapter = this.providers.get(id);
       const metadata = this.authMetadata.get(id);
       if (!metadata) continue;
+      const route = this.routeFor(config, id);
       const evaluation = await evaluateProvider(adapter, metadata, {
         cliAuthManager: this.cliAuthManager,
         credentialManager: this.deps.credentialManager,
         findExecutable: this.deps.findExecutable,
+        route,
       });
       const entry = byId.get(id);
       out.push({
@@ -299,6 +329,8 @@ export class AgentManager {
         launchKind: evaluation.launchKind,
         cliInstalled: evaluation.cliInstalled,
         cliAuthenticated: evaluation.cliAuthenticated,
+        route,
+        availability: availabilityOf(evaluation),
         usable: evaluation.usable,
         reason: evaluation.reason,
       });

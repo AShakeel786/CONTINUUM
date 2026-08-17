@@ -52,7 +52,7 @@ interface Ctx {
   repoDir: string;
 }
 
-async function setup(opts: { deepseekProxyKey?: boolean; deepseekApiKey?: boolean; claudeAuth?: boolean } = {}): Promise<Ctx> {
+async function setup(opts: { deepseekProxyKey?: boolean; deepseekApiKey?: boolean; claudeAuth?: boolean; route?: "direct" | "proxy" } = {}): Promise<Ctx> {
   const dataDir = mkdtempSync(join(tmpdir(), "ux-"));
   const sessionDir = mkdtempSync(join(tmpdir(), "uxs-"));
 
@@ -87,14 +87,26 @@ async function setup(opts: { deepseekProxyKey?: boolean; deepseekApiKey?: boolea
     sessionManager,
     prompt: createScriptedPrompt({}),
     sessionBaseDir: sessionDir,
+    ...(opts.route ? { getProviderRoute: (): "direct" | "proxy" => opts.route! } : {}),
   };
 
   return { deps, backend, registry, sessionManager, repoDir };
 }
 
-describe("7.1 — proxy credential via CredentialManager", () => {
-  it("resolves deepseek proxy key from the credential backend into the launch plan (no manual env)", async () => {
-    const { deps, registry, repoDir } = await setup({ deepseekProxyKey: true });
+describe("7.1 — deepseek direct vs proxy credential via CredentialManager", () => {
+  it("resolves the upstream API key (direct mode) into the launch plan, never a manual env", async () => {
+    const { deps, registry, repoDir } = await setup({ deepseekApiKey: true, deepseekProxyKey: false });
+    delete process.env.DEEPSEEK_API_KEY;
+    await registry.add({ name: "p", path: repoDir, defaultProvider: "deepseek" });
+    const launcher = new Launcher(deps);
+    const prep = await launcher.prepareLaunch({ projectKey: "p" }, { permissionMode: "safe" });
+    expect(prep.plan.providerId).toBe("deepseek");
+    expect(prep.plan.env.ANTHROPIC_AUTH_TOKEN).toBe("sk-ds-api");
+    expect(prep.plan.env.ANTHROPIC_BASE_URL).toBe("https://api.deepseek.com/anthropic");
+  });
+
+  it("resolves deepseek proxy key (proxy mode) into the launch plan, and never leaks the upstream key", async () => {
+    const { deps, registry, repoDir } = await setup({ deepseekProxyKey: true, deepseekApiKey: true, route: "proxy" });
     delete process.env.CONTINUUM_TENCENT_PROXY_USER_KEY;
     await registry.add({ name: "p", path: repoDir, defaultProvider: "deepseek" });
     const launcher = new Launcher(deps);
@@ -105,8 +117,17 @@ describe("7.1 — proxy credential via CredentialManager", () => {
     expect(JSON.stringify(prep.plan)).not.toContain("sk-ds-api"); // upstream key never leaked into launch env
   });
 
-  it("degrades deepseek to unusable when the proxy key is absent (not a silent launch)", async () => {
+  it("deepseek direct is usable with the API key alone (proxy key absent)", async () => {
     const { deps, registry, repoDir } = await setup({ deepseekProxyKey: false, deepseekApiKey: true });
+    delete process.env.CONTINUUM_TENCENT_PROXY_USER_KEY;
+    await registry.add({ name: "p", path: repoDir, defaultProvider: "deepseek" });
+    const launcher = new Launcher(deps);
+    const available = await launcher.listAuthenticatedProviders();
+    expect(available.map((a) => a.providerId)).toContain("deepseek");
+  });
+
+  it("deepseek is unusable in proxy mode when the proxy key is absent", async () => {
+    const { deps, registry, repoDir } = await setup({ deepseekProxyKey: false, deepseekApiKey: true, route: "proxy" });
     delete process.env.CONTINUUM_TENCENT_PROXY_USER_KEY;
     await registry.add({ name: "p", path: repoDir, defaultProvider: "deepseek" });
     const launcher = new Launcher(deps);
@@ -203,12 +224,21 @@ describe("7.1 — resume refreshes last-active", () => {
 });
 
 describe("7.1 — no secret leakage", () => {
-  it("launch plan env never contains the upstream API key alongside the proxy key", async () => {
-    const { deps, registry, repoDir } = await setup({ deepseekProxyKey: true, deepseekApiKey: true });
+  it("proxy launch plan env never contains the upstream API key alongside the proxy key", async () => {
+    const { deps, registry, repoDir } = await setup({ deepseekProxyKey: true, deepseekApiKey: true, route: "proxy" });
     await registry.add({ name: "p", path: repoDir, defaultProvider: "deepseek" });
     const launcher = new Launcher(deps);
     const prep = await launcher.prepareLaunch({ projectKey: "p" }, { permissionMode: "safe" });
     expect(JSON.stringify(prep.plan)).not.toContain("sk-ds-api");
     expect(prep.plan.env.ANTHROPIC_AUTH_TOKEN).toBe("sk-ds-proxy");
+  });
+
+  it("direct launch plan env never points at the local proxy URL", async () => {
+    const { deps, registry, repoDir } = await setup({ deepseekApiKey: true, deepseekProxyKey: true });
+    await registry.add({ name: "p", path: repoDir, defaultProvider: "deepseek" });
+    const launcher = new Launcher(deps);
+    const prep = await launcher.prepareLaunch({ projectKey: "p" }, { permissionMode: "safe" });
+    expect(JSON.stringify(prep.plan)).not.toContain("127.0.0.1");
+    expect(prep.plan.env.ANTHROPIC_AUTH_TOKEN).toBe("sk-ds-api");
   });
 });

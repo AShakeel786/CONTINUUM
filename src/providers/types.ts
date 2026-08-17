@@ -213,7 +213,38 @@ export interface ProxyRoutedCliLaunch {
   readonly mcpLaunch?: McpLaunchSupply;
 }
 
-export type CliLaunchDescriptor = NativeCliLaunch | ProxyRoutedCliLaunch;
+/**
+ * Launch the CLI redirected to a REMOTE Anthropic-compatible endpoint by
+ * setting `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN` — the same mechanism
+ * as proxy-routed, but pointing at a real upstream (e.g. DeepSeek's
+ * `https://api.deepseek.com/anthropic`) with the provider's OWN API key rather
+ * than a local proxy's user key. This is the direct DeepSeek path that needs
+ * no Docker/Tencent/MemoryProxy: CONTINUUM reaches DeepSeek straight through
+ * its own Anthropic-compatible endpoint.
+ */
+export interface RedirectedCliLaunch {
+  readonly kind: "redirected";
+  readonly executable: string;
+  readonly configDirName: string;
+  /** Full base URL the CLI is redirected to (includes any path suffix). */
+  readonly baseUrl: string;
+  /** Secret resolved as `ANTHROPIC_AUTH_TOKEN` (the upstream API key). */
+  readonly authTokenSecret: SecretRef;
+  readonly clearEnvVars: readonly string[];
+  /** Native-session resume capability (declared as data — see below). */
+  readonly nativeResume?: NativeResumeDescriptor;
+  /** MCP auto-connect capability (declared as data — see below). */
+  readonly mcp?: McpRegistrationDescriptor;
+  /** How the CLI receives task + assembled context (declared as data). */
+  readonly contextDelivery?: ContextDelivery;
+  /** How the CLI receives the CONTINUUM MCP server config at launch (declared as data). */
+  readonly mcpLaunch?: McpLaunchSupply;
+}
+
+export type CliLaunchDescriptor = NativeCliLaunch | ProxyRoutedCliLaunch | RedirectedCliLaunch;
+
+/** Which launch descriptor a dual-route provider (DeepSeek) uses this run. */
+export type LaunchRoute = "direct" | "proxy";
 
 // ── Native session resume (data, not behavior) ───────────────────────────
 //
@@ -317,6 +348,13 @@ export interface ProviderProfile {
   readonly capabilities: ProviderCapabilities;
   readonly environment: EnvironmentOwnership;
   readonly cliLaunch: CliLaunchDescriptor;
+  /**
+   * Optional alternative proxy-routed launch descriptor for providers that
+   * support BOTH a direct remote endpoint and an optional local proxy
+   * (DeepSeek's optional Tencent MemoryProxy mode). Absent for providers
+   * with a single launch path. Selected at runtime via `route: "proxy"`.
+   */
+  readonly proxyCliLaunch?: ProxyRoutedCliLaunch;
 }
 
 // ── CLI launch adapter ──────────────────────────────────────────────────
@@ -362,6 +400,12 @@ export interface CliLaunchContext {
    * literal credential.
    */
   readonly mcpConfig?: string;
+  /**
+   * For dual-route providers (DeepSeek): which launch descriptor to use.
+   * "proxy" selects the profile's `proxyCliLaunch` (optional Tencent mode);
+   * anything else (or absent) uses the primary `cliLaunch` (direct mode).
+   */
+  readonly route?: LaunchRoute;
 }
 
 /** A fully-resolved plan for launching a coding-agent CLI against this provider. */
@@ -392,6 +436,13 @@ export interface ProviderAdapter {
 
   /** Resolve a logical model alias ("default" if omitted) to a real model id. */
   resolveModel(alias?: string): string;
+
+  /**
+   * Resolve which launch descriptor this provider uses for a given route.
+   * "proxy" returns `profile.proxyCliLaunch` when the provider declares one;
+   * otherwise (or when absent) the primary `profile.cliLaunch` is returned.
+   */
+  resolveCliLaunch(route?: LaunchRoute): CliLaunchDescriptor;
 
   /**
    * Build auth headers for a DIRECT API call to this provider (used by a

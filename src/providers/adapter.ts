@@ -14,6 +14,7 @@ import type {
   CliLaunchContext,
   CliLaunchDescriptor,
   CliLaunchPlan,
+  LaunchRoute,
   ProviderAdapter,
   ProviderCapabilities,
   ProviderProfile,
@@ -41,6 +42,11 @@ class DataDrivenProviderAdapter implements ProviderAdapter {
       throw new UnknownModelAliasError(this.profile.id, alias, Object.keys(this.profile.models.aliases ?? {}));
     }
     return mapped;
+  }
+
+  resolveCliLaunch(route?: LaunchRoute): CliLaunchDescriptor {
+    if (route === "proxy" && this.profile.proxyCliLaunch) return this.profile.proxyCliLaunch;
+    return this.profile.cliLaunch;
   }
 
   buildAuthHeaders(): Readonly<Record<string, string>> {
@@ -76,7 +82,7 @@ class DataDrivenProviderAdapter implements ProviderAdapter {
   }
 
   buildCliLaunchPlan(ctx: CliLaunchContext): CliLaunchPlan {
-    const launch = this.profile.cliLaunch;
+    const launch = this.resolveCliLaunch(ctx.route);
     // Order matters: the MCP flag is variadic (`--mcp-config <configs...>`), so
     // it must be followed by a flag (the system-prompt flag), never by the
     // positional task prompt — otherwise the prompt would be swallowed as a
@@ -94,6 +100,25 @@ class DataDrivenProviderAdapter implements ProviderAdapter {
           clearEnvVars: launch.clearEnvVars,
           configDir: launch.configDirName,
         };
+      case "redirected": {
+        let token: string;
+        try {
+          token = resolveSecretFromCtx(this.profile.id, launch.authTokenSecret, ctx);
+        } catch (err) {
+          const reason = err instanceof Error ? err.message : String(err);
+          throw new ProviderAuthError(this.profile.id, `cannot launch redirected session: ${reason}`);
+        }
+        return {
+          executable: launch.executable,
+          args,
+          env: {
+            ANTHROPIC_BASE_URL: launch.baseUrl,
+            ANTHROPIC_AUTH_TOKEN: token,
+          },
+          clearEnvVars: launch.clearEnvVars,
+          configDir: launch.configDirName,
+        };
+      }
       case "proxy-routed": {
         let token: string;
         try {

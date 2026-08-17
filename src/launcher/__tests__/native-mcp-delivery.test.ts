@@ -43,7 +43,7 @@ function fakeCliAdapter(providerId: string): CliAuthAdapter {
   };
 }
 
-async function buildDeps(): Promise<{ deps: LauncherDeps; registry: ProjectRegistry; sessionManager: SessionManager }> {
+async function buildDeps(opts: { route?: "direct" | "proxy" } = {}): Promise<{ deps: LauncherDeps; registry: ProjectRegistry; sessionManager: SessionManager }> {
   const dataDir = mkdtempSync(join(tmpdir(), "continuum-nmd-"));
   const sessionDir = mkdtempSync(join(tmpdir(), "continuum-nmd-sess-"));
   const registry = new ProjectRegistry(new ProjectRegistryStore(dataDir));
@@ -72,6 +72,7 @@ async function buildDeps(): Promise<{ deps: LauncherDeps; registry: ProjectRegis
     sessionManager,
     prompt: createScriptedPrompt({}),
     sessionBaseDir: sessionDir,
+    ...(opts.route ? { getProviderRoute: (): "direct" | "proxy" => opts.route! } : {}),
   };
   return { deps, registry, sessionManager };
 }
@@ -189,8 +190,18 @@ describe("no secrets", () => {
     expect(mcpConfigJson(prep.plan.args)).not.toMatch(SECRET_SHAPED);
   });
 
-  it("the launch env never leaks the upstream API key alongside the proxy key", async () => {
+  it("direct launch env uses the upstream key as the auth token and never points at the proxy", async () => {
     const { deps, registry } = await buildDeps();
+    const p = await registry.add({ name: "CARS", path: "/work/CARS", defaultProvider: "deepseek" });
+    const launcher = new Launcher(deps);
+    const prep = await launcher.prepareLaunch({ projectKey: p.id, taskGoal: "x" }, { permissionMode: "safe" });
+    expect(prep.plan.env.ANTHROPIC_AUTH_TOKEN).toBe("sk-test");
+    expect(prep.plan.env.ANTHROPIC_BASE_URL).toBe("https://api.deepseek.com/anthropic");
+    expect(JSON.stringify(prep.plan.env)).not.toContain("127.0.0.1");
+  });
+
+  it("proxy launch env never leaks the upstream API key alongside the proxy key", async () => {
+    const { deps, registry } = await buildDeps({ route: "proxy" });
     const p = await registry.add({ name: "CARS", path: "/work/CARS", defaultProvider: "deepseek" });
     const launcher = new Launcher(deps);
     const prep = await launcher.prepareLaunch({ projectKey: p.id, taskGoal: "x" }, { permissionMode: "safe" });

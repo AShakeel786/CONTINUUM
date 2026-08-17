@@ -107,14 +107,14 @@ describe("resolveConfigDir", () => {
 });
 
 describe("config-dir resolution on the launch plan", () => {
-  it("DeepSeek resolves to ~/.claude-tencent (absolute), never a repo-local relative dir", async () => {
+  it("DeepSeek (direct) resolves to ~/.claude-deepseek (absolute), never a repo-local relative dir", async () => {
     const { deps, registry } = await buildDeps();
     const p = await registry.add({ name: "CARS", path: "/work/CARS", defaultProvider: "deepseek" });
     const launcher = new Launcher(deps);
     const prep = await launcher.prepareLaunch({ projectKey: p.id, taskGoal: "inspect" }, { permissionMode: "safe" });
-    expect(prep.plan.configDir).toBe(join(homedir(), ".claude-tencent"));
+    expect(prep.plan.configDir).toBe(join(homedir(), ".claude-deepseek"));
     expect(isAbsolute(prep.plan.configDir!)).toBe(true);
-    expect(prep.plan.configDir).not.toBe(".claude-tencent");
+    expect(prep.plan.configDir).not.toBe(".claude-deepseek");
   });
 
   it("native Claude resolves to ~/.claude-anthropic (absolute)", async () => {

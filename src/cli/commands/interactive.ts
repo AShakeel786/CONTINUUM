@@ -19,7 +19,6 @@ import { ProjectRegistry, normalizeProjectPath } from "../../registry/registry.j
 import type { ProjectRecord } from "../../registry/types.js";
 import { ProjectAlreadyExistsError, ProjectNotFoundError } from "../../registry/errors.js";
 import { compareTimestampsDesc, formatSessionPickerLine, listRecentSessions, type RecentSessionSummary } from "../../launcher/session-list.js";
-import type { ProviderUsability } from "../../launcher/launcher.js";
 import type { LaunchPreparation } from "../../launcher/types.js";
 import { LocalDependencyUnavailableError, NoAuthenticatedAgentError, NoProjectError, ProviderNotAuthenticatedError } from "../../launcher/errors.js";
 import { AgentManager, AgentValidationError } from "../../agents/index.js";
@@ -161,25 +160,76 @@ async function startNewTaskFlow(deps: InteractiveMenuDeps, prompt: Prompt, out: 
     projectId = projects[workspaceIdx - 2]!.id;
   }
 
-  const all = await deps.agentManager.listUsable();
-  const usable = all.filter((u) => u.usable);
-  const unusable = all.filter((u) => !u.usable);
-  for (const d of unusable) out(`  (${d.displayName} unavailable: ${d.reason ?? "not authenticated"})\n`);
-  if (usable.length === 0) {
-    out("\nNo usable agent. Authenticate one first (e.g. 'Manage AI agents' → Add/Configure).\n");
-    return "back";
+  const all = await deps.agentManager.listDescriptors();
+  // Every installed agent is listed (even fixable-unauthenticated ones), with a
+  // clear state — a "needs authentication" provider is never silently hidden.
+  const labels = all.map((d) => `${d.displayName}\n${agentStatusLabel(d)}`);
+  const agentIdx = await chooseNumber(prompt, out, "Choose agent:", labels, "Back");
+  if (agentIdx === undefined) return "back";
+  const chosen = all[agentIdx]!;
+
+  // Selecting a fixable-but-not-ready agent routes to its setup/sign-in flow,
+  // then returns here. Only a now-ready agent proceeds to a launch.
+  if (chosen.availability !== "ready") {
+    const ready = await remediateAgent(deps, prompt, out, chosen);
+    if (!ready) return "back";
+    out(`\n${chosen.displayName} is ready.\n`);
   }
 
-  const agentIdx = await chooseNumber(prompt, out, "Choose agent:", usable.map((p) => p.displayName), "Back");
-  if (agentIdx === undefined) return "back";
   const taskGoal = await prompt.ask("Task goal (optional)", "");
   return {
     kind: "new",
     ...(projectId ? { projectId } : {}),
     ...(mode ? { mode } : {}),
-    providerId: usable[agentIdx]!.providerId,
+    providerId: chosen.providerId,
     taskGoal,
   };
+}
+
+/** Human-readable state for the agent chooser (target: "Ready", "Ready · Direct", "Needs authentication"). */
+function agentStatusLabel(d: AgentDescriptor): string {
+  switch (d.availability) {
+    case "ready":
+      if (d.auth.proxyUserKey) return d.route === "proxy" ? "Ready · Proxy" : "Ready · Direct";
+      return "Ready";
+    case "needs-authentication":
+      return "Needs authentication";
+    case "not-installed":
+      return "Not installed";
+    case "not-configured":
+      return "Needs configuration";
+    default:
+      return d.reason ?? "Unavailable";
+  }
+}
+
+/**
+ * Drive an installed-but-fixable agent to "ready". Returns true when the agent
+ * is now usable; false when the user must do something outside CONTINUUM (e.g.
+ * install a CLI) or cancelled. Never fakes success.
+ */
+async function remediateAgent(deps: InteractiveMenuDeps, prompt: Prompt, out: PromptOutput, d: AgentDescriptor): Promise<boolean> {
+  if (d.availability === "not-installed") {
+    out(`\n${d.displayName} is not installed. Install it, then return to this menu.\n`);
+    return false;
+  }
+  if (d.availability === "needs-authentication") {
+    out(`\nSigning in to ${d.displayName} (this opens the official login flow)…\n`);
+    try {
+      const updated = await deps.agentManager.configure(d.providerId, "cli");
+      return updated?.usable === true;
+    } catch (err) {
+      if (err instanceof AgentValidationError) {
+        out(`${err.message}\n`);
+        return false;
+      }
+      throw err;
+    }
+  }
+  // needs-configuration / unavailable → the full configure flow (prompts for key).
+  await configureAgentById(deps, prompt, out, d.providerId);
+  const now = (await deps.agentManager.listDescriptors()).find((x) => x.providerId === d.providerId);
+  return now?.usable === true;
 }
 
 /** Main menu → "Resume session": pick the most-recent active session. */
@@ -311,14 +361,14 @@ async function manageProjectsFlow(deps: InteractiveMenuDeps, prompt: Prompt, out
   }
 }
 
-/** Main menu → "Manage AI agents": Add / Remove / Configure / List / Back. */
+/** Main menu → "Manage AI agents": Add / Remove / Configure / Sign in / Test / List / Back. */
 async function manageAgentsFlow(deps: InteractiveMenuDeps, prompt: Prompt, out: PromptOutput): Promise<void> {
   for (;;) {
     const choice = await chooseNumber(
       prompt,
       out,
       "Manage AI agents:",
-      ["Add AI agent", "Remove AI agent", "Configure AI agent", "List agents"],
+      ["Add AI agent", "Remove AI agent", "Configure AI agent", "Sign in", "Test agent", "List agents"],
       "Back",
     );
     if (choice === undefined) return;
@@ -335,8 +385,61 @@ async function manageAgentsFlow(deps: InteractiveMenuDeps, prompt: Prompt, out: 
       await configureAgentFlow(deps, prompt, out);
       continue;
     }
+    if (choice === 3) {
+      await signInAgentFlow(deps, prompt, out);
+      continue;
+    }
+    if (choice === 4) {
+      await testAgentFlow(deps, prompt, out);
+      continue;
+    }
     await listAgentsFlow(deps, prompt, out);
   }
+}
+
+/** Select an installed-but-unauthenticated agent and drive its official sign-in. */
+async function signInAgentFlow(deps: InteractiveMenuDeps, prompt: Prompt, out: PromptOutput): Promise<void> {
+  const descriptors = await deps.agentManager.listDescriptors();
+  const fixable = descriptors.filter((d) => d.availability === "needs-authentication" || d.availability === "not-configured");
+  if (fixable.length === 0) {
+    out("\nNo agent needs sign-in right now.\n");
+    return;
+  }
+  const idx = await chooseNumber(
+    prompt,
+    out,
+    "Sign in to agent:",
+    fixable.map((d) => `${d.displayName} (${d.providerId}) — ${agentStatusLabel(d)}`),
+    "Back",
+  );
+  if (idx === undefined) return;
+  const d = fixable[idx]!;
+  const ready = await remediateAgent(deps, prompt, out, d);
+  out(ready ? `\n✓ ${d.displayName} is ready.\n` : `\n${d.displayName} is still not ready.\n`);
+}
+
+/** Re-verify one agent's auth/credential state (structural + CLI status; never prints the key). */
+async function testAgentFlow(deps: InteractiveMenuDeps, prompt: Prompt, out: PromptOutput): Promise<void> {
+  const descriptors = await deps.agentManager.listDescriptors();
+  if (descriptors.length === 0) {
+    out("\nNo agents to test.\n");
+    return;
+  }
+  const idx = await chooseNumber(
+    prompt,
+    out,
+    "Test agent:",
+    descriptors.map((d) => `${d.displayName} (${d.providerId})`),
+    "Back",
+  );
+  if (idx === undefined) return;
+  const d = descriptors[idx]!;
+  out(`\n${d.displayName} (${d.providerId}):\n`);
+  out(`  installed: ${d.cliInstalled === true ? "yes" : d.cliInstalled === false ? "no" : "n/a"}\n`);
+  out(`  authenticated: ${d.cliAuthenticated === true ? "yes" : d.cliAuthenticated === false ? "no" : "n/a"}\n`);
+  out(`  status: ${agentStatusLabel(d)}\n`);
+  if (d.reason) out(`  detail: ${d.reason}\n`);
+  if (d.auth.proxyUserKey) out(`  routing: ${d.route ?? "direct"}\n`);
 }
 
 async function listAgentsFlow(deps: InteractiveMenuDeps, prompt: Prompt, out: PromptOutput): Promise<void> {
@@ -353,10 +456,10 @@ function formatAgentLine(a: AgentDescriptor): string {
   const source = a.source === "builtin" ? "built-in" : "custom";
   const auth = [a.auth.cli ? "CLI" : "", a.auth.api ? "API" : ""].filter(Boolean).join("+") || "none";
   const config = a.configured ? `configured (${a.configuredMethod})` : "not configured";
-  const status = a.usable ? "usable" : `unavailable${a.reason ? `: ${a.reason}` : ""}`;
   const launch = a.launchKind === "cli" ? "cli" : a.launchKind === "direct-api" ? "api" : "none";
   const cli = a.auth.cli ? ` CLI=${a.cliInstalled === false ? "not-installed" : a.cliInstalled === true ? "installed" : "unknown"}` : "";
-  return `  - ${a.displayName} (${a.providerId}) [${source}] auth=${auth} launch=${launch} ${config} ${status}${cli}\n`;
+  const route = a.auth.proxyUserKey ? ` route=${a.route ?? "direct"}` : "";
+  return `  - ${a.displayName} (${a.providerId}) [${source}] auth=${auth} launch=${launch} ${config} ${agentStatusLabel(a)}${cli}${route}\n`;
 }
 
 async function addAgentFlow(deps: InteractiveMenuDeps, prompt: Prompt, out: PromptOutput): Promise<void> {
@@ -422,7 +525,7 @@ async function removeAgentFlow(deps: InteractiveMenuDeps, prompt: Prompt, out: P
   }
 }
 
-/** Run auth setup for one existing agent, asking CLI-vs-API when both are supported. */
+/** Run auth setup for one existing agent, asking CLI-vs-API when both are supported, and routing for dual-route providers. */
 async function configureAgentById(deps: InteractiveMenuDeps, prompt: Prompt, out: PromptOutput, providerId: string): Promise<void> {
   const descriptor = (await deps.agentManager.listDescriptors()).find((d) => d.providerId === providerId);
   if (!descriptor) {
@@ -430,13 +533,17 @@ async function configureAgentById(deps: InteractiveMenuDeps, prompt: Prompt, out
     return;
   }
   const preferred = await chooseAuthMethod(descriptor.auth, prompt);
+  // Dual-route providers (DeepSeek) may choose between direct and the optional
+  // Tencent MemoryProxy path; default stays direct (standalone).
+  const route = descriptor.auth.proxyUserKey ? await chooseRoute(prompt, descriptor.route) : undefined;
   try {
-    const updated = await deps.agentManager.configure(providerId, preferred);
+    const updated = await deps.agentManager.configure(providerId, preferred, route);
     if (!updated) {
       out(`(cancelled: no credential provided for ${descriptor.displayName})\n`);
       return;
     }
-    out(`✓ ${updated.displayName} configured via ${updated.configuredMethod}.\n`);
+    const routeNote = updated.auth.proxyUserKey ? ` (${updated.route ?? "direct"})` : "";
+    out(`✓ ${updated.displayName} configured via ${updated.configuredMethod}${routeNote}.\n`);
   } catch (err) {
     if (err instanceof AgentValidationError) {
       out(`${err.message}\n`);
@@ -444,6 +551,13 @@ async function configureAgentById(deps: InteractiveMenuDeps, prompt: Prompt, out
     }
     throw err;
   }
+}
+
+async function chooseRoute(prompt: Prompt, current?: "direct" | "proxy"): Promise<"direct" | "proxy" | undefined> {
+  const answer = (await prompt.ask(`Routing [direct/proxy]${current ? ` (${current})` : ""}`, current ?? "direct")).trim().toLowerCase();
+  if (answer === "proxy") return "proxy";
+  if (answer === "direct") return "direct";
+  return undefined;
 }
 
 async function chooseAuthMethod(auth: AgentAuthFacts, prompt: Prompt): Promise<ProviderAuthMethod | undefined> {

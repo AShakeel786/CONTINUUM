@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { evaluateProvider } from "../usability.js";
+import { availabilityOf, evaluateProvider } from "../usability.js";
 import { manifestToAuthMetadata, manifestToProfile, type ProviderManifest } from "../../providers/manifest.js";
 import { createProviderAdapter } from "../../providers/adapter.js";
 import { claudeManifest, codexManifest, deepseekManifest } from "../../providers/presets.js";
@@ -151,5 +151,74 @@ describe("evaluateProvider — API-only custom providers", () => {
     expect(e.usable).toBe(false);
     expect(e.launchKind).toBe("none");
     expect(e.reason).toContain("no compatible direct-API runtime");
+  });
+});
+
+describe("availability — distinct, actionable menu states", () => {
+  it("Codex installed + authenticated → ready", async () => {
+    const metadata = manifestToAuthMetadata(codexManifest);
+    const e = await evaluateProvider(adapterFor(codexManifest), metadata, {
+      cliAuthManager: makeCliManager({ authenticated: true }),
+      credentialManager: new CredentialManager(new FakeBackend()),
+    });
+    expect(availabilityOf(e)).toBe("ready");
+    expect(e.cliInstalled).toBe(true);
+    expect(e.cliAuthenticated).toBe(true);
+  });
+
+  it("Codex installed + unauthenticated → needs-authentication (fixable, not hidden)", async () => {
+    const metadata = manifestToAuthMetadata(codexManifest);
+    const e = await evaluateProvider(adapterFor(codexManifest), metadata, {
+      cliAuthManager: makeCliManager({ authenticated: false }),
+      credentialManager: new CredentialManager(new FakeBackend()),
+    });
+    expect(e.usable).toBe(false);
+    expect(e.cliInstalled).toBe(true);
+    expect(e.cliAuthenticated).toBe(false);
+    expect(availabilityOf(e)).toBe("needs-authentication");
+  });
+
+  it("Codex missing binary → not-installed", async () => {
+    const metadata = manifestToAuthMetadata(codexManifest);
+    const e = await evaluateProvider(adapterFor(codexManifest), metadata, {
+      cliAuthManager: makeCliManager({ installed: false }),
+      credentialManager: new CredentialManager(new FakeBackend()),
+    });
+    expect(availabilityOf(e)).toBe("not-installed");
+  });
+
+  it("DeepSeek direct mode requires only the API key; proxy mode requires only the proxy key", async () => {
+    const metadata = manifestToAuthMetadata(deepseekManifest);
+    const find = (exe: string) => (exe === "claude" ? "/usr/bin/claude" : undefined);
+
+    const directBackend = new FakeBackend();
+    directBackend.seed("continuum:deepseek:api-key", "sk-direct");
+    const direct = await evaluateProvider(adapterFor(deepseekManifest), metadata, {
+      cliAuthManager: makeCliManager(),
+      credentialManager: new CredentialManager(directBackend),
+      findExecutable: find,
+    });
+    expect(direct.usable).toBe(true);
+    expect(direct.route).toBe("direct");
+
+    const proxyBackend = new FakeBackend();
+    proxyBackend.seed("continuum:deepseek:proxy-user-key", "proxy");
+    const proxy = await evaluateProvider(adapterFor(deepseekManifest), metadata, {
+      cliAuthManager: makeCliManager(),
+      credentialManager: new CredentialManager(proxyBackend),
+      findExecutable: find,
+      route: "proxy",
+    });
+    expect(proxy.usable).toBe(true);
+    expect(proxy.route).toBe("proxy");
+
+    const missingProxy = await evaluateProvider(adapterFor(deepseekManifest), metadata, {
+      cliAuthManager: makeCliManager(),
+      credentialManager: new CredentialManager(new FakeBackend()),
+      findExecutable: find,
+      route: "proxy",
+    });
+    expect(missingProxy.usable).toBe(false);
+    expect(missingProxy.reason).toContain("no proxy user key");
   });
 });

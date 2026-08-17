@@ -20,6 +20,7 @@ import type {
   Protocol,
   ProviderCapabilities,
   ProviderProfile,
+  ProxyRoutedCliLaunch,
 } from "./types.js";
 import { secretRef } from "./secrets.js";
 import type { CliAuthCapability, CliAuthCheckEnv, ProviderAuthMetadata } from "../auth/types.js";
@@ -40,28 +41,41 @@ export type ManifestMcpLaunch =
   | { readonly kind: "mcp-config-flag"; readonly flag: string }
   | { readonly kind: "global-config" };
 
+export interface ManifestCliLaunchCommon {
+  readonly configDirName?: string;
+  readonly clearEnvVars?: readonly string[];
+  readonly nativeResume?: NativeResumeDescriptor;
+  readonly mcp?: { readonly supported: true; readonly serverName: string } | { readonly supported: false };
+  readonly contextDelivery?: ManifestContextDelivery;
+  readonly mcpLaunch?: ManifestMcpLaunch;
+}
+
 export type ManifestCliLaunch =
-  | {
-      readonly kind: "native";
-      readonly configDirName?: string;
-      readonly clearEnvVars?: readonly string[];
-      readonly nativeResume?: NativeResumeDescriptor;
-      readonly mcp?: { readonly supported: true; readonly serverName: string } | { readonly supported: false };
-      readonly contextDelivery?: ManifestContextDelivery;
-      readonly mcpLaunch?: ManifestMcpLaunch;
-    }
-  | {
+  | (ManifestCliLaunchCommon & { readonly kind: "native" })
+  | (ManifestCliLaunchCommon & {
+      readonly kind: "redirected";
+      readonly baseUrl: string;
+      readonly authTokenEnvVar: string;
+    })
+  | (ManifestCliLaunchCommon & {
       readonly kind: "proxy-routed";
       readonly proxyBaseUrl: string;
       readonly proxyPathSuffix: string;
       readonly proxyUserKeyEnvVar: string;
-      readonly configDirName?: string;
-      readonly clearEnvVars?: readonly string[];
-      readonly nativeResume?: NativeResumeDescriptor;
-      readonly mcp?: { readonly supported: true; readonly serverName: string } | { readonly supported: false };
-      readonly contextDelivery?: ManifestContextDelivery;
-      readonly mcpLaunch?: ManifestMcpLaunch;
-    };
+    });
+
+/**
+ * The optional proxy-routed launch descriptor for dual-route providers
+ * (DeepSeek). Declared separately from `cliLaunch` (the default/direct path)
+ * so a provider can offer a remote-direct launch by default while keeping the
+ * optional Tencent MemoryProxy route available behind explicit opt-in.
+ */
+export type ManifestProxyCliLaunch = ManifestCliLaunchCommon & {
+  readonly kind: "proxy-routed";
+  readonly proxyBaseUrl: string;
+  readonly proxyPathSuffix: string;
+  readonly proxyUserKeyEnvVar: string;
+};
 
 export interface ManifestCli {
   readonly supported: true;
@@ -97,6 +111,8 @@ export interface ProviderManifest {
   readonly capabilities?: ManifestCapabilities;
   readonly environment?: EnvironmentOwnership;
   readonly cliLaunch?: ManifestCliLaunch;
+  /** Optional alternative proxy-routed launch descriptor (see `ManifestProxyCliLaunch`). */
+  readonly proxyCliLaunch?: ManifestProxyCliLaunch;
   readonly cli?: ManifestCli;
   readonly proxyUserKey?: ManifestProxyUserKey;
 }
@@ -148,6 +164,25 @@ export function validateManifest(input: unknown): readonly string[] {
     if (!Array.isArray(cli.loginArgs) || cli.loginArgs.length === 0) errors.push("cli.loginArgs is required");
   }
 
+  // Structural validation for the (new) dual-route launch descriptors.
+  const launch = m.cliLaunch;
+  if (launch && launch.kind === "redirected") {
+    if (typeof launch.baseUrl !== "string" || !/^https?:\/\/[^\s]+$/.test(launch.baseUrl.trim())) {
+      errors.push("cliLaunch.baseUrl must be a valid http(s) URL for kind=redirected");
+    }
+    if (typeof launch.authTokenEnvVar !== "string" || launch.authTokenEnvVar.trim().length === 0) {
+      errors.push("cliLaunch.authTokenEnvVar is required for kind=redirected");
+    }
+  }
+  const proxyLaunch = m.proxyCliLaunch;
+  if (proxyLaunch) {
+    if (proxyLaunch.kind !== "proxy-routed") errors.push("proxyCliLaunch.kind must be proxy-routed");
+    if (typeof proxyLaunch.proxyBaseUrl !== "string" || proxyLaunch.proxyBaseUrl.trim().length === 0) errors.push("proxyCliLaunch.proxyBaseUrl is required");
+    if (typeof proxyLaunch.proxyUserKeyEnvVar !== "string" || proxyLaunch.proxyUserKeyEnvVar.trim().length === 0) {
+      errors.push("proxyCliLaunch.proxyUserKeyEnvVar is required");
+    }
+  }
+
   // Safety: reject anything that looks like an inline secret in a manifest field.
   const serialized = JSON.stringify(input);
   if (/sk-[a-zA-Z0-9_-]{8,}|AKID[a-zA-Z0-9]{8,}|-----BEGIN/i.test(serialized)) {
@@ -187,6 +222,39 @@ function toCliLaunch(m: ProviderManifest): CliLaunchDescriptor {
       ...(l.mcpLaunch ? { mcpLaunch: l.mcpLaunch } : {}),
     };
   }
+  if (l.kind === "redirected") {
+    return {
+      kind: "redirected",
+      executable: m.cli?.executable ?? "claude",
+      configDirName: l.configDirName ?? ".claude",
+      baseUrl: l.baseUrl,
+      authTokenSecret: secretRef(l.authTokenEnvVar),
+      clearEnvVars: l.clearEnvVars ?? [],
+      ...(l.nativeResume ? { nativeResume: l.nativeResume } : {}),
+      ...(l.mcp ? { mcp: l.mcp } : {}),
+      ...(l.contextDelivery ? { contextDelivery: l.contextDelivery } : {}),
+      ...(l.mcpLaunch ? { mcpLaunch: l.mcpLaunch } : {}),
+    };
+  }
+  return {
+    kind: "proxy-routed",
+    executable: m.cli?.executable ?? "claude",
+    configDirName: l.configDirName ?? ".claude",
+    proxyBaseUrl: l.proxyBaseUrl,
+    proxyPathSuffix: l.proxyPathSuffix,
+    proxyUserKeySecret: secretRef(l.proxyUserKeyEnvVar),
+    clearEnvVars: l.clearEnvVars ?? [],
+    ...(l.nativeResume ? { nativeResume: l.nativeResume } : {}),
+    ...(l.mcp ? { mcp: l.mcp } : {}),
+    ...(l.contextDelivery ? { contextDelivery: l.contextDelivery } : {}),
+    ...(l.mcpLaunch ? { mcpLaunch: l.mcpLaunch } : {}),
+  };
+}
+
+/** Convert the optional proxy-routed launch descriptor into the runtime shape. */
+function toProxyCliLaunch(m: ProviderManifest): ProxyRoutedCliLaunch | undefined {
+  const l = m.proxyCliLaunch;
+  if (!l) return undefined;
   return {
     kind: "proxy-routed",
     executable: m.cli?.executable ?? "claude",
@@ -205,6 +273,7 @@ function toCliLaunch(m: ProviderManifest): CliLaunchDescriptor {
 /** Convert a validated manifest into a runtime `ProviderProfile`. */
 export function manifestToProfile(m: ProviderManifest): ProviderProfile {
   const auth = m.auth;
+  const proxyCliLaunch = toProxyCliLaunch(m);
   return {
     id: m.id,
     displayName: m.displayName,
@@ -222,6 +291,7 @@ export function manifestToProfile(m: ProviderManifest): ProviderProfile {
     capabilities: toCapabilities(m),
     environment: m.environment ?? { owns: envOwns(m) },
     cliLaunch: toCliLaunch(m),
+    ...(proxyCliLaunch ? { proxyCliLaunch } : {}),
   };
 }
 
@@ -230,6 +300,11 @@ function envOwns(m: ProviderManifest): readonly string[] {
   const a = m.auth;
   if ((a.kind === "api-key" || a.kind === "bearer-token" || a.kind === "proxy-routed") && a.envVar) owns.add(a.envVar);
   if (m.proxyUserKey?.envVar) owns.add(m.proxyUserKey.envVar);
+  // Dual-route providers declare their redirect/proxy env vars on the launch
+  // descriptors, not the auth block — capture them so a launcher can clear
+  // exactly what the provider owns and never leave a stale proxy var set.
+  if (m.cliLaunch?.kind === "redirected") owns.add(m.cliLaunch.authTokenEnvVar);
+  if (m.proxyCliLaunch?.kind === "proxy-routed") owns.add(m.proxyCliLaunch.proxyUserKeyEnvVar);
   return [...owns];
 }
 

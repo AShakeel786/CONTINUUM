@@ -124,6 +124,32 @@ describe("all healthy", () => {
   });
 });
 
+// ── 1b. Tencent stack absent → optional (skipped), standalone providers healthy ──
+
+describe("Tencent stack absent is optional, not a failure", () => {
+  it("reports the Tencent stack skipped and a direct (api) DeepSeek healthy, overall healthy", async () => {
+    const runtime = new FakeRuntime();
+    runtime.on("docker", (args) => {
+      if (args[0] === "info") return { code: 0 };
+      if (args[0] === "ps") return { code: 0, stdout: "" }; // no Tencent containers
+      return { code: 0 };
+    });
+    const doctor = new HealthDoctor({
+      runtime,
+      options: makeOptions({ tencentConfigured: false }),
+      policy: POLICY,
+      probes: {
+        providerStatus: async () => [{ providerId: "deepseek", method: "api", healthy: true, detail: "credential present" }],
+      },
+    });
+    const report = await doctor.diagnose();
+    expect(report.checks.find((c) => c.name === "tencent-memory")?.status).toBe("skipped");
+    expect(report.checks.find((c) => c.name === "docker")?.status).toBe("skipped");
+    expect(report.checks.find((c) => c.name === "provider:deepseek")?.status).toBe("ok");
+    expect(report.overall).toBe("healthy");
+  });
+});
+
 // ── 2/3. Stopped core/proxy → targeted docker start ────────────────────────
 
 describe("stopped containers", () => {

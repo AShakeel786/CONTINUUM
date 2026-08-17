@@ -24,7 +24,14 @@ import type { CliIo } from "../index.js";
 function runtimeLabel(m: ProviderManifest): string {
   const profile = manifestToProfile(m);
   if (!profile.capabilities.cliAvailable) return "CONTINUUM API";
-  return profile.cliLaunch.kind === "proxy-routed" ? "Proxy CLI" : "Native CLI";
+  switch (profile.cliLaunch.kind) {
+    case "proxy-routed":
+      return "Proxy CLI";
+    case "redirected":
+      return profile.proxyCliLaunch ? "Redirected CLI (optional proxy)" : "Redirected CLI";
+    default:
+      return "Native CLI";
+  }
 }
 
 function opt(args: readonly string[], ...flags: readonly string[]): string | undefined {

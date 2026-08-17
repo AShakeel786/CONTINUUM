@@ -26,7 +26,7 @@ import { basename } from "node:path";
 import type { ProjectRegistry } from "../registry/registry.js";
 import type { ProjectRecord } from "../registry/types.js";
 import type { ProviderRegistry } from "../providers/registry.js";
-import type { ProviderAdapter } from "../providers/types.js";
+import type { LaunchRoute, ProviderAdapter } from "../providers/types.js";
 import type { CredentialManager } from "../auth/credential-manager.js";
 import type { CliAuthManager } from "../auth/cli-auth-manager.js";
 import type { AuthVerifier } from "../auth/auth-verifier.js";
@@ -82,6 +82,12 @@ export interface LauncherDeps {
   readonly ensureProxyReady?: (proxyBaseUrl: string, onProgress?: (line: string) => void) => Promise<ProxyReadiness>;
   /** Progress lines from `ensureProxyReady` (see above) — stateful, not raw retry spam. */
   readonly onDependencyProgress?: (line: string) => void;
+  /**
+   * Resolve which launch route a dual-route provider (DeepSeek) uses this run.
+   * Absent (or returning anything but "proxy") = direct standalone launch.
+   * Defaults to "direct" — the optional Tencent proxy is never inferred.
+   */
+  readonly getProviderRoute?: (providerId: string) => LaunchRoute;
 }
 
 export type SpawnFn = (plan: LaunchPlan) => Promise<{ exitCode: number | null }>;
@@ -130,6 +136,7 @@ export class Launcher {
         model: adapter.resolveModel(),
         usable: check.usable,
         reason: check.reason,
+        route: this.routeFor(id),
       });
     }
     return result;
@@ -145,6 +152,10 @@ export class Launcher {
     return usable.map((u) => ({ providerId: u.providerId, model: u.model }));
   }
 
+  private routeFor(providerId: string): LaunchRoute {
+    return this.deps.getProviderRoute?.(providerId) ?? "direct";
+  }
+
   private async isProviderUsable(
     adapter: ProviderAdapter,
     metadata: ProviderAuthMetadata,
@@ -152,6 +163,7 @@ export class Launcher {
     return computeProviderUsability(adapter, metadata, {
       cliAuthManager: this.deps.cliAuthManager,
       credentialManager: this.deps.credentialManager,
+      route: this.routeFor(adapter.profile.id),
     });
   }
 
@@ -208,17 +220,23 @@ export class Launcher {
       throw new ProviderNotAuthenticatedError(providerId, usable.reason ?? "no API key");
     }
 
+    // The effective launch route for this run (direct default; proxy only when
+    // explicitly configured). Used below for the dependency gate and the plan.
+    const route = this.routeFor(providerId);
+
     // Local-dependency readiness (Tencent MemoryProxy): a proxy-routed launch
     // is doomed before it starts if the proxy isn't reachable — the provider
     // CLI would spawn straight into its own uncontrolled connection-refused
     // retry loop, which CONTINUUM can neither see nor stop. Check + bounded
     // self-heal HERE, before any session is created or mutated below, so a
     // failure never disturbs existing session/handoff state and a retry
-    // after fixing the dependency resumes cleanly.
-    if (adapter.profile.cliLaunch.kind === "proxy-routed" && this.deps.ensureProxyReady) {
-      const readiness = await this.deps.ensureProxyReady(adapter.profile.cliLaunch.proxyBaseUrl, this.deps.onDependencyProgress);
+    // after fixing the dependency resumes cleanly. Direct (redirected/native)
+    // launches never engage this gate.
+    const effectiveLaunch = adapter.resolveCliLaunch(route);
+    if (effectiveLaunch.kind === "proxy-routed" && this.deps.ensureProxyReady) {
+      const readiness = await this.deps.ensureProxyReady(effectiveLaunch.proxyBaseUrl, this.deps.onDependencyProgress);
       if (!readiness.ready) {
-        throw new LocalDependencyUnavailableError(providerId, adapter.profile.cliLaunch.proxyBaseUrl, sessionMode, readiness.detail, readiness.repairAttempted);
+        throw new LocalDependencyUnavailableError(providerId, effectiveLaunch.proxyBaseUrl, sessionMode, readiness.detail, readiness.repairAttempted);
       }
     }
 
@@ -358,11 +376,12 @@ export class Launcher {
     const taskPrompt = session.taskGoal;
 
     // Build the CLI launch plan (auth/env/session identity), merging resolved credentials.
-    // Proxy user key (deepseek proxy-routed path) is sourced from the credential
-    // backend, not a manual env var — see ctx.secrets below.
-    const launchCtx = await this.buildLaunchContext(adapter, metadata, project.defaultModel, project.path, resumeNativeSessionId, setSessionId, taskPrompt, contextSystem);
+    // The launch secret (deepseek api-key in direct mode, proxy user key in
+    // proxy mode) is sourced from the credential backend, not a manual env var —
+    // see ctx.secrets below.
+    const launchCtx = await this.buildLaunchContext(adapter, metadata, project.defaultModel, project.path, resumeNativeSessionId, setSessionId, taskPrompt, contextSystem, route);
     const basePlan = adapter.buildCliLaunchPlan(launchCtx);
-    const authEnv = metadata.api.supported ? await this.resolveAuthEnvSafely(adapter, metadata) : {};
+    const authEnv = metadata.api.supported ? await this.resolveAuthEnvSafely(adapter, metadata, route) : {};
 
     const plan: LaunchPlan = {
       providerId,
@@ -419,17 +438,18 @@ export class Launcher {
     return !!nr && nr.supported && !!nr.sessionIdFlag;
   }
 
-  private async resolveAuthEnvSafely(adapter: ProviderAdapter, metadata: ProviderAuthMetadata): Promise<Record<string, string>> {
+  private async resolveAuthEnvSafely(adapter: ProviderAdapter, metadata: ProviderAuthMetadata, route: LaunchRoute): Promise<Record<string, string>> {
     // Only API-key/bearer auth has an env var to populate; cli-session providers
     // rely on their own login and inject nothing.
     const envVar = metadata.api.supported ? metadata.api.envVar : undefined;
     if (!envVar) return {};
-    // Proxy-routed launches do NOT consume the upstream API key — the proxy
-    // holds it server-side. Injecting it into the child env would leak it
-    // unnecessarily (and it's the one credential that must stay out of a
-    // proxy CLI launch). Only the proxy user key (handled separately via
-    // ctx.secrets) belongs in a proxy launch.
-    if (adapter.profile.cliLaunch.kind === "proxy-routed") return {};
+    // Redirected and proxy-routed launches do NOT inject the raw upstream API
+    // key as a plain env var: the adapter already carries it as
+    // ANTHROPIC_AUTH_TOKEN (redirected) or the proxy holds it server-side
+    // (proxy-routed). Injecting DEEPSEEK_API_KEY/ANTHROPIC_API_KEY here would
+    // leak it into the child env unnecessarily. Only a native direct-API call
+    // needs the raw var.
+    if (adapter.resolveCliLaunch(route).kind !== "native") return {};
     try {
       return await resolveProviderAuthEnv(adapter, this.deps.credentialManager);
     } catch {
@@ -439,15 +459,24 @@ export class Launcher {
 
   /**
    * Builds the `CliLaunchContext` for a provider, resolving any launch secret
-   * (the deepseek proxy user key) from the credential backend into
-   * `ctx.secrets`, so `buildCliLaunchPlan` never depends on a manual env var.
-   * Falls back to `process.env` for any secret not in the store (which keeps
-   * backward compatibility with an explicitly-exported key).
+   * (the deepseek api-key in direct mode, or the proxy user key in proxy mode)
+   * from the credential backend into `ctx.secrets`, so `buildCliLaunchPlan`
+   * never depends on a manual env var. Falls back to `process.env` for any
+   * secret not in the store (which keeps backward compatibility with an
+   * explicitly-exported key).
    */
-  private async buildLaunchContext(adapter: ProviderAdapter, metadata: ProviderAuthMetadata, modelAlias: string | undefined, workingDir: string, resumeNativeSessionId: string | undefined, setSessionId: string | undefined, taskPrompt: string | undefined, contextSystem: string | undefined): Promise<import("../providers/types.js").CliLaunchContext> {
+  private async buildLaunchContext(adapter: ProviderAdapter, metadata: ProviderAuthMetadata, modelAlias: string | undefined, workingDir: string, resumeNativeSessionId: string | undefined, setSessionId: string | undefined, taskPrompt: string | undefined, contextSystem: string | undefined, route: LaunchRoute): Promise<import("../providers/types.js").CliLaunchContext> {
     const secrets: Record<string, string> = {};
-    const launch = adapter.profile.cliLaunch;
-    if (launch.kind === "proxy-routed") {
+    const launch = adapter.resolveCliLaunch(route);
+    if (launch.kind === "redirected") {
+      // Direct DeepSeek: resolve the upstream API key (stored as "api-key")
+      // into the descriptor's auth-token env var.
+      const envVar = launch.authTokenSecret.envVar;
+      if (envVar === undefined) throw new Error("redirected provider profile is missing authTokenSecret.envVar");
+      const stored = await this.deps.credentialManager.getCredential(adapter.profile.id, "api-key").catch(() => undefined);
+      if (stored) secrets[envVar] = stored;
+      else if (process.env[envVar]) secrets[envVar] = process.env[envVar]!;
+    } else if (launch.kind === "proxy-routed") {
       const envVar = launch.proxyUserKeySecret.envVar;
       if (envVar === undefined) throw new Error("proxy-routed provider profile is missing proxyUserKeySecret.envVar");
       const credentialName = metadata.proxyUserKey?.supported ? metadata.proxyUserKey.credentialName : "proxy-user-key";
@@ -466,6 +495,7 @@ export class Launcher {
       ...(taskPrompt ? { taskPrompt } : {}),
       ...(contextSystem ? { contextSystem } : {}),
       ...(mcpConfig ? { mcpConfig } : {}),
+      route,
     };
   }
 

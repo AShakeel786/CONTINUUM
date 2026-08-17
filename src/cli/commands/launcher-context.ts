@@ -62,6 +62,11 @@ export async function buildLauncherContext(options: { dataDir?: string; prompt: 
 
   const memoryResolution = await resolveMemoryCoreConfig({ credentialManager });
 
+  // Launch-route resolution: dual-route providers (DeepSeek) default to direct;
+  // the optional Tencent proxy path is only used when explicitly configured.
+  const config = await ctx.configStore.load();
+  const getProviderRoute = (providerId: string): "direct" | "proxy" => config.proxyRouting?.[providerId] ?? "direct";
+
   const repoMapCache = new FileRepoMapCache(path.join(dataDir, "repo-map"));
   const deps: LauncherDeps = {
     projects,
@@ -78,6 +83,7 @@ export async function buildLauncherContext(options: { dataDir?: string; prompt: 
     repoMapBuilder: (projectPath, query, budgetTokens) => buildRepoMap(projectPath, query, { budgetTokens }, repoMapCache),
     pruneStore: new FilePruneStore(dataDir),
     ensureProxyReady: makeEnsureProxyReady({ runtime: liveRuntime, options: DEFAULT_OPTIONS, policy: DEFAULT_POLICY }),
+    getProviderRoute,
     ...(options.onDependencyProgress ? { onDependencyProgress: options.onDependencyProgress } : {}),
   };
 

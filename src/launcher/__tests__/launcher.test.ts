@@ -73,6 +73,7 @@ async function buildDeps(opts: {
   withMemoryCore?: boolean;
   dataDir?: string;
   sessionDir?: string;
+  route?: "direct" | "proxy";
   ensureProxyReady?: LauncherDeps["ensureProxyReady"];
   onDependencyProgress?: LauncherDeps["onDependencyProgress"];
 } = {}): Promise<{ deps: LauncherDeps; backend: FakeBackend; registry: ProjectRegistry; sessions: FileSessionStore }> {
@@ -97,8 +98,8 @@ async function buildDeps(opts: {
   } else {
     await credentialManager.setCredential("deepseek", "api-key", "sk-test");
   }
-  // deepseek is proxy-routed; it also needs a proxy user key to be "usable".
-  // Only set it when deepseek is not explicitly marked unauthenticated.
+  // deepseek also stores a proxy user key (for the optional proxy route). Only
+  // set it when deepseek is not explicitly marked unauthenticated.
   if (status.deepseek !== false) {
     await credentialManager.setCredential("deepseek", "proxy-user-key", "sk-proxy-test");
   }
@@ -119,6 +120,7 @@ async function buildDeps(opts: {
     sessionManager,
     prompt: createScriptedPrompt({}),
     sessionBaseDir: sessionDir,
+    ...(opts.route ? { getProviderRoute: (): "direct" | "proxy" => opts.route! } : {}),
     ...(opts.ensureProxyReady ? { ensureProxyReady: opts.ensureProxyReady } : {}),
     ...(opts.onDependencyProgress ? { onDependencyProgress: opts.onDependencyProgress } : {}),
   };
@@ -315,10 +317,10 @@ describe("Launcher — handoff target choice", () => {
 // handoff state), a ready proxy is a no-op, and project/general/current-
 // directory launch behavior for the unaffected (non-proxy) case is unchanged.
 
-describe("Launcher — proxy readiness gate (DeepSeek)", () => {
-  it("blocks a fresh DeepSeek launch when ensureProxyReady reports not-ready, before creating any session", async () => {
+describe("Launcher — proxy readiness gate (DeepSeek, optional proxy route)", () => {
+  it("blocks a fresh DeepSeek proxy launch when ensureProxyReady reports not-ready, before creating any session", async () => {
     const ensureProxyReady = async () => ({ ready: false, detail: "proxy unreachable (127.0.0.1:8096) — no automatic repair available", repairAttempted: true });
-    const { deps, sessions } = await buildDeps({ ensureProxyReady });
+    const { deps, sessions } = await buildDeps({ ensureProxyReady, route: "proxy" });
     const launcher = new Launcher(deps);
 
     await expect(
@@ -328,6 +330,19 @@ describe("Launcher — proxy readiness gate (DeepSeek)", () => {
     // No session was ever created — nothing to lose, retry after fixing the
     // proxy starts completely clean.
     expect(await sessions.listSessionIds()).toEqual([]);
+  });
+
+  it("never even calls ensureProxyReady for a direct DeepSeek launch (no Tencent gate)", async () => {
+    let called = false;
+    const ensureProxyReady = async () => {
+      called = true;
+      return { ready: true, detail: "", repairAttempted: false };
+    };
+    const { deps } = await buildDeps({ ensureProxyReady });
+    const launcher = new Launcher(deps);
+    const prep = await launcher.prepareLaunch({ mode: "general", cwd: tmp(), providerId: "deepseek", taskGoal: "explore" }, { permissionMode: "safe" });
+    expect(prep.session).toBeDefined();
+    expect(called).toBe(false);
   });
 
   it("never even calls ensureProxyReady for Claude (cli-session auth, not proxy-routed)", async () => {
@@ -344,9 +359,9 @@ describe("Launcher — proxy readiness gate (DeepSeek)", () => {
     expect(called).toBe(false);
   });
 
-  it("proceeds normally (no error, no visible delay) when ensureProxyReady reports ready", async () => {
+  it("proceeds normally (no error, no visible delay) when ensureProxyReady reports ready in proxy mode", async () => {
     const ensureProxyReady = async () => ({ ready: true, detail: "proxy healthy", repairAttempted: false });
-    const { deps } = await buildDeps({ ensureProxyReady });
+    const { deps } = await buildDeps({ ensureProxyReady, route: "proxy" });
     const launcher = new Launcher(deps);
     const prep = await launcher.prepareLaunch({ mode: "general", cwd: tmp(), providerId: "deepseek", taskGoal: "explore" }, { permissionMode: "safe" });
     expect(prep.session).toBeDefined();
@@ -360,7 +375,7 @@ describe("Launcher — proxy readiness gate (DeepSeek)", () => {
       onProgress?.("Recovered in 1.2s — resuming session.");
       return { ready: true, detail: "proxy recovered", repairAttempted: true };
     };
-    const { deps } = await buildDeps({ ensureProxyReady, onDependencyProgress: (line) => progress.push(line) });
+    const { deps } = await buildDeps({ ensureProxyReady, route: "proxy", onDependencyProgress: (line) => progress.push(line) });
     const launcher = new Launcher(deps);
     await launcher.prepareLaunch({ mode: "general", cwd: tmp(), providerId: "deepseek", taskGoal: "explore" }, { permissionMode: "safe" });
     expect(progress).toEqual(["Proxy unavailable at 127.0.0.1:8096 — checking service…", "Recovered in 1.2s — resuming session."]);
@@ -370,7 +385,7 @@ describe("Launcher — proxy readiness gate (DeepSeek)", () => {
     // First, launch successfully while the proxy is healthy.
     const readyState = { ready: true };
     const ensureProxyReady = async () => ({ ready: readyState.ready, detail: readyState.ready ? "healthy" : "proxy down", repairAttempted: false });
-    const { deps } = await buildDeps({ ensureProxyReady });
+    const { deps } = await buildDeps({ ensureProxyReady, route: "proxy" });
     const launcher = new Launcher(deps);
     const first = await launcher.prepareLaunch({ mode: "general", cwd: tmp(), providerId: "deepseek", taskGoal: "explore" }, { permissionMode: "safe" });
     const sessionId = first.session!.sessionId;
@@ -394,7 +409,7 @@ describe("Launcher — proxy readiness gate (DeepSeek)", () => {
   it("handoff survives a transient outage: a blocked handoff-to-DeepSeek keeps the recorded handoff and stays resumable", async () => {
     const readyState = { ready: true };
     const ensureProxyReady = async () => ({ ready: readyState.ready, detail: readyState.ready ? "healthy" : "proxy down", repairAttempted: false });
-    const { deps } = await buildDeps({ ensureProxyReady, authenticated: { claude: true } });
+    const { deps } = await buildDeps({ ensureProxyReady, route: "proxy", authenticated: { claude: true } });
     const launcher = new Launcher(deps);
     const handoffManager = new HandoffManager(deps.sessionManager, deps.providers);
 

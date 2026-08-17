@@ -26,6 +26,14 @@ export interface ContinuumConfig {
    * asked, false = declined, true = allowed.
    */
   readonly mcpAutoConfigure?: boolean;
+  /**
+   * Optional per-provider launch routing override, for providers that offer
+   * both a direct remote endpoint and an optional local proxy (DeepSeek's
+   * Tencent MemoryProxy). Absent/other = "direct" (default, standalone). A
+   * value of "proxy" explicitly opts that provider into the optional proxy
+   * path; it is never inferred from Tencent code/containers merely existing.
+   */
+  readonly proxyRouting?: Readonly<Record<string, "direct" | "proxy">>;
   readonly createdAt: string;
   readonly updatedAt: string;
 }

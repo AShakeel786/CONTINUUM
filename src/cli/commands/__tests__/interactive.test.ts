@@ -68,6 +68,9 @@ function makeAgentManager(dataDir: string): AgentManager {
     credentialManager: new CredentialManager(new FakeBackend()),
     prompt: createScriptedPrompt({}),
     buildCliAuthManager: () => cliAuthManager,
+    // DeepSeek's `claude` executable is not on this test's PATH → "not installed"
+    // deterministically (no host-dependent CLI detection in the menu tests).
+    findExecutable: () => undefined,
   });
 }
 
@@ -117,20 +120,22 @@ describe("runInteractiveMenu — main menu", () => {
 });
 
 describe("runInteractiveMenu — start new task", () => {
-  it("offers only usable agents and surfaces a disabled reason", async () => {
+  it("lists every agent with a distinct state and routes a ready agent to launch", async () => {
     const registry = await makeRegistry([{ name: "Alpha", path: tmp() }]);
     const cap = capture();
     const decision = await runInteractiveMenu(
       deps(registry, makeAgentManager(tmp()), [], tmp()),
-      // Start new → workspace #3 (Alpha, after General/Current directory) → agent #1 (claude; deepseek is unusable) → goal
+      // Start new → workspace #3 (Alpha, after General/Current directory) → agent #1 (claude) → goal
       createScriptedPrompt({ answers: ["1", "3", "1", "do it"] }),
       cap.out,
     );
     expect(decision.kind).toBe("new");
     const text = cap.text();
-    expect(text).toContain("DeepSeek unavailable");
     expect(text).toContain("1. Claude");
-    expect(text).not.toContain("1. DeepSeek");
+    expect(text).toContain("Ready");
+    // DeepSeek is listed (not silently hidden) and marked not-installed.
+    expect(text).toContain("DeepSeek");
+    expect(text).toContain("Not installed");
   });
 
   it("offers General / No Project as the first workspace choice with no project registration", async () => {
@@ -215,7 +220,8 @@ describe("runInteractiveMenu — manage AI agents", () => {
     const cap = capture();
     const decision = await runInteractiveMenu(
       deps(await makeRegistry(), makeAgentManager(tmp()), [], tmp()),
-      createScriptedPrompt({ answers: ["4", "4", "0", "0"] }),
+      // Main menu #4 = Manage AI agents → #6 = List agents → #0 back → #0 exit.
+      createScriptedPrompt({ answers: ["4", "6", "0", "0"] }),
       cap.out,
     );
     expect(decision.kind).toBe("exit");
