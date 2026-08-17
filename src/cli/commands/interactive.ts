@@ -19,7 +19,7 @@ import type { Prompt, PromptOutput } from "../../auth/prompt.js";
 import { ProjectRegistry, normalizeProjectPath } from "../../registry/registry.js";
 import type { ProjectRecord } from "../../registry/types.js";
 import { ProjectAlreadyExistsError, ProjectNotFoundError } from "../../registry/errors.js";
-import { listRecentSessions, type RecentSessionSummary } from "../../launcher/session-list.js";
+import { compareTimestampsDesc, formatSessionPickerLine, listRecentSessions, type RecentSessionSummary } from "../../launcher/session-list.js";
 import type { ProviderUsability } from "../../launcher/launcher.js";
 import type { LaunchPreparation } from "../../launcher/types.js";
 import { NoAuthenticatedAgentError, NoProjectError, ProviderNotAuthenticatedError } from "../../launcher/errors.js";
@@ -44,10 +44,6 @@ export type InteractiveDecision =
   | { readonly kind: "resume"; readonly sessionId: string }
   | { readonly kind: "exit" };
 
-function truncate(s: string, n: number): string {
-  return s.length > n ? `${s.slice(0, n - 1)}…` : s;
-}
-
 function isDirectory(p: string): boolean {
   try {
     return statSync(p).isDirectory();
@@ -56,7 +52,13 @@ function isDirectory(p: string): boolean {
   }
 }
 
-/** Present a numbered menu; returns the 0-based index, or undefined for exit/back. */
+/** Best-effort terminal column count; falls back to a sane 80-col default when unavailable (tests, pipes). */
+function getTerminalColumns(): number {
+  const cols = process.stdout?.columns;
+  return typeof cols === "number" && cols > 0 ? cols : 80;
+}
+
+/** Present a numbered menu; returns the 0-based index, or undefined for exit/back. Labels may embed `\n` for a continuation line (indented to align under the first line). */
 async function chooseNumber(
   prompt: Prompt,
   out: PromptOutput,
@@ -65,7 +67,11 @@ async function chooseNumber(
   exitLabel = "Exit",
 ): Promise<number | undefined> {
   out(`\n${title}\n`);
-  items.forEach((label, i) => out(`  ${i + 1}. ${label}\n`));
+  items.forEach((label, i) => {
+    const prefix = `  ${i + 1}. `;
+    const rendered = label.replace(/\n/g, `\n${" ".repeat(prefix.length)}`);
+    out(`${prefix}${rendered}\n`);
+  });
   out(`  0. ${exitLabel}\n`);
   for (;;) {
     const answer = (await prompt.ask("Select")).trim().toLowerCase();
@@ -153,14 +159,20 @@ async function chooseActionForProject(
 
   // Resume a recent session (scoped to the chosen project; fall back to all).
   const scoped = deps.sessions.filter((s) => s.projectId === project.id);
-  const pool = scoped.length > 0 ? scoped : deps.sessions;
-  if (pool.length === 0) {
+  const rawPool = scoped.length > 0 ? scoped : deps.sessions;
+  if (rawPool.length === 0) {
     out("\nNo sessions to resume yet.\n");
     return { kind: "exit" };
   }
   if (scoped.length === 0) out(`\n(no sessions for "${project.name}" — showing all recent)\n`);
-  const label = (s: RecentSessionSummary) => `[${s.providerId}] ${truncate(s.taskGoal, 48)}  (${s.updatedAt.slice(0, 10)})`;
-  const sessionIdx = await chooseNumber(prompt, out, "Choose session:", pool.map(label));
+
+  // Most recently active first — the picker never assumes its input is already
+  // sorted, so a future caller passing unsorted sessions can't break the marker.
+  const pool = [...rawPool].sort((a, b) => compareTimestampsDesc(a.updatedAt, b.updatedAt));
+  const now = new Date();
+  const width = getTerminalColumns();
+  const labels = pool.map((s, i) => formatSessionPickerLine(s, { isNewest: i === 0, now, width }));
+  const sessionIdx = await chooseNumber(prompt, out, "Choose session:", labels);
   if (sessionIdx === undefined) return { kind: "exit" };
   return { kind: "resume", sessionId: pool[sessionIdx]!.sessionId };
 }

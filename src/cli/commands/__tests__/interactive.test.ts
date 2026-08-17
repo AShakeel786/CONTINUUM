@@ -18,8 +18,8 @@ function provider(id: string, displayName: string, usable: boolean, reason?: str
   return { providerId: id, displayName, model: `${id}-model`, usable, reason };
 }
 
-function session(id: string, projectId: string, providerId: string, goal: string): RecentSessionSummary {
-  return { sessionId: id, projectId, providerId, taskGoal: goal, status: "active", updatedAt: "2026-01-02T00:00:00.000Z" };
+function session(id: string, projectId: string, providerId: string, goal: string, updatedAt = "2026-01-02T00:00:00.000Z"): RecentSessionSummary {
+  return { sessionId: id, projectId, providerId, taskGoal: goal, status: "active", updatedAt };
 }
 
 function capture(): { out: (s: string) => void; text: () => string } {
@@ -222,6 +222,32 @@ describe("runInteractiveMenu — regression (start/resume/provider/exit)", () =>
       cap.out,
     );
     expect(decision).toEqual({ kind: "resume", sessionId: "s1" });
+  });
+
+  it("resume flow sorts newest-active first, marks it with ★, and still resumes the selected session", async () => {
+    const registry = await makeRegistry([{ name: "Alpha", path: tmp() }]);
+    const alpha = (await registry.list())[0]!;
+    const cap = capture();
+    const decision = await runInteractiveMenu(
+      {
+        projects: registry,
+        providers: [],
+        sessions: [
+          session("older", alpha.id, "codex", "older work", "2026-01-01T00:00:00.000Z"),
+          session("newest", alpha.id, "deepseek", "newest work", "2026-01-03T00:00:00.000Z"),
+        ],
+        knownProviders: KNOWN,
+        cwd: tmp(),
+      },
+      createScriptedPrompt({ answers: ["1", "2", "2"] }), // select the 2nd listed (older) to prove ordering changed
+      cap.out,
+    );
+    const text = cap.text();
+    expect(text).toContain("1. ★ [deepseek] newest work");
+    expect(text).toContain("2.   [codex] older work");
+    expect(text).toContain("Last active:");
+    // Choosing "2" now maps to the *older* session (it was re-sorted to position 2).
+    expect(decision).toEqual({ kind: "resume", sessionId: "older" });
   });
 
   it("exits cleanly on a zero/quit selection", async () => {

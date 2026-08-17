@@ -78,6 +78,15 @@ export class SessionManager {
     return this.store.listSessionIds();
   }
 
+  /**
+   * Best-effort file modification time for a session file, as an ISO string.
+   * Last-resort ordering fallback for legacy sessions missing both
+   * `createdAt` and `updatedAt`; undefined when the file is missing/unreadable.
+   */
+  async sessionFileMtimeIso(sessionId: string): Promise<string | undefined> {
+    return this.store.sessionMtimeIso(sessionId);
+  }
+
   /** Permanently remove a session (used by archive/cleanup). */
   async deleteSession(sessionId: string): Promise<void> {
     return this.store.delete(sessionId);
@@ -92,6 +101,17 @@ export class SessionManager {
 
   async updateTaskGoal(sessionId: string, taskGoal: string): Promise<TaskSession> {
     return this.update(sessionId, (s) => ({ ...s, taskGoal }));
+  }
+
+  /**
+   * Best-effort "last active" touch: refresh `updatedAt` (and revision) without
+   * changing any task field. Used when a session is resumed so the resume
+   * picker can surface the most recently worked-on session first. Callers
+   * should treat a conflict as non-fatal — this is ordering metadata, not task
+   * state.
+   */
+  async markActive(sessionId: string): Promise<TaskSession> {
+    return this.update(sessionId, (s) => s);
   }
 
   async setStatus(sessionId: string, status: SessionStatus): Promise<TaskSession> {

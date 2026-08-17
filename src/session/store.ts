@@ -87,4 +87,21 @@ export class FileSessionStore {
       throw err;
     }
   }
+
+  /**
+   * Last-modified time of the on-disk session file as an ISO string, when it
+   * exists. This is a last-resort timestamp fallback for legacy sessions that
+   * predate `createdAt`/`updatedAt` (neither field present) — the picker still
+   * needs *some* ordering key. Returns undefined for a missing/unreadable file.
+   */
+  async sessionMtimeIso(sessionId: string): Promise<string | undefined> {
+    const filePath = this.filePath(sessionId);
+    const fsPromises = await import("node:fs/promises");
+    try {
+      const stat = await fsPromises.stat(filePath);
+      return new Date(stat.mtimeMs).toISOString();
+    } catch {
+      return undefined;
+    }
+  }
 }

@@ -69,6 +69,22 @@ describe("SessionManager — create/load/update", () => {
     expect(updated.taskGoal).toBe("new goal");
   });
 
+  it("markActive refreshes updatedAt without changing task fields", async () => {
+    const manager = await makeManager();
+    const created = await manager.createSession({
+      sessionId: "sess-1",
+      projectId: "p",
+      workingDirectory: "C:\\fake",
+      activeProvider: { providerId: "claude", model: "m" },
+      taskGoal: "goal",
+    });
+    const touched = await manager.markActive("sess-1");
+    expect(touched.revision).toBe(created.revision + 1);
+    expect(touched.taskGoal).toBe("goal");
+    expect(touched.activeProvider.providerId).toBe("claude");
+    expect(new Date(touched.updatedAt).getTime()).toBeGreaterThanOrEqual(new Date(created.updatedAt).getTime());
+  });
+
   it("preserves completed and remaining work across separate update calls", async () => {
     const manager = await makeManager();
     await manager.createSession({

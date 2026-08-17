@@ -31,29 +31,95 @@ export function isActiveStatus(status: string): boolean {
  * listing — a degraded session shouldn't hide the rest.
  */
 export async function listRecentSessions(sessionManager: SessionManager, limit = 20): Promise<RecentSessionSummary[]> {
-  const ids = await sessionManager.listSessionIds(); // sessionManager delegates? see note
+  const ids = await sessionManager.listSessionIds();
   const loaded: RecentSessionSummary[] = [];
   for (const id of ids) {
     try {
       const s = await sessionManager.loadSession(id);
-      loaded.push(summarize(s));
+      const updatedAt = await effectiveUpdatedAt(sessionManager, id, s);
+      loaded.push(summarize(s, updatedAt));
     } catch {
       // skip unreadable sessions
     }
   }
-  loaded.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0));
+  loaded.sort((a, b) => compareTimestampsDesc(a.updatedAt, b.updatedAt));
   return loaded.slice(0, limit);
 }
 
-function summarize(s: TaskSession): RecentSessionSummary {
+/**
+ * Resolves the ordering/timestamp key for a loaded session. Prefers
+ * `updatedAt` (last active), then `createdAt`, then the session file's mtime,
+ * then epoch — so legacy sessions that predate the `updatedAt` field still get
+ * a deterministic, non-crashing place in the list.
+ */
+async function effectiveUpdatedAt(sessionManager: SessionManager, sessionId: string, s: TaskSession): Promise<string> {
+  if (s.updatedAt) return s.updatedAt;
+  if (s.createdAt) return s.createdAt;
+  return (await sessionManager.sessionFileMtimeIso(sessionId)) ?? new Date(0).toISOString();
+}
+
+/** Descending timestamp comparison (newest first), stable for equal timestamps. */
+export function compareTimestampsDesc(a: string, b: string): number {
+  return a < b ? 1 : a > b ? -1 : 0;
+}
+
+function summarize(s: TaskSession, updatedAt: string): RecentSessionSummary {
   return {
     sessionId: s.sessionId,
     projectId: s.projectId,
     providerId: s.activeProvider.providerId,
     taskGoal: s.taskGoal,
     status: s.status,
-    updatedAt: s.updatedAt,
+    updatedAt,
   };
+}
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"] as const;
+
+function clock(d: Date): string {
+  let hours = d.getHours();
+  const minutes = String(d.getMinutes()).padStart(2, "0");
+  const ampm = hours >= 12 ? "PM" : "AM";
+  hours = hours % 12 || 12; // 0 → 12, 13 → 1
+  return `${hours}:${minutes} ${ampm}`;
+}
+
+/**
+ * Local-time display for a session timestamp (ISO 8601):
+ *   - today → `8:21 PM`
+ *   - older → `Aug 15, 6:13 PM`
+ * Falls back to the raw value for an unparseable timestamp rather than throwing.
+ */
+export function formatSessionTime(iso: string | undefined, now: Date = new Date()): string {
+  if (!iso) return "unknown time";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const sameDay = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+  const time = clock(d);
+  return sameDay ? time : `${MONTHS[d.getMonth()]} ${d.getDate()}, ${time}`;
+}
+
+/**
+ * One entry in the interactive "Choose session:" picker. The first line is the
+ * provider + goal (with a `★ ` marker when this is the most recently active
+ * session); the second line is `Last active: <local time>`. The goal is
+ * truncated to fit `width` (terminal columns) so long goals never wrap into an
+ * unreadable menu.
+ */
+export function formatSessionPickerLine(
+  s: RecentSessionSummary,
+  opts: { readonly isNewest: boolean; readonly now?: Date; readonly width?: number },
+): string {
+  const now = opts.now ?? new Date();
+  const width = typeof opts.width === "number" && opts.width > 0 ? opts.width : 80;
+  const marker = opts.isNewest ? "★ " : "  ";
+  const provider = `[${s.providerId}]`;
+  // Reserve "  N. " (number prefix) + marker + provider + the space before the goal.
+  const reserved = 5 + marker.length + provider.length + 1;
+  const goalMax = Math.max(16, width - reserved);
+  const goal = s.taskGoal.length > goalMax ? `${s.taskGoal.slice(0, goalMax - 1)}…` : s.taskGoal;
+  const time = formatSessionTime(s.updatedAt, now);
+  return `${marker}${provider} ${goal}\nLast active: ${time}`;
 }
 
 /**

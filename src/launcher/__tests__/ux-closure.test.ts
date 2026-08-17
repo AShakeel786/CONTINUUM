@@ -184,6 +184,24 @@ describe("7.1 — provider-change-on-resume records handoff", () => {
   });
 });
 
+describe("7.1 — resume refreshes last-active", () => {
+  it("bumps updatedAt/revision on a same-provider resume (the resume picker sort key)", async () => {
+    const { deps, registry, sessionManager, repoDir } = await setup();
+    await registry.add({ name: "p", path: repoDir, defaultProvider: "claude" });
+    const launcher = new Launcher(deps);
+
+    const first = await launcher.prepareLaunch({ projectKey: "p", taskGoal: "goal" }, { permissionMode: "safe" });
+    const sid = first.session!.sessionId;
+    const before = await sessionManager.loadSession(sid);
+
+    await launcher.prepareLaunch({ sessionId: sid }, { permissionMode: "safe" });
+    const after = await sessionManager.loadSession(sid);
+
+    expect(after.revision).toBe(before.revision + 1);
+    expect(after.updatedAt >= before.updatedAt).toBe(true);
+  });
+});
+
 describe("7.1 — no secret leakage", () => {
   it("launch plan env never contains the upstream API key alongside the proxy key", async () => {
     const { deps, registry, repoDir } = await setup({ deepseekProxyKey: true, deepseekApiKey: true });

@@ -217,6 +217,13 @@ export class Launcher {
 
     if (existingSession) {
       session = existingSession;
+      // Bump last-active on resume so the resume picker sorts by "most recently
+      // worked on". Provider-change resumes already refresh `updatedAt` via
+      // setActiveProvider below, so only touch the common same-provider path.
+      const providerChanging = !!target.providerId && target.providerId !== session.activeProvider.providerId;
+      if (!providerChanging) {
+        await this.deps.sessionManager.markActive(session.sessionId).catch(() => {});
+      }
       if (session.git) {
         const cmp = compareGitFingerprints(session.git, currentGit);
         stale = cmp.stale;
@@ -227,7 +234,7 @@ export class Launcher {
       // same state HandoffManager writes, so it never looks like a fresh task
       // and the receipt agent sees a "continue, don't re-audit" prompt. A
       // same-provider resume is a no-op (no fake handoff).
-      if (target.providerId && target.providerId !== session.activeProvider.providerId) {
+      if (providerChanging) {
         const from = session.activeProvider;
         const to: ProviderRef = { providerId, model };
         await this.deps.sessionManager.recordHandoff(session.sessionId, {
