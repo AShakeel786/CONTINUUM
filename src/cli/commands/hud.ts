@@ -1,6 +1,6 @@
 /**
  * CONTINUUM session HUD — one compact status line summarizing session state
- * ("CONTINUUM | workspace | provider | ctx used/max | handoff state | bypass ON").
+ * ("CONTINUUM | workspace | provider | ctx used/max | handoff state | FULL ACCESS").
  *
  * Printed at every point CONTINUUM itself controls the terminal (launch,
  * resume, handoff, the interactive front door) — the same `out()` sink the
@@ -56,6 +56,7 @@ export interface HudData {
 export function formatTerminalTitle(d: HudData): string {
   const parts = ["CONTINUUM", d.providerLabel];
   if (d.model) parts.push(d.model);
+  if (d.bypass) parts.push("FULL ACCESS");
   if (d.contextUsed !== undefined && d.contextMax !== undefined) parts.push(formatContext(d.contextUsed, d.contextMax, "full"));
   parts.push(`handoff ${d.handoff}`);
   if (d.peak) parts.push(`PEAK ${d.peak.multiplier}×${d.peak.endsAt ? ` until ${new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(d.peak.endsAt)}` : ""}`);
@@ -140,9 +141,9 @@ function buildSegments(d: HudData): Segment[] {
     { text: d.workspace, weight: 1 },
   ];
   // Permission mode is safety-relevant — kept high priority, and (matching
-  // the "especially bypass ON" requirement) only ever shown when true; a
+  // the "especially FULL ACCESS" requirement) only ever shown when true; a
   // safe/default session says nothing here.
-  if (d.bypass) segs.push({ text: "bypass ON", weight: 2 });
+  if (d.bypass) segs.push({ text: "FULL ACCESS", weight: 2 });
   if (d.peak) segs.push({ text: `PEAK ${d.peak.multiplier}×${d.peak.endsAt ? `→${new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(d.peak.endsAt)}` : ""}`, weight: 2 });
   segs.push({ text: d.providerLabel, weight: 3 });
   if (d.contextUsed !== undefined && d.contextMax !== undefined) {
@@ -157,7 +158,7 @@ function buildSegments(d: HudData): Segment[] {
  * Render the HUD line for the given terminal width. Progressive
  * degradation instead of wrapping: first compact "ctx used/max" to a
  * percentage, then drop segments lowest-priority-first (memory, handoff,
- * context, provider — brand/workspace/bypass-ON always survive), then as a
+ * context, provider — brand/workspace/FULL-ACCESS always survive), then as a
  * last resort hard-truncate with an ellipsis.
  */
 export function formatHud(d: HudData, columns: number): string {
@@ -232,6 +233,7 @@ function hostOf(url: string): string {
 function clientNameFor(executable: string): string {
   if (executable === "claude") return "Claude Code";
   if (executable === "codex") return "Codex CLI";
+  if (executable === "agy") return "Antigravity CLI";
   return executable;
 }
 

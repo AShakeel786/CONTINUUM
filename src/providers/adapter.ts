@@ -38,14 +38,15 @@ export function createProviderAdapter(profile: ProviderProfile): ProviderAdapter
 class DataDrivenProviderAdapter implements ProviderAdapter {
   constructor(readonly profile: ProviderProfile) {}
 
-  resolveModel(alias?: string): string {
+  resolveModel(alias?: string, knownIds?: ReadonlySet<string>): string {
     if (!alias || alias === "default") return this.profile.models.default;
     if (alias === this.profile.models.default || Object.values(this.profile.models.aliases ?? {}).includes(alias)) return alias;
     const mapped = this.profile.models.aliases?.[alias];
-    if (!mapped) {
-      throw new UnknownModelAliasError(this.profile.id, alias, Object.keys(this.profile.models.aliases ?? {}));
-    }
-    return mapped;
+    if (mapped) return mapped;
+    // A live model id discovered from the installed CLI passes through verbatim
+    // (never silently remapped or dropped); anything else is an unknown alias.
+    if (knownIds?.has(alias)) return alias;
+    throw new UnknownModelAliasError(this.profile.id, alias, Object.keys(this.profile.models.aliases ?? {}));
   }
 
   resolveCliLaunch(route?: LaunchRoute): CliLaunchDescriptor {
@@ -87,11 +88,15 @@ class DataDrivenProviderAdapter implements ProviderAdapter {
 
   buildCliLaunchPlan(ctx: CliLaunchContext): CliLaunchPlan {
     const launch = this.resolveCliLaunch(ctx.route);
-    // Order matters: the MCP flag is variadic (`--mcp-config <configs...>`), so
-    // it must be followed by a flag (the system-prompt flag), never by the
-    // positional task prompt — otherwise the prompt would be swallowed as a
-    // config path. Hence: session args → mcp args → context args.
-    const args = [...this.sessionArgs(launch, ctx), ...this.mcpArgs(launch, ctx), ...this.statusLineArgs(launch, ctx), ...this.contextArgs(launch, ctx)];
+    // Order matters on two counts:
+    //   - Model/permission args come FIRST so they precede any subcommand —
+    //     Codex parses top-level options (`-m`, `--dangerously-bypass-...`)
+    //     only before the `resume` subcommand, never after its session id.
+    //   - The MCP flag is variadic (`--mcp-config <configs...>`), so it must be
+    //     followed by a flag (the system-prompt flag), never by the positional
+    //     task prompt — otherwise the prompt would be swallowed as a config path.
+    // Hence: model args → permission args → session args → mcp args → context args.
+    const args = [...this.modelArgs(launch, ctx), ...this.permissionArgs(launch, ctx), ...this.sessionArgs(launch, ctx), ...this.mcpArgs(launch, ctx), ...this.statusLineArgs(launch, ctx), ...this.contextArgs(launch, ctx)];
     switch (launch.kind) {
       case "native":
         return {
@@ -182,6 +187,28 @@ class DataDrivenProviderAdapter implements ProviderAdapter {
     if (tierMap?.haiku) env.ANTHROPIC_DEFAULT_HAIKU_MODEL = "claude-haiku-4-5";
     if (tierMap?.subagent) env.CLAUDE_CODE_SUBAGENT_MODEL = "claude-sonnet-5";
     return env;
+  }
+
+  /**
+   * Explicit model selection for native CLIs that declare a `modelFlag`
+   * (Codex `-m`, agy `--model`). Emitted on BOTH fresh and resume launches so
+   * an explicitly selected model always reaches the CLI (never silently
+   * ignored). Resolves the same way every other model reference does, so a
+   * live-discovered model id passes through via `knownModelIds`.
+   */
+  private modelArgs(launch: CliLaunchDescriptor, ctx: CliLaunchContext): readonly string[] {
+    if (launch.kind !== "native" || !launch.modelFlag) return [];
+    return [launch.modelFlag, this.resolveModel(ctx.modelAlias, ctx.knownModelIds)];
+  }
+
+  /**
+   * Full-access flag for native CLIs that declare a `permissionBypassFlag`.
+   * Emitted only when the caller requests `permissionMode: "bypass"`; safe
+   * mode (and providers with no declared flag) add nothing. Never emulated.
+   */
+  private permissionArgs(launch: CliLaunchDescriptor, ctx: CliLaunchContext): readonly string[] {
+    if (launch.kind !== "native" || ctx.permissionMode !== "bypass" || !launch.permissionBypassFlag) return [];
+    return [launch.permissionBypassFlag];
   }
 
   /**

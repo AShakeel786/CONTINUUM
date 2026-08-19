@@ -4,12 +4,14 @@ import type { ProviderAuthMetadata } from "../types.js";
 import { claudeAuthMetadata, createClaudeCliAuthAdapter } from "./claude.js";
 import { deepseekAuthMetadata } from "./deepseek.js";
 import { codexAuthMetadata, createCodexCliAuthAdapter } from "./codex.js";
+import { antigravityAuthMetadata, createAntigravityCliAuthAdapter } from "./antigravity.js";
 import { manifestToAuthMetadata, manifestToCliAuthCapability, type ProviderManifest } from "../../providers/manifest.js";
 import { bundledManifests } from "../../providers/presets.js";
 
 export { claudeAuthMetadata, createClaudeCliAuthAdapter } from "./claude.js";
 export { deepseekAuthMetadata } from "./deepseek.js";
 export { codexAuthMetadata, createCodexCliAuthAdapter, parseCodexAuthStatus } from "./codex.js";
+export { antigravityAuthMetadata, createAntigravityCliAuthAdapter, detectAntigravityAuthenticated, readActiveAccount } from "./antigravity.js";
 
 /** Bundled + user auth metadata, keyed by provider id. */
 export function createProviderAuthMetadata(userManifests: readonly ProviderManifest[] = []): ReadonlyMap<string, ProviderAuthMetadata> {
@@ -25,6 +27,7 @@ export function createCliAuthManager(userManifests: readonly ProviderManifest[] 
   const manager = new CliAuthManager();
   manager.register(createClaudeCliAuthAdapter());
   manager.register(createCodexCliAuthAdapter());
+  manager.register(createAntigravityCliAuthAdapter());
   for (const m of userManifests) {
     const cap = manifestToCliAuthCapability(m);
     if (cap) manager.register(createCliAuthAdapter(m.id, cap));

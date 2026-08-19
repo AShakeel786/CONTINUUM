@@ -173,24 +173,25 @@ describe("native context delivery — Codex (prompt-only)", () => {
     const prep = await launcher.prepareLaunch({ projectKey: p.id, taskGoal: "Inspect src/session" }, { permissionMode: "safe" });
     const args = prep.plan.args;
     expect(prep.plan.executable).toBe("codex");
-    // No session-id flag (Codex has none), so a fresh launch is just [prompt].
-    expect(args).toHaveLength(1);
-    expect(args[0]).toContain("<session-maintenance>");
-    expect(args[0]).toContain("<handoff-resume>");
-    expect(args[0]).toContain("Inspect src/session");
+    // No session-id flag (Codex has none), so a fresh launch is `-m <model>` + [prompt].
+    expect(args).toHaveLength(3);
+    expect(args[0]).toBe("-m");
+    expect(args[2]).toContain("<session-maintenance>");
+    expect(args[2]).toContain("<handoff-resume>");
+    expect(args[2]).toContain("Inspect src/session");
     expect(args).not.toContain("--append-system-prompt");
   });
 
-  it("Codex resume: `resume <id> <prompt>` (context delivered after the session id)", async () => {
+  it("Codex resume: `-m <model> resume <id> <prompt>` (context delivered after the session id)", async () => {
     const { deps, registry } = await buildDeps();
     const p = await registry.add({ name: "CARS", path: "/work/CARS", defaultProvider: "codex" });
     const launcher = new Launcher(deps);
     const first = await launcher.prepareLaunch({ projectKey: p.id, taskGoal: "Inspect src/session" }, { permissionMode: "safe" });
     await launcher.recordNativeSessionId(first.session!.sessionId, "codex", "codex-native-1");
     const resume = await launcher.prepareLaunch({ sessionId: first.session!.sessionId }, { permissionMode: "safe" });
-    expect(resume.plan.args.slice(0, 2)).toEqual(["resume", "codex-native-1"]);
-    expect(resume.plan.args[2]).toContain("Inspect src/session");
-    expect(resume.plan.args[2]).toContain("<handoff-resume>");
+    expect(resume.plan.args.slice(2, 4)).toEqual(["resume", "codex-native-1"]);
+    expect(resume.plan.args[4]).toContain("Inspect src/session");
+    expect(resume.plan.args[4]).toContain("<handoff-resume>");
   });
 });
 

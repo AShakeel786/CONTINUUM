@@ -84,8 +84,12 @@ async function buildDeps(): Promise<{ deps: LauncherDeps; registry: ProjectRegis
  */
 function sessionArgsHead(args: readonly string[], providerId: string): readonly string[] {
   if (providerId === "codex") {
-    // Codex: `resume <id> <prompt>` or just `<prompt>` (no session flags fresh).
-    return args[0] === "resume" ? args.slice(0, 2) : [];
+    // Codex: `-m <model> [--dangerously-bypass-approvals-and-sandbox] resume <id> <prompt>`
+    // or `-m <model> [bypass] <prompt>` fresh. Strip the leading model/bypass options
+    // so the resume shape is what's asserted here.
+    const stripped = args[0] === "-m" ? args.slice(2) : args;
+    const noBypass = stripped[0] === "--dangerously-bypass-approvals-and-sandbox" ? stripped.slice(1) : stripped;
+    return noBypass[0] === "resume" ? noBypass.slice(0, 2) : [];
   }
   // Claude/DeepSeek: `[...sessionFlags, "--mcp-config", <json>, "--append-system-prompt", <system>, <task>]`.
   const idx = args.findIndex((a) => a === "--mcp-config" || a === "--append-system-prompt");
@@ -217,21 +221,21 @@ describe("findRecentNativeSessionId — discovery", () => {
     utimesSync(join(dir, "a1b2c3d4-1111-2222-3333-444455556666.jsonl"), now / 1000, now / 1000 - 5);
     utimesSync(join(dir, "z9y8x7w6-aaaa-bbbb-cccc-ddddeeeeffff.jsonl"), now / 1000, now / 1000);
 
-    const id = await findRecentNativeSessionId({ rootDir: dir, extension: ".jsonl", idFrom: "basename" }, now - 1000);
+    const id = await findRecentNativeSessionId({ kind: "files", rootDir: dir, extension: ".jsonl", idFrom: "basename" }, now - 1000);
     expect(id).toBe("z9y8x7w6-aaaa-bbbb-cccc-ddddeeeeffff");
   });
 
   it("returns undefined when nothing is newer than sinceMs", async () => {
     const dir = mkdtempSync(join(tmpdir(), "continuum-store-"));
     writeFileSync(join(dir, "old.jsonl"), "{}\n");
-    const id = await findRecentNativeSessionId({ rootDir: dir, extension: ".jsonl", idFrom: "basename" }, Date.now() + 60_000);
+    const id = await findRecentNativeSessionId({ kind: "files", rootDir: dir, extension: ".jsonl", idFrom: "basename" }, Date.now() + 60_000);
     expect(id).toBeUndefined();
   });
 
   it("extracts a trailing UUID for the last-uuid strategy (Codex rollout filenames)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "continuum-store-"));
     writeFileSync(join(dir, "rollout-2026-08-16T06-19-26-01a00a15-59c5-7672-8332-c9aad96fad0f.jsonl"), "{}\n");
-    const id = await findRecentNativeSessionId({ rootDir: dir, extension: ".jsonl", idFrom: "last-uuid" }, 0);
+    const id = await findRecentNativeSessionId({ kind: "files", rootDir: dir, extension: ".jsonl", idFrom: "last-uuid" }, 0);
     expect(id).toBe("01a00a15-59c5-7672-8332-c9aad96fad0f");
   });
 
@@ -239,7 +243,7 @@ describe("findRecentNativeSessionId — discovery", () => {
     const dir = mkdtempSync(join(tmpdir(), "continuum-store-"));
     // File content contains a would-be secret; discovery must not surface it.
     writeFileSync(join(dir, "secret-session.jsonl"), '{"api_key":"sk-SHOULD-NOT-LEAK"}\n');
-    const id = await findRecentNativeSessionId({ rootDir: dir, extension: ".jsonl", idFrom: "basename" }, 0);
+    const id = await findRecentNativeSessionId({ kind: "files", rootDir: dir, extension: ".jsonl", idFrom: "basename" }, 0);
     expect(id).toBe("secret-session");
     expect(id).not.toContain("sk-");
   });
@@ -253,7 +257,7 @@ describe("findRecentNativeSessionId — discovery", () => {
       payload: { id: "01a00a15-59c5-7672-8332-c9aad96fad0f", session_id: "01a00a15-59c5-7672-8332-c9aad96fad0f", model_provider: "openai" },
     });
     writeFileSync(join(dir, "rollout-2026-08-16T06-19-26-01a00a15-59c5-7672-8332-c9aad96fad0f.jsonl"), meta + "\n");
-    const id = await findRecentNativeSessionId({ rootDir: dir, extension: ".jsonl", idFrom: "session-meta", metaRecordType: "session_meta", metaPayloadField: "session_id" }, 0);
+    const id = await findRecentNativeSessionId({ kind: "files", rootDir: dir, extension: ".jsonl", idFrom: "session-meta", metaRecordType: "session_meta", metaPayloadField: "session_id" }, 0);
     expect(id).toBe("01a00a15-59c5-7672-8332-c9aad96fad0f");
   });
 
@@ -261,7 +265,7 @@ describe("findRecentNativeSessionId — discovery", () => {
     const dir = mkdtempSync(join(tmpdir(), "continuum-store-"));
     // Not valid JSON — the metadata read fails; fall back to the trailing UUID.
     writeFileSync(join(dir, "rollout-2026-08-16T06-19-26-01a00a15-59c5-7672-8332-c9aad96fad0f.jsonl"), "not-json\n");
-    const id = await findRecentNativeSessionId({ rootDir: dir, extension: ".jsonl", idFrom: "session-meta", metaRecordType: "session_meta", metaPayloadField: "session_id" }, 0);
+    const id = await findRecentNativeSessionId({ kind: "files", rootDir: dir, extension: ".jsonl", idFrom: "session-meta", metaRecordType: "session_meta", metaPayloadField: "session_id" }, 0);
     expect(id).toBe("01a00a15-59c5-7672-8332-c9aad96fad0f");
   });
 
@@ -273,7 +277,7 @@ describe("findRecentNativeSessionId — discovery", () => {
       payload: { session_id: "canonical-uuid", api_key: "sk-SHOULD-NOT-LEAK" },
     });
     writeFileSync(join(dir, "rollout-x-canonical-uuid.jsonl"), meta + "\n");
-    const id = await findRecentNativeSessionId({ rootDir: dir, extension: ".jsonl", idFrom: "session-meta", metaRecordType: "session_meta", metaPayloadField: "session_id" }, 0);
+    const id = await findRecentNativeSessionId({ kind: "files", rootDir: dir, extension: ".jsonl", idFrom: "session-meta", metaRecordType: "session_meta", metaPayloadField: "session_id" }, 0);
     expect(id).toBe("canonical-uuid");
     expect(id).not.toContain("sk-");
   });

@@ -52,7 +52,7 @@ export const claudeManifest: ProviderManifest = {
     nativeResume: {
       supported: true,
       resume: { kind: "flag", flag: "--resume" },
-      sessionStore: { rootDir: "~/.claude/projects", extension: ".jsonl", idFrom: "basename" },
+      sessionStore: { kind: "files", rootDir: "~/.claude/projects", extension: ".jsonl", idFrom: "basename" },
       sessionIdFlag: "--session-id",
     },
     mcp: { supported: true, serverName: "continuum" },
@@ -95,7 +95,7 @@ export const deepseekManifest: ProviderManifest = {
     nativeResume: {
       supported: true,
       resume: { kind: "flag", flag: "--resume" },
-      sessionStore: { rootDir: "~/.claude-deepseek/projects", extension: ".jsonl", idFrom: "basename" },
+      sessionStore: { kind: "files", rootDir: "~/.claude-deepseek/projects", extension: ".jsonl", idFrom: "basename" },
       sessionIdFlag: "--session-id",
     },
     contextDelivery: { kind: "append-system-prompt", systemFlag: "--append-system-prompt" },
@@ -121,7 +121,7 @@ export const deepseekManifest: ProviderManifest = {
     nativeResume: {
       supported: true,
       resume: { kind: "flag", flag: "--resume" },
-      sessionStore: { rootDir: "~/.claude-tencent/projects", extension: ".jsonl", idFrom: "basename" },
+      sessionStore: { kind: "files", rootDir: "~/.claude-tencent/projects", extension: ".jsonl", idFrom: "basename" },
       sessionIdFlag: "--session-id",
     },
     contextDelivery: { kind: "append-system-prompt", systemFlag: "--append-system-prompt" },
@@ -146,13 +146,22 @@ export const codexManifest: ProviderManifest = {
   },
   capabilities: { thinking: "extended", tools: true, promptCache: "openai-automatic", cliAvailable: true, notes: "Native Codex CLI (OpenAI). Uses the `codex` CLI's own ChatGPT login." },
   environment: { owns: ["OPENAI_API_KEY", "CODEX_HOME", "CODEX_ACCESS_TOKEN"] },
+  // Full access by default: this workflow launches Codex with tool approvals
+  // skipped via the CLI's own verified `--dangerously-bypass-approvals-and-
+  // sandbox` flag. Explicit `--safe` still selects normal approval mode.
+  defaultPermissionMode: "bypass",
+  // Live model discovery from the CLI's own model cache (~/.codex/models_cache.json),
+  // falling back to the manifest list when the cache is absent/unreadable.
+  modelDiscovery: { kind: "json-cache", path: "~/.codex/models_cache.json" },
   cliLaunch: {
     kind: "native",
+    modelFlag: "-m",
+    permissionBypassFlag: "--dangerously-bypass-approvals-and-sandbox",
     clearEnvVars: [...MODEL_IDENTITY_ENV_VARS, "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"],
     nativeResume: {
       supported: true,
       resume: { kind: "subcommand", subcommand: "resume" },
-      sessionStore: { rootDir: "~/.codex/sessions", extension: ".jsonl", idFrom: "session-meta", metaRecordType: "session_meta", metaPayloadField: "session_id" },
+      sessionStore: { kind: "files", rootDir: "~/.codex/sessions", extension: ".jsonl", idFrom: "session-meta", metaRecordType: "session_meta", metaPayloadField: "session_id" },
     },
     mcp: { supported: true, serverName: "continuum" },
     contextDelivery: { kind: "prompt-only" },
@@ -168,4 +177,83 @@ export const codexManifest: ProviderManifest = {
   },
 };
 
-export const bundledManifests: readonly ProviderManifest[] = [claudeManifest, deepseekManifest, codexManifest];
+/**
+ * Antigravity (Google) — the authenticated `agy` CLI. Native `agy` launch
+ * with `cli-session` auth: CONTINUUM reuses `agy`'s own Google OAuth login
+ * (stored under `~/.gemini/` + the system keyring) and never reads/stores/
+ * copies any credential. No API key, no Gemini CLI, no Tencent/proxy.
+ *
+ * Model selection is `--model <id>` (verified against `agy --help` and the
+ * live `agy models` list); resume is `--conversation <id>` (verified flag),
+ * with the id discovered read-only from `agy`'s own SQLite session index.
+ * `agy` has no `--session-id` flag, so a fresh launch generates its own
+ * conversation id and the launcher captures it from the store after spawn —
+ * the same store-scan fallback Codex uses.
+ */
+export const antigravityManifest: ProviderManifest = {
+  schemaVersion: 1,
+  id: "antigravity",
+  displayName: "Antigravity",
+  protocol: "openai-compatible",
+  baseUrl: "https://antigravity.google",
+  auth: { kind: "cli-session" },
+  models: {
+    default: "gemini-3.7-flash-high",
+    aliases: {
+      high: "gemini-3.7-flash-high",
+      medium: "gemini-3.7-flash-medium",
+      low: "gemini-3.7-flash-low",
+      flash: "gemini-3.7-flash-low",
+      pro: "gemini-3.1-pro-high",
+    },
+  },
+  capabilities: {
+    thinking: "extended",
+    tools: true,
+    promptCache: "openai-automatic",
+    cliAvailable: true,
+    contextWindowTokens: 1_000_000,
+    notes: "Native Antigravity CLI (Google). Uses the `agy` CLI's own Google OAuth login; CONTINUUM holds no credential and injects no key.",
+  },
+  environment: { owns: [] },
+  // Full access by default: this workflow launches `agy` with tool approvals
+  // skipped via the CLI's own verified `--dangerously-skip-permissions` flag.
+  // Explicit `--safe` still selects normal approval mode.
+  defaultPermissionMode: "bypass",
+  // Live model discovery from the installed `agy` CLI's own `models` subcommand
+  // (verified locally), falling back to the manifest list when it fails.
+  modelDiscovery: { kind: "cli-command", command: ["models"] },
+  cliLaunch: {
+    kind: "native",
+    modelFlag: "--model",
+    permissionBypassFlag: "--dangerously-skip-permissions",
+    clearEnvVars: [],
+    nativeResume: {
+      supported: true,
+      resume: { kind: "flag", flag: "--conversation" },
+      sessionStore: {
+        kind: "sqlite",
+        dbPath: "~/.gemini/antigravity-cli/conversation_summaries.db",
+        table: "conversation_summaries",
+        idColumn: "conversation_id",
+        mtimeColumn: "last_modified_time",
+      },
+    },
+    mcp: { supported: false },
+    contextDelivery: { kind: "prompt-only" },
+  },
+  cli: {
+    supported: true,
+    executable: "agy",
+    versionArgs: ["--version"],
+    // agy has no `auth status`/`login status` subcommand: install detection is
+    // `agy --version`, and authenticated detection is the local, non-secret
+    // `~/.gemini/google_accounts.json` active-account + token-expiry check in
+    // `auth/provider-auth/antigravity.ts`. `loginArgs` runs bare `agy`, whose
+    // interactive OAuth flow fires when not signed in.
+    loginArgs: [],
+    logoutArgs: [],
+  },
+};
+
+export const bundledManifests: readonly ProviderManifest[] = [claudeManifest, deepseekManifest, codexManifest, antigravityManifest];

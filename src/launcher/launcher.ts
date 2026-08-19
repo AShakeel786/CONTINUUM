@@ -27,7 +27,9 @@ import { dirname } from "node:path";
 import type { ProjectRegistry } from "../registry/registry.js";
 import type { ProjectRecord } from "../registry/types.js";
 import type { ProviderRegistry } from "../providers/registry.js";
-import type { LaunchRoute, ProviderAdapter } from "../providers/types.js";
+import type { LaunchRoute, ProviderAdapter, ProviderProfile } from "../providers/types.js";
+import type { DiscoveredModel } from "../providers/model-discovery.js";
+import { discoverModelsFor } from "../providers/model-discovery.js";
 import type { CredentialManager } from "../auth/credential-manager.js";
 import type { CliAuthManager } from "../auth/cli-auth-manager.js";
 import type { AuthVerifier } from "../auth/auth-verifier.js";
@@ -92,6 +94,12 @@ export interface LauncherDeps {
    * Defaults to "direct" — the optional Tencent proxy is never inferred.
    */
   readonly getProviderRoute?: (providerId: string) => LaunchRoute;
+  /**
+   * Live model-list discovery (test seam + best-effort override). Defaults to
+   * `discoverModelsFor`, which runs the installed CLI's declared discovery
+   * mechanism. A failure degrades to manifest models, never errors.
+   */
+  readonly discoverModels?: (profile: ProviderProfile) => Promise<readonly DiscoveredModel[]>;
 }
 
 export type SpawnFn = (plan: LaunchPlan) => Promise<{ exitCode: number | null }>;
@@ -244,6 +252,19 @@ export class Launcher {
       }
     }
 
+    // Permission mode: explicit caller choice wins; otherwise the provider's
+    // declared default applies (Codex/Antigravity default to full access,
+    // Claude/DeepSeek default to safe). Full access is honored ONLY when the
+    // launch descriptor declares a real native bypass flag — a requested
+    // bypass with no flag is surfaced as a visible note, never silently run.
+    const requestedPermission = opts.permissionMode ?? adapter.profile.defaultPermissionMode ?? "safe";
+    const canBypass = effectiveLaunch.kind === "native" && !!effectiveLaunch.permissionBypassFlag;
+    const bypassPermissions = requestedPermission === "bypass" && canBypass;
+    const permissionNote =
+      requestedPermission === "bypass" && !canBypass
+        ? `${providerId} declares no native full-access flag — launching in normal approval mode.`
+        : undefined;
+
     // DeepSeek is Flash-by-default. Only a direct CLI model override, an
     // explicitly saved project default, or an explicitly user-selected model
     // on this logical session may select Pro. Legacy activeProvider.model is
@@ -253,7 +274,34 @@ export class Launcher {
         ? existingSession.modelPreference.model
         : undefined;
     const requestedModel = target.modelAlias ?? project.defaultModel ?? sessionModelPreference;
-    const model = adapter.resolveModel(requestedModel);
+
+    // Discovery-aware model resolution. For providers with live model
+    // discovery (Codex/Antigravity), an explicitly selected model is resolved
+    // against the installed CLI's CURRENT list: a live model id passes through
+    // verbatim (never remapped or dropped), and a saved model that disappeared
+    // after a CLI update falls back to the provider default with explicit
+    // visible messaging — never silently.
+    let model: string;
+    let modelNote: string | undefined;
+    let knownModelIds: ReadonlySet<string> | undefined;
+    if (requestedModel === undefined) {
+      model = adapter.resolveModel();
+    } else {
+      let discovered: readonly DiscoveredModel[] = [];
+      if (adapter.profile.modelDiscovery) {
+        try {
+          discovered = await this.discoverModels(adapter.profile);
+          knownModelIds = new Set(discovered.map((m) => m.id));
+        } catch {
+          discovered = []; // discovery failed → proceed unvalidated
+        }
+      }
+      model = adapter.resolveModel(requestedModel, knownModelIds);
+      if (discovered.length > 0 && !discovered.some((m) => m.id === model)) {
+        modelNote = `Selected model "${model}" is not in the current ${providerId} model list (the CLI may have updated). Falling back to ${adapter.resolveModel()}.`;
+        model = adapter.resolveModel();
+      }
+    }
     const providerRef: ProviderRef = { providerId, model };
     const modelDecision = {
       automatic: requestedModel === undefined,
@@ -303,7 +351,7 @@ export class Launcher {
         });
         session = await this.deps.sessionManager.setActiveProvider(session.sessionId, to);
       }
-      if (providerId === "deepseek" && (target.modelAlias || project.defaultModel)) {
+      if (target.modelAlias || project.defaultModel) {
         session = await this.deps.sessionManager.setModelPreference(session.sessionId, {
           model,
           source: target.modelAlias ? "user" : "project",
@@ -317,7 +365,10 @@ export class Launcher {
         mode: sessionMode,
         workingDirectory: project.path,
         activeProvider: providerRef,
-        ...(providerId === "deepseek" && requestedModel !== undefined
+        // An explicitly-selected model (user alias or project default) is the
+        // durable "saved model" a resume should honor — recorded for every
+        // provider, read back on resume via `sessionModelPreference` above.
+        ...(requestedModel !== undefined
           ? { modelPreference: { model, source: target.modelAlias ? "user" as const : "project" as const } }
           : {}),
         taskGoal: goal,
@@ -436,7 +487,10 @@ export class Launcher {
     // The launch secret (deepseek api-key in direct mode, proxy user key in
     // proxy mode) is sourced from the credential backend, not a manual env var —
     // see ctx.secrets below.
-    const launchCtx = await this.buildLaunchContext(adapter, metadata, requestedModel, project.path, resumeNativeSessionId, setSessionId, taskPrompt, contextSystem, route);
+    // `model` (not the raw `requestedModel` alias) is what reaches the CLI: an
+    // alias like `flash` is resolved to its id, and a vanished saved model is
+    // already replaced by the provider default above — never a stale id.
+    const launchCtx = await this.buildLaunchContext(adapter, metadata, model, project.path, resumeNativeSessionId, setSessionId, taskPrompt, contextSystem, route, bypassPermissions ? "bypass" : "safe", knownModelIds);
     const basePlan = adapter.buildCliLaunchPlan(launchCtx);
     const authEnv = metadata.api.supported ? await this.resolveAuthEnvSafely(adapter, metadata, route) : {};
 
@@ -451,7 +505,7 @@ export class Launcher {
       // Resolve the bare config-dir *name* to an absolute home path so the CLI
       // never creates a repo-local `.claude-*` dir (see config-dir.ts).
       configDir: resolveConfigDir(basePlan.configDir),
-      bypassPermissions: opts.permissionMode === "bypass",
+      bypassPermissions,
     };
 
     return {
@@ -469,9 +523,17 @@ export class Launcher {
       contextTokensUsed: budget.inputTokensAfter.tokens,
       route,
       modelDecision,
+      ...(modelNote ? { modelNote } : {}),
+      ...(permissionNote ? { permissionNote } : {}),
       ...(rollover ? { rollover } : {}),
       ...(resumeNativeSessionId ? { nativeResume: { providerId, nativeSessionId: resumeNativeSessionId } } : {}),
     };
+  }
+
+  /** Live model-list discovery — test seam in `LauncherDeps`, else the profile's declared mechanism. */
+  private discoverModels(profile: ProviderProfile): Promise<readonly DiscoveredModel[]> {
+    if (this.deps.discoverModels) return this.deps.discoverModels(profile);
+    return discoverModelsFor(profile);
   }
 
   /** Persist a provider-native session id after a successful launch. Never throws — a capture failure is a safe fallback, not an error. */
@@ -527,7 +589,7 @@ export class Launcher {
    * secret not in the store (which keeps backward compatibility with an
    * explicitly-exported key).
    */
-  private async buildLaunchContext(adapter: ProviderAdapter, metadata: ProviderAuthMetadata, modelAlias: string | undefined, workingDir: string, resumeNativeSessionId: string | undefined, setSessionId: string | undefined, taskPrompt: string | undefined, contextSystem: string | undefined, route: LaunchRoute): Promise<import("../providers/types.js").CliLaunchContext> {
+  private async buildLaunchContext(adapter: ProviderAdapter, metadata: ProviderAuthMetadata, modelAlias: string | undefined, workingDir: string, resumeNativeSessionId: string | undefined, setSessionId: string | undefined, taskPrompt: string | undefined, contextSystem: string | undefined, route: LaunchRoute, permissionMode: "safe" | "bypass", knownModelIds: ReadonlySet<string> | undefined): Promise<import("../providers/types.js").CliLaunchContext> {
     const secrets: Record<string, string> = {};
     const launch = adapter.resolveCliLaunch(route);
     if (launch.kind === "redirected") {
@@ -558,6 +620,8 @@ export class Launcher {
       ...(contextSystem ? { contextSystem } : {}),
       ...(mcpConfig ? { mcpConfig } : {}),
       route,
+      permissionMode,
+      ...(knownModelIds ? { knownModelIds } : {}),
     };
   }
 

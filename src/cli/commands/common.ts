@@ -11,10 +11,12 @@ import { selectCredentialBackend } from "../../auth/backends/detect.js";
 import { CredentialManager } from "../../auth/credential-manager.js";
 import { createProviderAuthMetadata, createCliAuthManager } from "../../auth/provider-auth/index.js";
 import { loadUserManifests } from "../../providers/manifest-store.js";
+import { createProviderRegistry } from "../../providers/index.js";
 import type { Prompt } from "../../auth/prompt.js";
 import type { CredentialBackend } from "../../auth/types.js";
 import type { CliAuthManager } from "../../auth/cli-auth-manager.js";
 import type { ProviderAuthMetadata } from "../../auth/types.js";
+import type { ProviderRegistry } from "../../providers/registry.js";
 import { setupPassphraseProvider } from "./passphrase.js";
 
 export interface CommandContext {
@@ -25,6 +27,7 @@ export interface CommandContext {
   readonly cliAuthManager: CliAuthManager;
   readonly prompt: Prompt;
   readonly dataDir: string;
+  readonly providers: ProviderRegistry;
 }
 
 export interface CommandOptions {
@@ -52,6 +55,7 @@ export async function buildContext(options: CommandOptions): Promise<CommandCont
     cliAuthManager: createCliAuthManager(userManifests),
     prompt: options.prompt,
     dataDir,
+    providers: createProviderRegistry(userManifests),
   };
 }
 

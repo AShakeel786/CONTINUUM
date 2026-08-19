@@ -19,6 +19,7 @@
 import { runSetupCommand } from "./commands/setup.js";
 import { runInteractiveCommand } from "./commands/interactive.js";
 import { runProvidersCommand } from "./commands/providers.js";
+import { runModelsCommand } from "./commands/models.js";
 import { getVersion } from "../version.js";
 import { runAuthCommand } from "./commands/auth.js";
 import { runDoctorCommand } from "./commands/doctor.js";
@@ -69,6 +70,8 @@ export async function main(argv: readonly string[]): Promise<number> {
       return runSetupCommand(rest, io);
     case "providers":
       return runProvidersCommand(rest, io);
+    case "models":
+      return runModelsCommand(rest, io);
     case "auth":
       return runAuthCommand(rest, io);
     case "doctor":
@@ -113,6 +116,7 @@ function printHelp(io: CliIo): void {
       "Commands:",
       "  setup             First-run onboarding + provider authentication",
       "  providers         List providers + auth availability (runtime/usable state)",
+      "  models [provider] List the installed CLIs' current model lists (live discovery)",
       "  auth <provider>   (Re)authenticate one provider  [--remove]",
       "  doctor            Read-only health report  [--repair] [--verbose]",
       "  project <sub>     Manage projects (add/remove/list/show/set-default)",
@@ -181,6 +185,7 @@ export function hasHelpFlag(args: readonly string[]): boolean {
 const COMMAND_USAGE: Readonly<Record<string, string>> = {
   setup: "Usage: continuum setup [--memory]\n\n  First-run onboarding + provider auth.  --memory  configure the MemoryCore gateway service token.",
   providers: "Usage: continuum providers\n\n  List providers and their runtime auth/availability (references only, never a secret).",
+  models: "Usage: continuum models [<provider>]\n\n  List the model ids the installed CLIs currently support (live, read-only discovery; manifest fallback when the CLI can't be queried).",
   auth: "Usage: continuum auth <provider> [--remove]\n\n  (Re)authenticate one provider, or remove its stored credential.",
   doctor: "Usage: continuum doctor [--repair] [--verbose]\n\n  Read-only health report.  --repair  bounded recovery (cooldown + circuit breaker).\n  --verbose  show the full report even when everything is healthy.",
   project: "Usage: continuum project <add|remove|list|show|set-default>\n\n  add          continuum project add <name> <path> [--alias <a>] [--provider <id>] [--model <m>]\n               continuum project add .   (register the current directory)\n  remove       continuum project remove <name|alias|id>\n  list         list registered projects\n  show         show a project (defaults to the current directory)\n  set-default  continuum project set-default <project> <provider> [--model <m>]",

@@ -21,7 +21,7 @@ import { createReadStream, promises as fsPromises } from "node:fs";
 import { createInterface } from "node:readline";
 import { homedir } from "node:os";
 import { basename, extname, join } from "node:path";
-import type { NativeSessionStore } from "../providers/types.js";
+import type { NativeFileSessionStore, NativeSessionStore, NativeSqliteSessionStore } from "../providers/types.js";
 
 function expandHome(p: string): string {
   if (p === "~") return homedir();
@@ -73,7 +73,7 @@ async function sessionMetaId(file: string, recordType: string | undefined, paylo
   }
 }
 
-async function idFromFile(file: string, store: NativeSessionStore): Promise<string | undefined> {
+async function idFromFile(file: string, store: NativeFileSessionStore): Promise<string | undefined> {
   const stem = basename(file, extname(file));
   switch (store.idFrom) {
     case "basename":
@@ -87,14 +87,81 @@ async function idFromFile(file: string, store: NativeSessionStore): Promise<stri
   }
 }
 
+/** Injectable SQLite row query (overridable in tests; defaults to a real reader). */
+export type SqliteQueryFn = (dbPath: string, sql: string) => Promise<readonly Record<string, unknown>[]>;
+
+/**
+ * Read rows from a SQLite database using `node:sqlite` (Node 22+, no external
+ * dependency) and, when that's unavailable (Node 18), the `sqlite3` CLI
+ * (ships with macOS). Any failure returns `[]` — SQLite discovery is strictly
+ * best-effort and must never throw.
+ */
+async function querySqlite(dbPath: string, sql: string): Promise<readonly Record<string, unknown>[]> {
+  try {
+    const mod = await import("node:sqlite");
+    type Db = { prepare(s: string): { all(): readonly Record<string, unknown>[] }; close(): void };
+    const DatabaseSync = mod.DatabaseSync as unknown as new (path: string, opts?: { readOnly?: boolean }) => Db;
+    const db = new DatabaseSync(dbPath, { readOnly: true });
+    try {
+      return db.prepare(sql).all();
+    } finally {
+      db.close();
+    }
+  } catch {
+    // fall through to the CLI path
+  }
+  try {
+    const { execFile } = await import("node:child_process");
+    const { promisify } = await import("node:util");
+    const { stdout } = await promisify(execFile)("sqlite3", ["-json", dbPath, sql], { timeout: 4000, maxBuffer: 1024 * 1024 });
+    const parsed = JSON.parse(stdout) as unknown;
+    if (Array.isArray(parsed)) return parsed as Record<string, unknown>[];
+    return [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Discover the most-recent conversation id from a provider's SQLite session
+ * index. Read-only and best-effort: the provider's own index is the single
+ * source of truth, and any failure yields `undefined` (resume-brief fallback).
+ *
+ * Deliberate limitation: this returns the single most-recent row and does not
+ * apply a `sinceMs` window — the provider's datetime column format is not part
+ * of a stable public contract, so a lexicographic ORDER BY is the only
+ * format-independent recency signal. For the launch-capture flow this is
+ * correct in the normal case (a fresh launch creates a new, most-recent
+ * conversation).
+ */
+export async function findRecentSqliteConversationId(
+  store: NativeSqliteSessionStore,
+  query: SqliteQueryFn = querySqlite,
+): Promise<string | undefined> {
+  const dbPath = expandHome(store.dbPath);
+  const sql = `SELECT ${store.idColumn} AS id FROM ${store.table} ORDER BY ${store.mtimeColumn} DESC LIMIT 1`;
+  let rows: readonly Record<string, unknown>[];
+  try {
+    rows = await query(dbPath, sql);
+  } catch {
+    return undefined;
+  }
+  const id = rows[0]?.["id"];
+  return typeof id === "string" && id.length > 0 ? id : undefined;
+}
+
 /**
  * Find the most-recent native session id in `store`, restricted to files
- * modified at/after `sinceMs`. Returns undefined when nothing qualifies.
+ * modified at/after `sinceMs` for file stores. Returns undefined when nothing
+ * qualifies. SQLite stores ignore the `sinceMs` window (see
+ * `findRecentSqliteConversationId`).
  */
 export async function findRecentNativeSessionId(
   store: NativeSessionStore,
   sinceMs = 0,
 ): Promise<string | undefined> {
+  if (store.kind === "sqlite") return findRecentSqliteConversationId(store);
+
   const root = expandHome(store.rootDir);
   const files: string[] = [];
   await walkFiles(root, files);

@@ -59,6 +59,26 @@ export async function verifyCliContract(shell: CliShell, adapter: ProviderAdapte
     missing.push(`mcp-supply flag "${mcpSupply.flag}"`);
   }
 
+  // Model-selection + full-access contracts apply only to native launches
+  // (the redirect/proxy variants carry no CLI flags of their own).
+  if (adapter.profile.cliLaunch.kind === "native") {
+    // Model-selection contract: a declared `--model`/`-m` flag (Antigravity/
+    // Codex) must exist in the CLI's help — never a guessed flag. A renamed
+    // flag fails loudly instead of silently launching with the wrong model.
+    const modelFlag = adapter.profile.cliLaunch.modelFlag;
+    if (modelFlag && !helpText.includes(modelFlag)) {
+      missing.push(`model flag "${modelFlag}"`);
+    }
+
+    // Full-access contract: a declared bypass flag (Antigravity/Codex) must
+    // exist in the CLI's help — a renamed/removed flag fails loudly rather than
+    // silently running a launch that skipped no approvals.
+    const bypassFlag = adapter.profile.cliLaunch.permissionBypassFlag;
+    if (bypassFlag && !helpText.includes(bypassFlag)) {
+      missing.push(`permission-bypass flag "${bypassFlag}"`);
+    }
+  }
+
   if (missing.length > 0) {
     return { providerId, ok: false, detail: `CLI drift: ${missing.join(", ")} not found in \`${executable} --help\`` };
   }

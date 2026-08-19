@@ -83,6 +83,10 @@ describe("buildHudData", () => {
   it("formats a terminal title that survives native Claude redraws", () => {
     expect(formatTerminalTitle({ workspace: "General", providerLabel: "DeepSeek", model: "deepseek-v4-flash", contextUsed: 1200, contextMax: 200000, handoff: "ready", memoryOff: false, bypass: false, peak: { multiplier: 2, endsAt: new Date("2026-08-19T10:00:00Z") } })).toContain("DeepSeek | deepseek-v4-flash | ctx 1k/200k | handoff ready | PEAK 2×");
   });
+  it("flags FULL ACCESS in the terminal title when bypass is active", () => {
+    const title = formatTerminalTitle({ workspace: "General", providerLabel: "Codex", model: "gpt-5.6-sol", contextUsed: 1200, contextMax: 200000, handoff: "ready", memoryOff: false, bypass: true, peak: undefined });
+    expect(title).toContain("FULL ACCESS");
+  });
   it("resolves a registered project workspace by name", async () => {
     const data = await buildHudData(prep(), { launcher: fakeLauncher([{ providerId: "claude", model: "x" }, { providerId: "deepseek", model: "y" }]), providers: fakeProviders() });
     expect(data.workspace).toBe("PASSCARS");
@@ -154,12 +158,12 @@ describe("formatHud", () => {
   };
 
   it("renders the full line at a wide width", () => {
-    expect(formatHud(base, 200)).toBe("CONTINUUM | PASSCARS | bypass ON | Claude | ctx 36k/200k | handoff ready");
+    expect(formatHud(base, 200)).toBe("CONTINUUM | PASSCARS | FULL ACCESS | Claude | ctx 36k/200k | handoff ready");
   });
 
   it("omits bypass when off and memory when on (nothing notable)", () => {
     const line = formatHud({ ...base, bypass: false }, 200);
-    expect(line).not.toContain("bypass");
+    expect(line).not.toContain("FULL ACCESS");
     expect(line).not.toContain("memory");
   });
 
@@ -179,10 +183,10 @@ describe("formatHud", () => {
     expect(line).toContain("ctx 18%");
   });
 
-  it("drops lowest-priority fields first but always keeps CONTINUUM, workspace, and bypass ON", () => {
+  it("drops lowest-priority fields first but always keeps CONTINUUM, workspace, and FULL ACCESS", () => {
     const line = formatHud(base, 35);
     expect(line.startsWith("CONTINUUM | PASSCARS")).toBe(true);
-    expect(line).toContain("bypass ON");
+    expect(line).toContain("FULL ACCESS");
     expect(line).not.toContain("handoff");
   });
 

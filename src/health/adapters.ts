@@ -33,7 +33,7 @@ export const DEFAULT_OPTIONS = {
   },
   pinnedImage: "agentmemory/memory-core:phase13",
   stateFile: join(resolveDataDir(), "health-state.json"),
-  providerExecutables: ["claude", "codex"],
+  providerExecutables: ["claude", "codex", "agy"],
 } as const;
 
 export const DEFAULT_POLICY = {

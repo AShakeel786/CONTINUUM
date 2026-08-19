@@ -15,6 +15,7 @@
  */
 
 import { accessSync, constants as fsConstants } from "node:fs";
+import { homedir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
 import type { CliAuthManager } from "../auth/cli-auth-manager.js";
 import type { CredentialManager } from "../auth/credential-manager.js";
@@ -73,7 +74,20 @@ export function availabilityOf(e: ProviderEvaluation): ProviderAvailability {
   return "not-configured";
 }
 
-/** Best-effort, side-effect-free "is this executable reachable on PATH (or an absolute path)?" */
+/**
+ * Well-known home bin directories that are frequently absent from a desktop
+ * launcher's (Finder/Spotlight) PATH. `~/.local/bin` is where the Antigravity
+ * `agy` installer places the binary, and a macOS GUI-launched process often
+ * inherits a minimal PATH that omits it even though the terminal has it. This
+ * is a generic, best-effort fallback — not an antigravity-specific hack.
+ */
+function homeBinDirs(): readonly string[] {
+  if (process.platform === "win32") return [];
+  const home = homedir();
+  return [join(home, ".local", "bin"), join(home, "bin")];
+}
+
+/** Best-effort, side-effect-free "is this executable reachable on PATH (or an absolute path, or a well-known home bin dir)?" */
 export function findExecutableOnPath(executable: string): string | undefined {
   const extensions = process.platform === "win32" ? ["", ".exe", ".cmd", ".bat"] : [""];
   const candidates: string[] = [];
@@ -83,6 +97,10 @@ export function findExecutableOnPath(executable: string): string | undefined {
     const pathVar = process.env.PATH ?? "";
     for (const dir of pathVar.split(delimiter)) {
       if (!dir) continue;
+      for (const ext of extensions) candidates.push(join(dir, executable + ext));
+    }
+    // Fallback: home bin dirs that a GUI-launched process may not have on PATH.
+    for (const dir of homeBinDirs()) {
       for (const ext of extensions) candidates.push(join(dir, executable + ext));
     }
   }

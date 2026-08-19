@@ -18,6 +18,10 @@ async function find(dir: string, id: string, ext: string): Promise<string | unde
 }
 
 export async function nativeSessionFile(store: NativeSessionStore, nativeSessionId: string): Promise<string | undefined> {
+  // SQLite-backed stores (Antigravity) carry no per-session file to inspect;
+  // cost/usage tracking from a native session file is only defined for the
+  // file-backed Claude/DeepSeek stores.
+  if (store.kind !== "files") return undefined;
   return find(root(store.rootDir), nativeSessionId, store.extension);
 }
 

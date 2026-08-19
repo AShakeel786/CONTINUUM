@@ -38,8 +38,13 @@ export interface ResolvedLaunchTarget {
 }
 
 export interface LaunchOptions {
-  /** Explicit permission-bypass opt-in (safe-by-default: false disallows it). */
-  readonly permissionMode: "safe" | "bypass";
+  /**
+   * Explicit launch permission mode. Absent → the provider's declared
+   * `defaultPermissionMode` applies (Codex/Antigravity default to "bypass",
+   * everything else to "safe"), so a provider default is never silently
+   * overridden and an explicit choice always wins.
+   */
+  readonly permissionMode?: "safe" | "bypass";
 }
 
 /** Result of computing a launch target without spawning anything — testable in isolation from process spawning. */
@@ -66,5 +71,17 @@ export interface LaunchPreparation {
   /** The launch route actually resolved for this run (direct default; proxy only when explicitly configured) — see `LauncherDeps.getProviderRoute`. */
   readonly route: LaunchRoute;
   readonly modelDecision: { readonly automatic: boolean; readonly reason: string };
+  /**
+   * Visible messaging when a requested/saved model was NOT in the installed
+   * CLI's current model list and CONTINUUM fell back to the provider default
+   * (never a silent ignore). Absent = no fallback happened.
+   */
+  readonly modelNote?: string;
+  /**
+   * Visible messaging when full-access ("bypass") was requested but the
+   * provider declares no native bypass flag, so the launch ran in normal
+   * approval mode. Absent = mode was honored (or never requested).
+   */
+  readonly permissionNote?: string;
   readonly rollover?: { readonly fromNativeSessionId: string; readonly toNativeSessionId: string; readonly handoffFile: string; readonly reason: string; readonly estimatedCostAvoidedUsd: number };
 }

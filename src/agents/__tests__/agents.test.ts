@@ -71,7 +71,7 @@ describe("AgentManager — list", () => {
     });
     const descriptors = await manager.listDescriptors();
     const ids = descriptors.map((d) => d.providerId).sort();
-    expect(ids).toEqual(["claude", "codex", "deepseek"]);
+    expect(ids).toEqual(["antigravity", "claude", "codex", "deepseek"]);
     const claude = descriptors.find((d) => d.providerId === "claude")!;
     expect(claude.source).toBe("builtin");
     expect(claude.auth.cli).toBe(true);

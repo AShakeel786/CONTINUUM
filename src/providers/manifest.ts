@@ -53,7 +53,13 @@ export interface ManifestCliLaunchCommon {
 }
 
 export type ManifestCliLaunch =
-  | (ManifestCliLaunchCommon & { readonly kind: "native" })
+  | (ManifestCliLaunchCommon & {
+      readonly kind: "native";
+      /** Verified native flag that selects the model at launch (Codex `-m`, agy `--model`). */
+      readonly modelFlag?: string;
+      /** Verified native flag that skips all permission approvals (agy `--dangerously-skip-permissions`, Codex `--dangerously-bypass-approvals-and-sandbox`). */
+      readonly permissionBypassFlag?: string;
+    })
   | (ManifestCliLaunchCommon & {
       readonly kind: "redirected";
       readonly baseUrl: string;
@@ -123,6 +129,10 @@ export interface ProviderManifest {
   readonly proxyCliLaunch?: ManifestProxyCliLaunch;
   readonly cli?: ManifestCli;
   readonly proxyUserKey?: ManifestProxyUserKey;
+  /** Default launch permission mode when the caller specifies none ("safe" = approvals, "bypass" = full access). */
+  readonly defaultPermissionMode?: "safe" | "bypass";
+  /** Live model-list discovery from the installed CLI (see types.ts `ModelDiscovery`). */
+  readonly modelDiscovery?: import("./types.js").ModelDiscovery;
 }
 
 const ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -163,6 +173,23 @@ export function validateManifest(input: unknown): readonly string[] {
     if (caps.thinking !== undefined && !["none", "supported", "extended"].includes(caps.thinking)) errors.push("capabilities.thinking invalid");
     if (caps.promptCache !== undefined && !["none", "anthropic-explicit", "openai-automatic"].includes(caps.promptCache)) errors.push("capabilities.promptCache invalid");
     if (caps.contextWindowTokens !== undefined && (typeof caps.contextWindowTokens !== "number" || caps.contextWindowTokens <= 0)) errors.push("capabilities.contextWindowTokens must be positive");
+  }
+
+  if (m.defaultPermissionMode !== undefined && m.defaultPermissionMode !== "safe" && m.defaultPermissionMode !== "bypass") {
+    errors.push("defaultPermissionMode must be \"safe\" or \"bypass\"");
+  }
+
+  const modelDiscovery = m.modelDiscovery;
+  if (modelDiscovery) {
+    if (modelDiscovery.kind !== "cli-command" && modelDiscovery.kind !== "json-cache") {
+      errors.push("modelDiscovery.kind must be cli-command or json-cache");
+    }
+    if (modelDiscovery.kind === "cli-command" && (!Array.isArray(modelDiscovery.command) || modelDiscovery.command.length === 0)) {
+      errors.push("modelDiscovery.command must be a non-empty string array for kind=cli-command");
+    }
+    if (modelDiscovery.kind === "json-cache" && (typeof modelDiscovery.path !== "string" || modelDiscovery.path.trim().length === 0)) {
+      errors.push("modelDiscovery.path is required for kind=json-cache");
+    }
   }
 
   const cli = m.cli;
@@ -223,6 +250,8 @@ function toCliLaunch(m: ProviderManifest): CliLaunchDescriptor {
       kind: "native",
       executable: m.cli?.executable ?? m.id,
       ...(l.configDirName ? { configDirName: l.configDirName } : {}),
+      ...(l.modelFlag ? { modelFlag: l.modelFlag } : {}),
+      ...(l.permissionBypassFlag ? { permissionBypassFlag: l.permissionBypassFlag } : {}),
       clearEnvVars: l.clearEnvVars ?? [],
       ...(l.nativeResume ? { nativeResume: l.nativeResume } : {}),
       ...(l.mcp ? { mcp: l.mcp } : {}),
@@ -306,6 +335,8 @@ export function manifestToProfile(m: ProviderManifest): ProviderProfile {
     capabilities: toCapabilities(m),
     environment: m.environment ?? { owns: envOwns(m) },
     cliLaunch: toCliLaunch(m),
+    ...(m.defaultPermissionMode ? { defaultPermissionMode: m.defaultPermissionMode } : {}),
+    ...(m.modelDiscovery ? { modelDiscovery: m.modelDiscovery } : {}),
     ...(proxyCliLaunch ? { proxyCliLaunch } : {}),
   };
 }

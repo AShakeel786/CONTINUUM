@@ -3,6 +3,7 @@ import { verifyCliContract, type CliShell } from "../cli-contract.js";
 import { createProviderAdapter } from "../../providers/adapter.js";
 import { claudeProfile } from "../../providers/profiles/claude.js";
 import { codexProfile } from "../../providers/profiles/codex.js";
+import { antigravityProfile } from "../../providers/profiles/antigravity.js";
 
 class FakeShell implements CliShell {
   constructor(private readonly help: string, private readonly versionOk = true) {}
@@ -21,8 +22,9 @@ describe("verifyCliContract", () => {
     expect(check.detail).toContain("--resume");
   });
 
-  it("passes Codex when `resume` subcommand appears in --help (no session-id, no mcp flag declared)", async () => {
-    const help = "Commands:\n  resume  Resume a previous interactive session\n  exec  Run non-interactively\n";
+  it("passes Codex when `resume` subcommand + model/bypass flags appear in --help (no session-id, no mcp flag declared)", async () => {
+    const help =
+      "Options:\n  -m, --model <model>  Model to use\n  --dangerously-bypass-approvals-and-sandbox  Skip approval+sandbox\nCommands:\n  resume  Resume a previous interactive session\n  exec  Run non-interactively\n";
     const check = await verifyCliContract(new FakeShell(help), createProviderAdapter(codexProfile));
     expect(check.ok).toBe(true);
   });
@@ -55,5 +57,21 @@ describe("verifyCliContract", () => {
     const check = await verifyCliContract(new FakeShell("", false), createProviderAdapter(claudeProfile));
     expect(check.ok).toBe(false);
     expect(check.detail).toContain("not installed");
+  });
+
+  it("passes Antigravity when `--conversation` + model/bypass flags appear in `agy --help`", async () => {
+    const help =
+      "Usage of agy:\n  --conversation  Resume a previous conversation by ID\n  --model  Model for the current CLI session\n  --dangerously-skip-permissions  Run without approval prompts\n";
+    const check = await verifyCliContract(new FakeShell(help), createProviderAdapter(antigravityProfile));
+    expect(check.ok).toBe(true);
+    expect(check.detail).toContain("--conversation");
+  });
+
+  it("fails clearly when the declared Antigravity resume flag drifts (--conversation missing)", async () => {
+    const help = "Usage of agy:\n  --continue  Continue the most recent conversation\n  --model  Model for the current CLI session\n  --dangerously-skip-permissions  Run without approval prompts\n";
+    const check = await verifyCliContract(new FakeShell(help), createProviderAdapter(antigravityProfile));
+    expect(check.ok).toBe(false);
+    expect(check.detail).toContain("CLI drift");
+    expect(check.detail).toContain("--conversation");
   });
 });

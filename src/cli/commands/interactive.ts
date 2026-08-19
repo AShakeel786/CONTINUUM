@@ -33,7 +33,7 @@ import type { AgentAuthFacts, AgentDescriptor } from "../../agents/index.js";
 import type { ProviderAuthMethod } from "../../config/types.js";
 import type { CliIo } from "../index.js";
 import { buildLauncherContext } from "./launcher-context.js";
-import { checkPricing, ensureMcpRegistration, launchPrepared, runLaunchPreflight } from "./launch.js";
+import { checkPricing, ensureMcpRegistration, launchPrepared, printPermissionState, runLaunchPreflight } from "./launch.js";
 import { getTerminalColumns, isStdinTty, NON_TTY_HINT } from "./common.js";
 import { printHud, printProviderIdentity } from "./hud.js";
 
@@ -681,6 +681,8 @@ export async function runInteractiveCommand(args: readonly string[], io: CliIo):
     for (const warning of await runLaunchPreflight()) out(`⚠️  ${warning}\n`);
     await ensureMcpRegistration();
 
+    // No explicit permission choice from the menu → the provider's declared
+    // default applies (Codex/Antigravity default to full access, others to safe).
     const prep: LaunchPreparation =
       decision.kind === "new"
         ? await ctx.launcher.prepareLaunch(
@@ -690,14 +692,15 @@ export async function runInteractiveCommand(args: readonly string[], io: CliIo):
               providerId: decision.providerId,
               taskGoal: decision.taskGoal || undefined,
             },
-            { permissionMode: "safe" },
+            {},
           )
-        : await ctx.launcher.prepareLaunch({ sessionId: decision.sessionId }, { permissionMode: "safe" });
+        : await ctx.launcher.prepareLaunch({ sessionId: decision.sessionId }, {});
 
     if (prep.stale) out(`⚠️  Stale state detected:\n${prep.staleReasons.map((r) => `  - ${r}`).join("\n")}\n`);
     if (prep.memoryCoreNote) out(`ℹ️  ${prep.memoryCoreNote}\n`);
     if (prep.session) out(`Session: ${prep.session.sessionId}\n`);
     if (prep.nativeResume) out(`ℹ️  Resuming ${prep.nativeResume.providerId} native session ${prep.nativeResume.nativeSessionId}\n`);
+    printPermissionState(out, prep);
     printProviderIdentity(out, prep, ctx.providers);
     await printHud(out, prep, { launcher: ctx.launcher, providers: ctx.providers }, getTerminalColumns());
 

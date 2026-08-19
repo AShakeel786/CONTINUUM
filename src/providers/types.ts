@@ -171,6 +171,24 @@ export interface NativeCliLaunch {
    */
   readonly configDirName?: string;
   /**
+   * Native flag that explicitly selects the model at launch (verified: Codex
+   * `-m`, agy `--model`). Declared only where the CLI honors an explicit
+   * model flag; the adapter emits `[modelFlag, <resolved model id>]` on BOTH
+   * fresh and resume launches so an explicitly selected model always reaches
+   * the CLI. Absent (Claude/DeepSeek) = the CLI uses its own default/identity,
+   * preserving existing behavior.
+   */
+  readonly modelFlag?: string;
+  /**
+   * Native flag that launches with all tool permission approvals skipped
+   * (verified: agy `--dangerously-skip-permissions`, Codex
+   * `--dangerously-bypass-approvals-and-sandbox`). Emitted only when the
+   * caller requests `permissionMode: "bypass"`; absent = full-access is
+   * unsupported for this provider (the launcher then warns rather than
+   * silently running safe). Never emulated via shell tricks or config edits.
+   */
+  readonly permissionBypassFlag?: string;
+  /**
    * Env vars to clear before launch, in case a previous session (a
    * different provider, or a different agent system entirely) left them
    * set and would otherwise silently redirect this one. Mirrors the real
@@ -276,6 +294,20 @@ export interface ModelTierMap {
 
 export type CliLaunchDescriptor = NativeCliLaunch | ProxyRoutedCliLaunch | RedirectedCliLaunch;
 
+// ── Model discovery (data, not behavior) ────────────────────────────────
+//
+// How to discover the provider's CURRENT model list from the installed CLI,
+// so CONTINUUM exposes exactly what the authenticated CLI supports instead of
+// a hardcoded (and drifting) list. Two reliable, local mechanisms exist:
+//   - cli-command — a real subcommand that prints the model list (agy `models`).
+//   - json-cache  — a JSON cache file the CLI itself maintains (~/.codex/models_cache.json).
+// Absent = no live discovery (manifest models only). Discovery is read-only
+// and best-effort; any failure degrades to the manifest models, never errors.
+
+export type ModelDiscovery =
+  | { readonly kind: "cli-command"; readonly command: readonly string[] }
+  | { readonly kind: "json-cache"; readonly path: string };
+
 /** Which launch descriptor a dual-route provider (DeepSeek) uses this run. */
 export type LaunchRoute = "direct" | "proxy";
 
@@ -291,8 +323,20 @@ export type NativeResume =
   | { readonly kind: "flag"; readonly flag: string }
   | { readonly kind: "subcommand"; readonly subcommand: string };
 
-/** Where a provider's native CLI persists session files (read-only, for recent-id discovery). */
-export interface NativeSessionStore {
+/**
+ * Where a provider's native CLI persists session files (read-only, for
+ * recent-id discovery). Two storage kinds, discriminated by `kind`:
+ *   - "files"  — a directory of session files (Claude `<uuid>.jsonl`, Codex
+ *     `rollout-…-<uuid>.jsonl`), discovered by filename + mtime.
+ *   - "sqlite" — a SQLite index table holding conversation ids + recency
+ *     (Antigravity's `conversation_summaries.db`), discovered by a single
+ *     ORDER BY query. No provider id is ever switched on here.
+ */
+export type NativeSessionStore = NativeFileSessionStore | NativeSqliteSessionStore;
+
+/** File-based session store (Claude/DeepSeek/Codex). */
+export interface NativeFileSessionStore {
+  readonly kind: "files";
   /** Root directory to scan recursively for session files (may include `~`). */
   readonly rootDir: string;
   /** File extension marking a session file. */
@@ -309,6 +353,24 @@ export interface NativeSessionStore {
   readonly metaRecordType?: string;
   /** For idFrom "session-meta": the payload field holding the canonical id. */
   readonly metaPayloadField?: string;
+}
+
+/**
+ * SQLite session store (Antigravity). The provider's own session index is a
+ * SQLite table; the most-recent conversation id is the single row with the
+ * greatest recency column. Read-only and best-effort: any read failure yields
+ * `undefined` (the launcher then falls back to the resume brief).
+ */
+export interface NativeSqliteSessionStore {
+  readonly kind: "sqlite";
+  /** Path to the SQLite database file (may include `~`). */
+  readonly dbPath: string;
+  /** Table holding one row per conversation. */
+  readonly table: string;
+  /** Column holding the stable conversation id accepted by the resume flag. */
+  readonly idColumn: string;
+  /** Column used for recency ordering (lexicographically sortable datetime). */
+  readonly mtimeColumn: string;
 }
 
 export interface NativeResumeCapability {
@@ -382,6 +444,17 @@ export interface ProviderProfile {
   readonly environment: EnvironmentOwnership;
   readonly cliLaunch: CliLaunchDescriptor;
   /**
+   * Default launch permission mode when the caller does not specify one
+   * (`"safe"` = normal approval prompts, `"bypass"` = full access with every
+   * tool approval skipped via the profile's native bypass flag). Absent →
+   * `"safe"`. Declared per provider so Codex/Antigravity default to full
+   * access while Claude/DeepSeek keep the safe default. An explicit caller
+   * choice always overrides this.
+   */
+  readonly defaultPermissionMode?: "safe" | "bypass";
+  /** Live model-list discovery from the installed CLI (see `ModelDiscovery`). Absent = manifest models only. */
+  readonly modelDiscovery?: ModelDiscovery;
+  /**
    * Optional alternative proxy-routed launch descriptor for providers that
    * support BOTH a direct remote endpoint and an optional local proxy
    * (DeepSeek's optional Tencent MemoryProxy mode). Absent for providers
@@ -439,6 +512,21 @@ export interface CliLaunchContext {
    * anything else (or absent) uses the primary `cliLaunch` (direct mode).
    */
   readonly route?: LaunchRoute;
+  /**
+   * "bypass" emits the profile's declared native full-access flag (agy
+   * `--dangerously-skip-permissions`, Codex `--dangerously-bypass-approvals-
+   * and-sandbox`); "safe" (the default when absent) keeps normal approval
+   * prompts. The launcher resolves explicit caller choice > provider default
+   * > safe before building the plan.
+   */
+  readonly permissionMode?: "safe" | "bypass";
+  /**
+   * Model ids the installed CLI currently supports (from the profile's
+   * `modelDiscovery`), so a live model id (e.g. `gemini-3.6-flash-high`)
+   * resolves through `resolveModel` without the manifest-alias check while
+   * typos of *aliases* still fail loudly.
+   */
+  readonly knownModelIds?: ReadonlySet<string>;
 }
 
 /** A fully-resolved plan for launching a coding-agent CLI against this provider. */
@@ -467,8 +555,13 @@ export interface CliLaunchPlan {
 export interface ProviderAdapter {
   readonly profile: ProviderProfile;
 
-  /** Resolve a logical model alias ("default" if omitted) to a real model id. */
-  resolveModel(alias?: string): string;
+  /**
+   * Resolve a logical model alias ("default" if omitted) to a real model id.
+   * `knownIds` (the installed CLI's live model ids, from `modelDiscovery`)
+   * additionally accepts any exact id in that set, so a live-discovered model
+   * passes through while unknown aliases still throw `UnknownModelAliasError`.
+   */
+  resolveModel(alias?: string, knownIds?: ReadonlySet<string>): string;
 
   /**
    * Resolve which launch descriptor this provider uses for a given route.

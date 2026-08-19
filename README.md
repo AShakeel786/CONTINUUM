@@ -91,8 +91,9 @@ After `npm run build` you can also install the two CLIs locally with
 | id | provider | how it runs |
 |---|---|---|
 | `claude` | Claude Code | native CLI (its own `claude` login) |
-| `deepseek` | DeepSeek | Claude Code routed through the Tencent MemoryProxy |
+| `deepseek` | DeepSeek | Claude Code redirected to DeepSeek's own Anthropic-compatible endpoint |
 | `codex` | Codex | native CLI (its own `codex` login) |
+| `antigravity` | Antigravity | native CLI (`agy`, its own Google OAuth login — no API key) |
 
 Set up auth with `continuum auth <id>` (masked prompt; the key is stored in your
 OS credential store, never in a config file).

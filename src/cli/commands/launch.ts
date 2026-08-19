@@ -78,6 +78,20 @@ function printPeakProWarning(out: (s: string) => void, prep: LaunchPreparation, 
   out(`⚠️  Pro is selected during DeepSeek peak pricing (${peak.multiplier}×), ending ${end} local. Confirm this escalation is necessary before continuing.\n`);
 }
 
+/**
+ * Concise visible permission/model state before a launch. Full access is shown
+ * ONLY when the launch actually carries the native bypass flag (never a bare
+ * "bypass requested" claim); a requested-but-unavailable bypass and a model
+ * fallback surface as notes, never silently.
+ */
+export function printPermissionState(out: (s: string) => void, prep: LaunchPreparation): void {
+  if (prep.plan.bypassPermissions) {
+    out(`⚡ FULL ACCESS: ${prep.providerRef.providerId} will run with tool approvals bypassed.\n`);
+  }
+  if (prep.permissionNote) out(`ℹ️  ${prep.permissionNote}\n`);
+  if (prep.modelNote) out(`ℹ️  ${prep.modelNote}\n`);
+}
+
 async function recordLaunchDecisions(prep: LaunchPreparation, dataDir: string, pricing: PricingAwarenessService): Promise<void> {
   if (!prep.session) return;
   const store = new CostTelemetryStore(dataDir);
@@ -293,7 +307,12 @@ export async function runLaunchCommand(args: readonly string[], io: CliIo): Prom
   const providerId = opt(args, "--provider", "-p");
   const modelAlias = opt(args, "--model");
   const taskGoal = opt(args, "--task", "-t");
+  // Explicit permission choice only: `--bypass-permissions` forces full access,
+  // `--safe` forces normal approval mode. Absent → the provider's declared
+  // default applies (Codex/Antigravity default to full access, others to safe).
   const bypass = args.includes("--bypass-permissions") || args.includes("--dangerously-bypass");
+  const safe = args.includes("--safe");
+  const permissionMode: "safe" | "bypass" | undefined = bypass ? "bypass" : safe ? "safe" : undefined;
   // No-project launches (see src/launcher/launcher.ts's SessionMode): "general"
   // has no fixed directory anchor; "current-directory" anchors to the launch
   // cwd without registering it as a project. Mutually exclusive with a
@@ -309,7 +328,7 @@ export async function runLaunchCommand(args: readonly string[], io: CliIo): Prom
 
     const prep = await launcher.prepareLaunch(
       { ...(mode ? {} : projectKey ? { projectKey } : {}), ...(mode ? { mode } : {}), providerId, modelAlias, taskGoal },
-      { permissionMode: bypass ? "bypass" : "safe" },
+      { permissionMode },
     );
 
     if (prep.stale) {
@@ -320,6 +339,7 @@ export async function runLaunchCommand(args: readonly string[], io: CliIo): Prom
     if (prep.nativeResume) out(`ℹ️  Resuming ${prep.nativeResume.providerId} native session ${prep.nativeResume.nativeSessionId}\n`);
     if (prep.rollover) out(`💲 Context rollover: preserved ${prep.rollover.fromNativeSessionId}; fresh native session ${prep.rollover.toNativeSessionId}\n   Handoff: ${prep.rollover.handoffFile}\n   ${prep.rollover.reason}\n`);
     if (prep.modelDecision) out(`Model decision: ${prep.providerRef.model} — ${prep.modelDecision.reason}\n`);
+    printPermissionState(out, prep);
     await recordLaunchDecisions(prep, dataDir, pricing);
     printProviderIdentity(out, prep, providers);
     await printHud(out, prep, { launcher, providers, pricing }, getTerminalColumns());
@@ -351,6 +371,9 @@ export async function runResumeCommand(args: readonly string[], io: CliIo): Prom
   const modelAlias = opt(args, "--model");
   // `--recent N` resumes the Nth most-recent session (no id to memorize).
   const recentN = Number(opt(args, "--recent") ?? "nan");
+  const bypass = args.includes("--bypass-permissions") || args.includes("--dangerously-bypass");
+  const safe = args.includes("--safe");
+  const permissionMode: "safe" | "bypass" | undefined = bypass ? "bypass" : safe ? "safe" : undefined;
 
   const prompt = createPrompt();
   const { launcher, sessionManager, providers, pricing, handoffManager, dataDir } = await buildLauncherContext({
@@ -371,7 +394,7 @@ export async function runResumeCommand(args: readonly string[], io: CliIo): Prom
   try {
     const prep = await launcher.prepareLaunch(
       { sessionId: targetSessionId, ...(providerId ? { providerId } : {}), ...(modelAlias ? { modelAlias } : {}) },
-      { permissionMode: "safe" },
+      { permissionMode },
     );
     if (prep.stale) {
       out(`⚠️  Stale state detected:\n${prep.staleReasons.map((r) => `  - ${r}`).join("\n")}\n`);
@@ -379,6 +402,8 @@ export async function runResumeCommand(args: readonly string[], io: CliIo): Prom
     if (prep.session) out(`Resuming session: ${prep.session.sessionId} [${prep.plan.providerId}]\n`);
     if (prep.nativeResume) out(`ℹ️  Resuming ${prep.nativeResume.providerId} native session ${prep.nativeResume.nativeSessionId}\n`);
     if (prep.rollover) out(`💲 Context rollover: preserved ${prep.rollover.fromNativeSessionId}; fresh native session ${prep.rollover.toNativeSessionId}\n   Handoff: ${prep.rollover.handoffFile}\n   ${prep.rollover.reason}\n`);
+    if (prep.modelDecision) out(`Model decision: ${prep.providerRef.model} — ${prep.modelDecision.reason}\n`);
+    printPermissionState(out, prep);
     await recordLaunchDecisions(prep, dataDir, pricing);
     printProviderIdentity(out, prep, providers);
     await printHud(out, prep, { launcher, providers, pricing }, getTerminalColumns());
@@ -429,7 +454,13 @@ export async function runHandoffCommand(args: readonly string[], io: CliIo): Pro
     out(`Handed off to ${chosenId} (session ${result.session.sessionId}, active provider set).\n`);
 
     // Launch the receiving agent in the same project, continuing the session.
-    const prep = await launcher.prepareLaunch({ sessionId, providerId: chosenId }, { permissionMode: "safe" });
+    // Handoff-receiving launches inherit the provider default permission mode
+    // (full access for Codex/Antigravity) — explicit `--safe` opts back out.
+    const bypass = args.includes("--bypass-permissions") || args.includes("--dangerously-bypass");
+    const safe = args.includes("--safe");
+    const permissionMode: "safe" | "bypass" | undefined = bypass ? "bypass" : safe ? "safe" : undefined;
+    const prep = await launcher.prepareLaunch({ sessionId, providerId: chosenId }, { permissionMode });
+    printPermissionState(out, prep);
     printProviderIdentity(out, prep, providers);
     await printHud(out, prep, { launcher, providers }, getTerminalColumns());
     await ensureMcpRegistration();
