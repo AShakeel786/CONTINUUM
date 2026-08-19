@@ -11,5 +11,6 @@ export const deepseekPricingSchedule: ProviderPricingSchedule = {
     { startUTC: "01:00", endUTC: "04:00" },
     { startUTC: "06:00", endUTC: "10:00" },
   ],
-  source: "DeepSeek official pricing page, checked 2026-08-16 (CONTINUUM Phase 5 addendum).",
+  peakMultiplier: 2,
+  source: "DeepSeek official pricing page: separate off-peak/peak rates, 2× peak; windows 01:00–04:00 UTC and 06:00–10:00 UTC.",
 };

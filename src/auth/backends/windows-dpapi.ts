@@ -16,6 +16,7 @@ import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { resolveDataDir } from "../../config/paths.js";
 import type { CredentialBackend } from "../types.js";
+import { assertNotUnderTest } from "./test-guard.js";
 
 function runPowerShellPipe(script: string, stdinInput: string): Promise<{ stdout: string; exitCode: number | null }> {
   return new Promise((resolve, reject) => {
@@ -116,6 +117,7 @@ export class WindowsDpapiCredentialBackend implements CredentialBackend {
   }
 
   async set(key: string, value: string): Promise<void> {
+    assertNotUnderTest(this.id, "set");
     const blob = await this.protect(value);
     const vault = await this.loadVault();
     await this.saveVault({ entries: { ...vault.entries, [key]: blob } });
@@ -129,6 +131,7 @@ export class WindowsDpapiCredentialBackend implements CredentialBackend {
   }
 
   async delete(key: string): Promise<void> {
+    assertNotUnderTest(this.id, "delete");
     const vault = await this.loadVault();
     if (!(key in vault.entries)) return;
     const remaining = { ...vault.entries };

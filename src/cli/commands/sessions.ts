@@ -11,7 +11,6 @@
 
 import { createPrompt, noopOutput } from "../../auth/prompt.js";
 import {
-  listRecentSessions,
   listSessions,
   archiveFinishedSessions,
   cleanupSmokeSessions,
@@ -97,9 +96,9 @@ export async function runSessionsCommand(args: readonly string[], io: CliIo): Pr
   const statusArg = opt(listArgs, "--status");
   const filter: SessionListFilter = statusArg === "archived" || statusArg === "all" ? statusArg : "active";
   const limit = Number(opt(listArgs, "--limit") ?? "20");
-  const sessions = await (filter === "active" && statusArg === undefined
-    ? listRecentSessions(sessionManager, Number.isFinite(limit) ? limit : 20)
-    : listSessions(sessionManager, filter, Number.isFinite(limit) ? limit : 20));
+  // The default view is genuinely in-flight sessions only; terminal
+  // completed/abandoned smoke sessions belong under `--status archived`.
+  const sessions = await listSessions(sessionManager, filter, Number.isFinite(limit) ? limit : 20);
 
   const label = filter === "archived" ? "archived" : filter === "all" ? "" : "active";
   out(label ? `${label} sessions:\n` : "sessions:\n");

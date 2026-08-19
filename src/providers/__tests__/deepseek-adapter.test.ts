@@ -20,10 +20,34 @@ afterEach(() => {
 });
 
 describe("DeepSeek adapter", () => {
-  it("resolves the default model and the flash alias", () => {
+  it("resolves the default model and the pro/flash aliases", () => {
     const adapter = createProviderAdapter(deepseekProfile);
-    expect(adapter.resolveModel()).toBe("deepseek-v4-pro");
+    expect(adapter.resolveModel()).toBe("deepseek-v4-flash");
     expect(adapter.resolveModel("flash")).toBe("deepseek-v4-flash");
+    expect(adapter.resolveModel("pro")).toBe("deepseek-v4-pro");
+    expect(adapter.resolveModel("deepseek-v4-pro")).toBe("deepseek-v4-pro");
+  });
+
+  it("keeps every implicit Claude tier on Flash, including Opus", () => {
+    process.env.DEEPSEEK_API_KEY = "sk-deepseek-tier-fixture";
+    const adapter = createProviderAdapter(deepseekProfile);
+    const plan = adapter.buildCliLaunchPlan({ workingDir: "/tmp" });
+    expect(plan.env.ANTHROPIC_MODEL).toBe("sonnet");
+    expect(plan.env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe("claude-sonnet-5");
+    expect(plan.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("claude-opus-5");
+    expect(plan.env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("claude-haiku-4-5");
+    expect(plan.env.CLAUDE_CODE_SUBAGENT_MODEL).toBe("claude-sonnet-5");
+  });
+
+  it("allows Pro only as an explicit primary model and never via implicit tier mapping", () => {
+    process.env.DEEPSEEK_API_KEY = "sk-deepseek-tier-fixture";
+    const adapter = createProviderAdapter(deepseekProfile);
+    const plan = adapter.buildCliLaunchPlan({ workingDir: "/tmp", modelAlias: "pro" });
+    expect(plan.env.ANTHROPIC_MODEL).toBe("sonnet");
+    expect(plan.env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe("claude-sonnet-5");
+    expect(plan.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("claude-opus-5");
+    expect(plan.env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("claude-haiku-4-5");
+    expect(plan.env.CLAUDE_CODE_SUBAGENT_MODEL).toBe("claude-sonnet-5");
   });
 
   it("throws UnknownModelAliasError for an unmapped alias", () => {
@@ -55,6 +79,22 @@ describe("DeepSeek adapter", () => {
     expect(plan.env.ANTHROPIC_AUTH_TOKEN).toBe("sk-deepseek-direct-fixture-key");
     expect(plan.env.ANTHROPIC_BASE_URL).not.toContain("127.0.0.1");
     expect(plan.configDir).toBe(".claude-deepseek");
+  });
+
+  it("configures Claude's supported persistent statusLine HUD for redirected launches", () => {
+    process.env.DEEPSEEK_API_KEY = "sk-deepseek-direct-fixture-key";
+    const adapter = createProviderAdapter(deepseekProfile);
+    const plan = adapter.buildCliLaunchPlan({ workingDir: "/tmp" });
+    const settingsIndex = plan.args.indexOf("--settings");
+    expect(settingsIndex).toBeGreaterThanOrEqual(0);
+    const settings = JSON.parse(plan.args[settingsIndex + 1] ?? "{}");
+    expect(settings.statusLine.type).toBe("command");
+    expect(settings.statusLine.refreshInterval).toBe(5);
+    expect(settings.statusLine.command).toContain("continuum-statusline.mjs");
+    expect(settings.modelOverrides["claude-sonnet-5"]).toBe("deepseek-v4-flash");
+    expect(settings.modelOverrides["claude-opus-5"]).toBe("deepseek-v4-flash");
+    expect(plan.env.CONTINUUM_STATUS_PROVIDER).toBe("DeepSeek");
+    expect(plan.env.CONTINUUM_STATUS_MODEL).toBe("deepseek-v4-flash");
   });
 
   it("direct launch never reads the proxy user key (no Tencent dependency)", () => {

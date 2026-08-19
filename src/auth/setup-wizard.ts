@@ -36,6 +36,15 @@ export interface SetupWizardDeps {
   readonly passphraseProvider?: () => Promise<string>;
   /** When true, non-interactive answers default "no" (skip) rather than blocking. */
   readonly nonInteractive?: boolean;
+  /**
+   * Test/advanced-use override: use this exact backend instead of
+   * auto-detecting one via `selectCredentialBackend`. Production code
+   * should never set this — it exists solely so tests can inject an
+   * isolated fake backend instead of ever reaching a native OS credential
+   * store (see `auth/backends/test-guard.ts` for why that matters: a
+   * native backend is real, machine-wide storage, never test-isolated).
+   */
+  readonly credentialBackend?: CredentialBackend;
 }
 
 export interface WizardState {
@@ -63,7 +72,14 @@ export class SetupWizard {
 
     let backend: CredentialBackend;
     let backendReason: string;
-    if (existing.credentialBackendId) {
+    if (this.deps.credentialBackend) {
+      backend = this.deps.credentialBackend;
+      backendReason = "explicit credentialBackend override (deps.credentialBackend)";
+      if (existing.credentialBackendId !== backend.id) {
+        const updated: ContinuumConfig = { ...existing, credentialBackendId: backend.id, updatedAt: new Date().toISOString() };
+        await configStore.save(updated);
+      }
+    } else if (existing.credentialBackendId) {
       const selected = await selectCredentialBackend(this.deps.passphraseProvider ?? (async () => ""), dataDir);
       // If the recorded backend id still resolves, honor it; otherwise the
       // native-first selection already made the right call and we keep it.

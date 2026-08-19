@@ -8,6 +8,7 @@ import { CliAuthManager } from "../cli-auth-manager.js";
 import { createCliAuthAdapter } from "../cli-auth-adapter.js";
 import { createScriptedPrompt } from "../prompt.js";
 import { createDefaultProviderAuthMetadata } from "../provider-auth/index.js";
+import { FakeBackend } from "./fake-backend.js";
 
 function tmpDataDir(): string {
   return mkdtempSync(join(tmpdir(), "continuum-wizard-"));
@@ -110,12 +111,25 @@ describe("SetupWizard.run (interactive with confirms)", () => {
 
     // deepseek -> confirm(true), enter key; claude -> confirm(false), skip.
     // Provider iteration order is claude then deepseek (registration order).
+    //
+    // credentialBackend: an isolated FakeBackend, injected explicitly — a
+    // native OS credential store must NEVER be reachable from a test (see
+    // auth/backends/test-guard.ts). Without this override, SetupWizard's
+    // own backend auto-selection would reach the REAL platform keychain
+    // (proven incident: this exact test, unfixed, silently overwrote a real
+    // macOS Keychain DeepSeek API key with this test's own scripted value).
+    // A realistic-shaped fixture secret, deliberately NOT a placeholder —
+    // `sk-deepseek-1` is now rejected by ProviderSetup's placeholder guard
+    // (see provider-setup.test.ts), so a well-formed fixture is used here
+    // to keep testing the wizard's declined-then-accepted flow itself.
+    const fixtureSecret = "sk-deepseek-wizard-fixture-key-0123456789";
     const wizard = new SetupWizard({
-      prompt: createScriptedPrompt({ confirms: [false, true], secrets: ["sk-deepseek-1"] }),
+      prompt: createScriptedPrompt({ confirms: [false, true], secrets: [fixtureSecret] }),
       cliAuthManager: cli,
       providerMetadata: createDefaultProviderAuthMetadata(),
       dataDir: dir,
       output: () => {},
+      credentialBackend: new FakeBackend(),
     });
     const store = new ConfigStore(dir);
     const state = await wizard.initialize(store, dir);
@@ -126,6 +140,6 @@ describe("SetupWizard.run (interactive with confirms)", () => {
     expect(deepseek!.method).toBe("api");
     expect(deepseek!.credentialKey).toBe("credential://deepseek/api-key");
     // The secret value must not land in config.
-    expect(JSON.stringify(config)).not.toContain("sk-deepseek-1");
+    expect(JSON.stringify(config)).not.toContain(fixtureSecret);
   });
 });

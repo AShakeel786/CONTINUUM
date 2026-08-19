@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import { describe, expect, it } from "vitest";
-import { buildHudData, formatHud, printHud, type HudData } from "../hud.js";
+import { buildHudData, formatHud, formatTerminalTitle, printHud, type HudData } from "../hud.js";
 import type { LaunchPreparation } from "../../../launcher/types.js";
 import type { Launcher } from "../../../launcher/launcher.js";
 import type { ProviderRegistry } from "../../../providers/registry.js";
@@ -62,6 +62,8 @@ function prep(overrides: Partial<LaunchPreparation> = {}): LaunchPreparation {
     rendered: { protocol: "anthropic-messages", system: "", userPrefix: "", cacheDirectives: [] },
     contextWindowTokens: 200_000,
     contextTokensUsed: 36_000,
+    route: "direct",
+    modelDecision: { automatic: true, reason: "provider default" },
     ...overrides,
   };
 }
@@ -78,6 +80,9 @@ function fakeLauncher(authenticated: readonly { providerId: string; model: strin
 }
 
 describe("buildHudData", () => {
+  it("formats a terminal title that survives native Claude redraws", () => {
+    expect(formatTerminalTitle({ workspace: "General", providerLabel: "DeepSeek", model: "deepseek-v4-flash", contextUsed: 1200, contextMax: 200000, handoff: "ready", memoryOff: false, bypass: false, peak: { multiplier: 2, endsAt: new Date("2026-08-19T10:00:00Z") } })).toContain("DeepSeek | deepseek-v4-flash | ctx 1k/200k | handoff ready | PEAK 2×");
+  });
   it("resolves a registered project workspace by name", async () => {
     const data = await buildHudData(prep(), { launcher: fakeLauncher([{ providerId: "claude", model: "x" }, { providerId: "deepseek", model: "y" }]), providers: fakeProviders() });
     expect(data.workspace).toBe("PASSCARS");

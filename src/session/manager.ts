@@ -15,7 +15,9 @@ import type {
   FileRef,
   GitFingerprint,
   HandoffMetadata,
+  ModelPreference,
   ProviderRef,
+  RolloverRecord,
   SessionStatus,
   TaskSession,
   ToolActivityRecord,
@@ -55,6 +57,7 @@ export class SessionManager {
       mode: input.mode ?? "project",
       workingDirectory: input.workingDirectory,
       activeProvider: input.activeProvider,
+      ...(input.modelPreference ? { modelPreference: input.modelPreference } : {}),
       taskGoal: input.taskGoal,
       status: "active",
       completedWork: [],
@@ -121,6 +124,15 @@ export class SessionManager {
 
   async setActiveProvider(sessionId: string, provider: ProviderRef): Promise<TaskSession> {
     return this.update(sessionId, (s) => ({ ...s, activeProvider: provider }));
+  }
+
+  async setModelPreference(sessionId: string, preference: ModelPreference | undefined): Promise<TaskSession> {
+    return this.update(sessionId, (s) => {
+      const next = { ...s } as TaskSession & { modelPreference?: ModelPreference };
+      if (preference) next.modelPreference = preference;
+      else delete next.modelPreference;
+      return next;
+    });
   }
 
   async addCompletedWork(sessionId: string, description: string): Promise<TaskSession> {
@@ -218,5 +230,13 @@ export class SessionManager {
 
   async updatePricingAwareness(sessionId: string, pricingAwareness: SessionPricingState): Promise<TaskSession> {
     return this.update(sessionId, (s) => ({ ...s, pricingAwareness }));
+  }
+
+  async recordRollover(sessionId: string, rollover: RolloverRecord): Promise<TaskSession> {
+    return this.update(sessionId, (s) => ({
+      ...s,
+      nativeSessionIds: { ...(s.nativeSessionIds ?? {}), [rollover.providerId]: rollover.toNativeSessionId },
+      rollovers: [...(s.rollovers ?? []), rollover].slice(-20),
+    }));
   }
 }

@@ -37,7 +37,10 @@ import { ApiAgentError } from "../../api-agent/types.js";
 import { join } from "node:path";
 import { resolveDataDir } from "../../config/paths.js";
 import { getTerminalColumns, isStdinTty } from "./common.js";
-import { printHud } from "./hud.js";
+import { buildHudData, formatTerminalTitle, printHud, printProviderIdentity } from "./hud.js";
+import { CostTelemetryStore } from "../../cost/telemetry.js";
+import { estimateCostUsd, DEFAULT_ROLLOVER_POLICY, evaluateRollover } from "../../cost/calculator.js";
+import { nativeSessionFile, readClaudeTurns, readClaudeUsage } from "../../cost/native-usage.js";
 
 /**
  * Runtime-only preflight (docker/containers/gateways/processes). Deliberately
@@ -66,6 +69,21 @@ function opt(args: readonly string[], ...flags: readonly string[]): string | und
     if (flags.includes(args[i]!) && i + 1 < args.length) return args[i + 1];
   }
   return undefined;
+}
+
+function printPeakProWarning(out: (s: string) => void, prep: LaunchPreparation, pricing: PricingAwarenessService): void {
+  const peak = pricing.status(prep.providerRef.providerId);
+  if (prep.providerRef.model !== "deepseek-v4-pro" || peak?.tier !== "peak") return;
+  const end = peak.endsAt ? new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(peak.endsAt) : "unknown";
+  out(`⚠️  Pro is selected during DeepSeek peak pricing (${peak.multiplier}×), ending ${end} local. Confirm this escalation is necessary before continuing.\n`);
+}
+
+async function recordLaunchDecisions(prep: LaunchPreparation, dataDir: string, pricing: PricingAwarenessService): Promise<void> {
+  if (!prep.session) return;
+  const store = new CostTelemetryStore(dataDir);
+  const peak = pricing.status(prep.providerRef.providerId);
+  if (prep.modelDecision) await store.append({ schemaVersion: 1, at: new Date().toISOString(), logicalSessionId: prep.session.sessionId, providerId: prep.providerRef.providerId, model: prep.providerRef.model, kind: "model-tier", estimate: true, peak: peak?.tier === "peak", multiplier: peak?.multiplier ?? 1, reason: prep.modelDecision.reason });
+  if (prep.rollover) await store.append({ schemaVersion: 1, at: new Date().toISOString(), logicalSessionId: prep.session.sessionId, nativeSessionId: prep.rollover.toNativeSessionId, providerId: prep.providerRef.providerId, model: prep.providerRef.model, kind: "rollover", estimate: true, peak: peak?.tier === "peak", multiplier: peak?.multiplier ?? 1, reason: prep.rollover.reason, estimatedCostAvoidedUsd: prep.rollover.estimatedCostAvoidedUsd });
 }
 
 /**
@@ -141,7 +159,7 @@ function formatApiAgentFailure(providerLabel: string, err: ApiAgentError): strin
  * Carry a prepared launch: API providers run the generic CONTINUUM API agent;
  * CLI providers spawn their native binary (with native-session capture).
  */
-export async function launchPrepared(ctx: { launcher: Launcher; providers: ProviderRegistry; sessionManager: SessionManager; dataDir: string }, prep: LaunchPreparation, out: (s: string) => void): Promise<number> {
+export async function launchPrepared(ctx: { launcher: Launcher; providers: ProviderRegistry; sessionManager: SessionManager; pricing?: PricingAwarenessService; dataDir: string }, prep: LaunchPreparation, out: (s: string) => void, spawnFn: (plan: import("../../launcher/types.js").LaunchPlan) => Promise<{ exitCode: number | null }> = spawnCli): Promise<number> {
   if (prep.runtimeKind === "api") {
     const adapter = ctx.providers.get(prep.providerRef.providerId);
     const tools = await buildToolRegistry({ dataDir: ctx.dataDir });
@@ -168,8 +186,88 @@ export async function launchPrepared(ctx: { launcher: Launcher; providers: Provi
   if (!isStdinTty()) {
     out("⚠️  No interactive terminal detected — the native agent's UI may not start here.\n    Run `continuum` from a terminal window, or use a non-interactive provider.\n");
   }
-  const result = await spawnCli(prep.plan);
+  let lastPeak = ctx.pricing?.status(prep.providerRef.providerId)?.tier === "peak";
+  let nativeUsageFile: string | undefined;
+  let turnsBefore = 0;
+  const writeTitle = async (): Promise<void> => {
+    if (!(process.stderr as NodeJS.WriteStream).isTTY) return;
+    try {
+      const data = await buildHudData(prep, { launcher: ctx.launcher, providers: ctx.providers, pricing: ctx.pricing });
+      const usage = nativeUsageFile ? await readClaudeUsage(nativeUsageFile) : undefined;
+      process.stderr.write(`\u001b]0;${formatTerminalTitle(usage ? { ...data, contextUsed: usage.contextTokens } : data)}\u0007`);
+    } catch { /* terminal decoration must never block the provider */ }
+  };
+  // Claude owns the PTY and redraws stdout, so the terminal title is the
+  // durable status surface for the entire child lifetime.
+  await writeTitle();
+  if (prep.session && prep.providerRef.providerId === "deepseek") {
+    const launch = ctx.providers.get("deepseek").resolveCliLaunch(prep.route);
+    const id = prep.session.nativeSessionIds?.deepseek ?? prep.session.sessionId;
+    if (launch.nativeResume?.supported && id) {
+      nativeUsageFile = await nativeSessionFile(launch.nativeResume.sessionStore, id);
+      if (nativeUsageFile) turnsBefore = (await readClaudeTurns(nativeUsageFile)).length;
+    }
+  }
+  let rolloverWarned = false;
+  const monitor = setInterval(async () => {
+    try {
+      const peak = ctx.pricing?.status(prep.providerRef.providerId);
+      if (peak?.tier === "peak") {
+        const end = peak.endsAt ? new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(peak.endsAt) : "unknown";
+        if (!lastPeak) out(`\n💲 DeepSeek entered peak pricing (${peak.multiplier}×); peak ends ${end} local.\n`);
+        lastPeak = true;
+      } else if (lastPeak) { lastPeak = false; }
+      await writeTitle();
+      if (!nativeUsageFile && prep.session && prep.providerRef.providerId === "deepseek") {
+        const launch = ctx.providers.get("deepseek").resolveCliLaunch(prep.route);
+        if (launch.nativeResume?.supported) {
+          nativeUsageFile = await nativeSessionFile(launch.nativeResume.sessionStore, prep.session.nativeSessionIds?.deepseek ?? prep.session.sessionId);
+          if (nativeUsageFile) turnsBefore = (await readClaudeTurns(nativeUsageFile)).length;
+        }
+      }
+      if (!rolloverWarned && prep.session) {
+        const launch = ctx.providers.get(prep.providerRef.providerId).resolveCliLaunch(prep.route);
+        const nr = launch.nativeResume;
+        const nativeId = prep.session.nativeSessionIds?.[prep.providerRef.providerId] ?? prep.session.sessionId;
+        if (nr?.supported && nativeId) {
+          const file = await nativeSessionFile(nr.sessionStore, nativeId);
+          if (file) {
+            const usage = await readClaudeUsage(file);
+            const decision = evaluateRollover(usage, prep.providerRef.model, { ...DEFAULT_ROLLOVER_POLICY, mode: "tokens" });
+            if (decision.rollover) {
+              rolloverWarned = true;
+              out(`\n💲 Native context reached ${usage.contextTokens.toLocaleString()} estimated tokens. Exit normally and run continuum resume ${prep.session.sessionId}; CONTINUUM will evaluate a safe handoff rollover. The active process was not killed.\n`);
+            }
+          }
+        }
+      }
+    } catch { /* advisory monitor */ }
+  }, 5_000);
+  monitor.unref();
+  const result = await spawnFn(prep.plan);
+  clearInterval(monitor);
+  if (lastPeak) process.stderr.write("\u001b]0;CONTINUUM\u0007");
   await recordNativeSessionAfterLaunch(ctx.launcher, prep, startedAt);
+  if (prep.session && prep.providerRef.providerId === "deepseek") {
+    try {
+      const launch = ctx.providers.get(prep.providerRef.providerId).resolveCliLaunch(prep.route);
+      const nr = launch.nativeResume;
+      const nativeId = (await ctx.sessionManager.loadSession(prep.session.sessionId)).nativeSessionIds?.deepseek;
+      if (nr?.supported && nativeId) {
+        const file = await nativeSessionFile(nr.sessionStore, nativeId);
+        if (file) {
+          const turns = await readClaudeTurns(file);
+          const store = new CostTelemetryStore(ctx.dataDir);
+          for (const turn of turns.slice(nativeUsageFile === file ? turnsBefore : 0)) {
+            const at = turn.at ?? new Date().toISOString();
+            const peak = ctx.pricing?.status("deepseek", new Date(at));
+            const multiplier = peak?.multiplier ?? 1;
+            await store.append({ schemaVersion: 1, at, logicalSessionId: prep.session.sessionId, nativeSessionId: nativeId, providerId: "deepseek", model: prep.providerRef.model, kind: "turn", estimate: true, peak: peak?.tier === "peak", multiplier, usage: turn.usage, estimatedUsd: estimateCostUsd(turn.usage, prep.providerRef.model, multiplier) });
+          }
+        }
+      }
+    } catch { /* telemetry must not break launch */ }
+  }
   return result.exitCode ?? 0;
 }
 
@@ -193,6 +291,7 @@ export async function runLaunchCommand(args: readonly string[], io: CliIo): Prom
 
   const projectKey = args.find((a) => !a.startsWith("-"));
   const providerId = opt(args, "--provider", "-p");
+  const modelAlias = opt(args, "--model");
   const taskGoal = opt(args, "--task", "-t");
   const bypass = args.includes("--bypass-permissions") || args.includes("--dangerously-bypass");
   // No-project launches (see src/launcher/launcher.ts's SessionMode): "general"
@@ -209,7 +308,7 @@ export async function runLaunchCommand(args: readonly string[], io: CliIo): Prom
     for (const warning of await runLaunchPreflight()) out(`⚠️  ${warning}\n`);
 
     const prep = await launcher.prepareLaunch(
-      { ...(mode ? {} : projectKey ? { projectKey } : {}), ...(mode ? { mode } : {}), providerId, taskGoal },
+      { ...(mode ? {} : projectKey ? { projectKey } : {}), ...(mode ? { mode } : {}), providerId, modelAlias, taskGoal },
       { permissionMode: bypass ? "bypass" : "safe" },
     );
 
@@ -219,7 +318,11 @@ export async function runLaunchCommand(args: readonly string[], io: CliIo): Prom
     if (prep.memoryCoreNote) out(`ℹ️  ${prep.memoryCoreNote}\n`);
     if (prep.session) out(`Session: ${prep.session.sessionId}\n`);
     if (prep.nativeResume) out(`ℹ️  Resuming ${prep.nativeResume.providerId} native session ${prep.nativeResume.nativeSessionId}\n`);
-    await printHud(out, prep, { launcher, providers }, getTerminalColumns());
+    if (prep.rollover) out(`💲 Context rollover: preserved ${prep.rollover.fromNativeSessionId}; fresh native session ${prep.rollover.toNativeSessionId}\n   Handoff: ${prep.rollover.handoffFile}\n   ${prep.rollover.reason}\n`);
+    if (prep.modelDecision) out(`Model decision: ${prep.providerRef.model} — ${prep.modelDecision.reason}\n`);
+    await recordLaunchDecisions(prep, dataDir, pricing);
+    printProviderIdentity(out, prep, providers);
+    await printHud(out, prep, { launcher, providers, pricing }, getTerminalColumns());
 
     // Peak-pricing handoff prompt: before launching, check the session's
     // active provider for a pricing transition; if a peak event fires, surface
@@ -227,10 +330,11 @@ export async function runLaunchCommand(args: readonly string[], io: CliIo): Prom
     if (prep.session) {
       const pricingLines = await checkPricing(prep.session.sessionId, pricing, handoffManager);
       for (const line of pricingLines) out(line);
+      printPeakProWarning(out, prep, pricing);
     }
 
     await ensureMcpRegistration();
-    return launchPrepared({ launcher, providers, sessionManager, dataDir }, prep, out);
+    return launchPrepared({ launcher, providers, sessionManager, pricing, dataDir }, prep, out);
   } catch (err) {
     if (err instanceof NoProjectError || err instanceof ProviderNotAuthenticatedError || err instanceof NoAuthenticatedAgentError || err instanceof LocalDependencyUnavailableError) {
       out(`${err.message}\n`);
@@ -244,11 +348,12 @@ export async function runResumeCommand(args: readonly string[], io: CliIo): Prom
   const out = io.out ?? noopOutput();
   const sessionId = args.find((a) => !a.startsWith("-"));
   const providerId = opt(args, "--provider", "-p");
+  const modelAlias = opt(args, "--model");
   // `--recent N` resumes the Nth most-recent session (no id to memorize).
   const recentN = Number(opt(args, "--recent") ?? "nan");
 
   const prompt = createPrompt();
-  const { launcher, sessionManager, providers, dataDir } = await buildLauncherContext({
+  const { launcher, sessionManager, providers, pricing, handoffManager, dataDir } = await buildLauncherContext({
     prompt,
     onDependencyProgress: (line) => out(`ℹ️  ${line}\n`),
   });
@@ -265,7 +370,7 @@ export async function runResumeCommand(args: readonly string[], io: CliIo): Prom
 
   try {
     const prep = await launcher.prepareLaunch(
-      { sessionId: targetSessionId, ...(providerId ? { providerId } : {}) },
+      { sessionId: targetSessionId, ...(providerId ? { providerId } : {}), ...(modelAlias ? { modelAlias } : {}) },
       { permissionMode: "safe" },
     );
     if (prep.stale) {
@@ -273,9 +378,14 @@ export async function runResumeCommand(args: readonly string[], io: CliIo): Prom
     }
     if (prep.session) out(`Resuming session: ${prep.session.sessionId} [${prep.plan.providerId}]\n`);
     if (prep.nativeResume) out(`ℹ️  Resuming ${prep.nativeResume.providerId} native session ${prep.nativeResume.nativeSessionId}\n`);
-    await printHud(out, prep, { launcher, providers }, getTerminalColumns());
+    if (prep.rollover) out(`💲 Context rollover: preserved ${prep.rollover.fromNativeSessionId}; fresh native session ${prep.rollover.toNativeSessionId}\n   Handoff: ${prep.rollover.handoffFile}\n   ${prep.rollover.reason}\n`);
+    await recordLaunchDecisions(prep, dataDir, pricing);
+    printProviderIdentity(out, prep, providers);
+    await printHud(out, prep, { launcher, providers, pricing }, getTerminalColumns());
+    if (prep.session) for (const line of await checkPricing(prep.session.sessionId, pricing, handoffManager)) out(line);
+    printPeakProWarning(out, prep, pricing);
     await ensureMcpRegistration();
-    return launchPrepared({ launcher, providers, sessionManager, dataDir }, prep, out);
+    return launchPrepared({ launcher, providers, sessionManager, pricing, dataDir }, prep, out);
   } catch (err) {
     if (err instanceof NoAuthenticatedAgentError || err instanceof ProviderNotAuthenticatedError || err instanceof LocalDependencyUnavailableError) {
       out(`${err.message}\n`);
@@ -320,6 +430,7 @@ export async function runHandoffCommand(args: readonly string[], io: CliIo): Pro
 
     // Launch the receiving agent in the same project, continuing the session.
     const prep = await launcher.prepareLaunch({ sessionId, providerId: chosenId }, { permissionMode: "safe" });
+    printProviderIdentity(out, prep, providers);
     await printHud(out, prep, { launcher, providers }, getTerminalColumns());
     await ensureMcpRegistration();
     return launchPrepared({ launcher, providers, sessionManager, dataDir }, prep, out);

@@ -28,6 +28,8 @@ export interface ProviderPricingSchedule {
   readonly providerId: string;
   /** All times in this schedule are UTC — the brief's "keep all scheduling calculations timezone-safe using UTC internally." */
   readonly peakWindows: readonly PricingWindow[];
+  /** Applied to estimates during a configured peak window. */
+  readonly peakMultiplier?: number;
   /** Free-form note on where this schedule came from / when it was last checked against the provider's real published pricing — not consumed by any logic, just kept honest and traceable. */
   readonly source?: string;
 }

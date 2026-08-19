@@ -21,6 +21,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { CredentialBackend } from "../types.js";
+import { assertNotUnderTest } from "./test-guard.js";
 
 const execFileAsync = promisify(execFile);
 const SERVICE = "continuum";
@@ -43,6 +44,7 @@ export class MacosKeychainCredentialBackend implements CredentialBackend {
   }
 
   async set(key: string, value: string): Promise<void> {
+    assertNotUnderTest(this.id, "set");
     // -U: update in place if an item with this account/service already exists.
     await execFileAsync("security", ["add-generic-password", "-a", key, "-s", SERVICE, "-w", value, "-U"]);
   }
@@ -57,6 +59,7 @@ export class MacosKeychainCredentialBackend implements CredentialBackend {
   }
 
   async delete(key: string): Promise<void> {
+    assertNotUnderTest(this.id, "delete");
     try {
       await execFileAsync("security", ["delete-generic-password", "-a", key, "-s", SERVICE]);
     } catch {

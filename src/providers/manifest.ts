@@ -16,6 +16,7 @@
 import type {
   CliLaunchDescriptor,
   EnvironmentOwnership,
+  ModelTierMap,
   NativeResumeDescriptor,
   Protocol,
   ProviderCapabilities,
@@ -48,6 +49,7 @@ export interface ManifestCliLaunchCommon {
   readonly mcp?: { readonly supported: true; readonly serverName: string } | { readonly supported: false };
   readonly contextDelivery?: ManifestContextDelivery;
   readonly mcpLaunch?: ManifestMcpLaunch;
+  readonly statusLineCommand?: string;
 }
 
 export type ManifestCliLaunch =
@@ -56,12 +58,16 @@ export type ManifestCliLaunch =
       readonly kind: "redirected";
       readonly baseUrl: string;
       readonly authTokenEnvVar: string;
+      /** Maps Claude Code's internal model tiers to this provider's own models (see `ModelTierMap`). */
+      readonly modelTierMap?: ModelTierMap;
     })
   | (ManifestCliLaunchCommon & {
       readonly kind: "proxy-routed";
       readonly proxyBaseUrl: string;
       readonly proxyPathSuffix: string;
       readonly proxyUserKeyEnvVar: string;
+      /** Maps Claude Code's internal model tiers to this provider's own models (see `ModelTierMap`). */
+      readonly modelTierMap?: ModelTierMap;
     });
 
 /**
@@ -75,6 +81,8 @@ export type ManifestProxyCliLaunch = ManifestCliLaunchCommon & {
   readonly proxyBaseUrl: string;
   readonly proxyPathSuffix: string;
   readonly proxyUserKeyEnvVar: string;
+  /** Maps Claude Code's internal model tiers to this provider's own models (see `ModelTierMap`). */
+  readonly modelTierMap?: ModelTierMap;
 };
 
 export interface ManifestCli {
@@ -220,6 +228,7 @@ function toCliLaunch(m: ProviderManifest): CliLaunchDescriptor {
       ...(l.mcp ? { mcp: l.mcp } : {}),
       ...(l.contextDelivery ? { contextDelivery: l.contextDelivery } : {}),
       ...(l.mcpLaunch ? { mcpLaunch: l.mcpLaunch } : {}),
+      ...(l.statusLineCommand ? { statusLineCommand: l.statusLineCommand } : {}),
     };
   }
   if (l.kind === "redirected") {
@@ -234,6 +243,8 @@ function toCliLaunch(m: ProviderManifest): CliLaunchDescriptor {
       ...(l.mcp ? { mcp: l.mcp } : {}),
       ...(l.contextDelivery ? { contextDelivery: l.contextDelivery } : {}),
       ...(l.mcpLaunch ? { mcpLaunch: l.mcpLaunch } : {}),
+      ...(l.statusLineCommand ? { statusLineCommand: l.statusLineCommand } : {}),
+      ...(l.modelTierMap ? { modelTierMap: l.modelTierMap } : {}),
     };
   }
   return {
@@ -248,6 +259,8 @@ function toCliLaunch(m: ProviderManifest): CliLaunchDescriptor {
     ...(l.mcp ? { mcp: l.mcp } : {}),
     ...(l.contextDelivery ? { contextDelivery: l.contextDelivery } : {}),
     ...(l.mcpLaunch ? { mcpLaunch: l.mcpLaunch } : {}),
+    ...(l.statusLineCommand ? { statusLineCommand: l.statusLineCommand } : {}),
+    ...(l.modelTierMap ? { modelTierMap: l.modelTierMap } : {}),
   };
 }
 
@@ -267,6 +280,8 @@ function toProxyCliLaunch(m: ProviderManifest): ProxyRoutedCliLaunch | undefined
     ...(l.mcp ? { mcp: l.mcp } : {}),
     ...(l.contextDelivery ? { contextDelivery: l.contextDelivery } : {}),
     ...(l.mcpLaunch ? { mcpLaunch: l.mcpLaunch } : {}),
+    ...(l.statusLineCommand ? { statusLineCommand: l.statusLineCommand } : {}),
+    ...(l.modelTierMap ? { modelTierMap: l.modelTierMap } : {}),
   };
 }
 

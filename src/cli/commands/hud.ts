@@ -34,12 +34,14 @@ import { homedir } from "node:os";
 import type { LaunchPreparation } from "../../launcher/types.js";
 import type { Launcher } from "../../launcher/launcher.js";
 import type { ProviderRegistry } from "../../providers/registry.js";
+import type { PricingAwarenessService } from "../../pricing/service.js";
 
 export type HandoffHudState = "ready" | "pending" | "off";
 
 export interface HudData {
   readonly workspace: string;
   readonly providerLabel: string;
+  readonly model?: string;
   /** Both set or both absent — the Token Manager's post-budget count and the provider's context-window ceiling. */
   readonly contextUsed?: number;
   readonly contextMax?: number;
@@ -47,6 +49,17 @@ export interface HudData {
   /** True only when memory (MemoryCore) is unavailable — an on/default memory state is not shown (nothing notable to report). */
   readonly memoryOff: boolean;
   readonly bypass: boolean;
+  readonly peak?: { readonly multiplier: number; readonly endsAt?: Date };
+}
+
+/** Terminal-title status survives redraws by native Claude UIs. */
+export function formatTerminalTitle(d: HudData): string {
+  const parts = ["CONTINUUM", d.providerLabel];
+  if (d.model) parts.push(d.model);
+  if (d.contextUsed !== undefined && d.contextMax !== undefined) parts.push(formatContext(d.contextUsed, d.contextMax, "full"));
+  parts.push(`handoff ${d.handoff}`);
+  if (d.peak) parts.push(`PEAK ${d.peak.multiplier}×${d.peak.endsAt ? ` until ${new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(d.peak.endsAt)}` : ""}`);
+  return parts.join(SEP);
 }
 
 function formatWorkspace(prep: LaunchPreparation): string {
@@ -81,7 +94,7 @@ async function resolveHandoffState(prep: LaunchPreparation, launcher: Launcher):
 
 export async function buildHudData(
   prep: LaunchPreparation,
-  deps: { readonly launcher: Launcher; readonly providers: ProviderRegistry },
+  deps: { readonly launcher: Launcher; readonly providers: ProviderRegistry; readonly pricing?: PricingAwarenessService },
 ): Promise<HudData> {
   const providerLabel = deps.providers.has(prep.providerRef.providerId)
     ? deps.providers.get(prep.providerRef.providerId).profile.displayName
@@ -90,11 +103,13 @@ export async function buildHudData(
   return {
     workspace: formatWorkspace(prep),
     providerLabel,
+    model: prep.providerRef.model,
     contextUsed: prep.contextTokensUsed,
     contextMax: prep.contextWindowTokens,
     handoff: await resolveHandoffState(prep, deps.launcher),
     memoryOff: !prep.memoryCoreAvailable,
     bypass: prep.plan.bypassPermissions,
+    peak: (() => { const s = deps.pricing?.status(prep.providerRef.providerId); return s?.tier === "peak" ? { multiplier: s.multiplier, ...(s.endsAt ? { endsAt: s.endsAt } : {}) } : undefined; })(),
   };
 }
 
@@ -128,6 +143,7 @@ function buildSegments(d: HudData): Segment[] {
   // the "especially bypass ON" requirement) only ever shown when true; a
   // safe/default session says nothing here.
   if (d.bypass) segs.push({ text: "bypass ON", weight: 2 });
+  if (d.peak) segs.push({ text: `PEAK ${d.peak.multiplier}×${d.peak.endsAt ? `→${new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(d.peak.endsAt)}` : ""}`, weight: 2 });
   segs.push({ text: d.providerLabel, weight: 3 });
   if (d.contextUsed !== undefined && d.contextMax !== undefined) {
     segs.push({ text: formatContext(d.contextUsed, d.contextMax, "full"), weight: 4 });
@@ -175,7 +191,7 @@ export function formatHud(d: HudData, columns: number): string {
 export async function printHud(
   out: (s: string) => void,
   prep: LaunchPreparation,
-  deps: { readonly launcher: Launcher; readonly providers: ProviderRegistry },
+  deps: { readonly launcher: Launcher; readonly providers: ProviderRegistry; readonly pricing?: PricingAwarenessService },
   columns: number,
 ): Promise<void> {
   try {
@@ -183,5 +199,75 @@ export async function printHud(
     out(`${formatHud(data, columns)}\n`);
   } catch {
     // Status line is best-effort only.
+  }
+}
+
+/**
+ * Provider identity — CONTINUUM's own authoritative statement of which
+ * provider/model is actually being reached, independent of whatever a
+ * redirected/proxy-routed CLI's own chrome happens to show. This exists
+ * because a `redirected`/`proxy-routed` launch spawns the SAME `claude`
+ * binary as a native launch (that's the whole mechanism — see
+ * providers/types.ts `RedirectedCliLaunch`/`ProxyRoutedCliLaunch`), and
+ * Claude Code's own UI reflects its own client-side model/session state,
+ * not the actual upstream it was redirected to. Claude Code's chrome is
+ * CLIENT BRANDING ONLY — this block, not Claude Code's own labels, is the
+ * authoritative record of what provider/model/route a launch used.
+ */
+export interface ProviderIdentity {
+  readonly provider: string;
+  readonly model: string;
+  readonly client: string;
+  readonly route: string;
+}
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+}
+
+function clientNameFor(executable: string): string {
+  if (executable === "claude") return "Claude Code";
+  if (executable === "codex") return "Codex CLI";
+  return executable;
+}
+
+export function buildProviderIdentity(prep: LaunchPreparation, providers: ProviderRegistry): ProviderIdentity {
+  const adapter = providers.get(prep.providerRef.providerId);
+  if (prep.runtimeKind === "api") {
+    return {
+      provider: adapter.profile.displayName,
+      model: prep.providerRef.model,
+      client: "CONTINUUM (direct API — no coding-agent CLI)",
+      route: `Direct API → ${hostOf(adapter.profile.baseUrl)}`,
+    };
+  }
+  const launch = adapter.resolveCliLaunch(prep.route);
+  const client = clientNameFor(launch.executable);
+  const route =
+    launch.kind === "native"
+      ? `Native → ${hostOf(adapter.profile.baseUrl)}`
+      : launch.kind === "redirected"
+        ? `Direct → ${hostOf(launch.baseUrl)}`
+        : `Proxy → ${hostOf(launch.proxyBaseUrl)}${launch.proxyPathSuffix} (Tencent MemoryProxy)`;
+  return { provider: adapter.profile.displayName, model: prep.providerRef.model, client, route };
+}
+
+const IDENTITY_DISCLAIMER =
+  "(Claude Code's own on-screen model/session labels are client branding only — this block is CONTINUUM's authoritative provider/model identity.)";
+
+export function formatProviderIdentity(id: ProviderIdentity): string {
+  return [`Provider: ${id.provider}`, `Model: ${id.model}`, `Client: ${id.client}`, `Route: ${id.route}`, IDENTITY_DISCLAIMER].join("\n");
+}
+
+/** Print the provider-identity block. Never throws — best-effort, like `printHud`. */
+export function printProviderIdentity(out: (s: string) => void, prep: LaunchPreparation, providers: ProviderRegistry): void {
+  try {
+    out(`${formatProviderIdentity(buildProviderIdentity(prep, providers))}\n`);
+  } catch {
+    // Identity block is best-effort only — never blocks a launch.
   }
 }

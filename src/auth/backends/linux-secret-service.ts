@@ -17,6 +17,7 @@
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import type { CredentialBackend } from "../types.js";
+import { assertNotUnderTest } from "./test-guard.js";
 
 const execFileAsync = promisify(execFile);
 const ATTRIBUTE_KEY = "continuum-key";
@@ -54,6 +55,7 @@ export class LinuxSecretServiceCredentialBackend implements CredentialBackend {
   }
 
   async set(key: string, value: string): Promise<void> {
+    assertNotUnderTest(this.id, "set");
     await storeViaStdin(key, value);
   }
 
@@ -68,6 +70,7 @@ export class LinuxSecretServiceCredentialBackend implements CredentialBackend {
   }
 
   async delete(key: string): Promise<void> {
+    assertNotUnderTest(this.id, "delete");
     try {
       await execFileAsync("secret-tool", ["clear", ATTRIBUTE_KEY, key]);
     } catch {

@@ -7,6 +7,23 @@
 
 import type { ProviderManifest } from "./manifest.js";
 
+/**
+ * The model-identity env vars Claude Code reads to label its primary and
+ * per-tier/subagent models. CONTINUUM sets these only for `redirected`/
+ * `proxy-routed` (DeepSeek) launches via the adapter's `modelIdentityEnv`.
+ * A `native` launch must therefore CLEAR them — otherwise a prior DeepSeek
+ * run's model (e.g. `ANTHROPIC_MODEL=deepseek-v4-pro`) leaks into native
+ * Claude/Codex and silently re-selects the wrong model. This list is the
+ * single source of truth shared with the adapter (see `modelIdentityEnv`).
+ */
+export const MODEL_IDENTITY_ENV_VARS = [
+  "ANTHROPIC_MODEL",
+  "ANTHROPIC_DEFAULT_OPUS_MODEL",
+  "ANTHROPIC_DEFAULT_SONNET_MODEL",
+  "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+  "CLAUDE_CODE_SUBAGENT_MODEL",
+] as const;
+
 export const claudeManifest: ProviderManifest = {
   schemaVersion: 1,
   id: "claude",
@@ -30,7 +47,8 @@ export const claudeManifest: ProviderManifest = {
   cliLaunch: {
     kind: "native",
     configDirName: ".claude-anthropic",
-    clearEnvVars: ["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"],
+    clearEnvVars: [...MODEL_IDENTITY_ENV_VARS, "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"],
+    statusLineCommand: "continuum-statusline",
     nativeResume: {
       supported: true,
       resume: { kind: "flag", flag: "--resume" },
@@ -58,7 +76,7 @@ export const deepseekManifest: ProviderManifest = {
   protocol: "openai-compatible",
   baseUrl: "https://api.deepseek.com",
   auth: { kind: "api-key", envVar: "DEEPSEEK_API_KEY" },
-  models: { default: "deepseek-v4-pro", aliases: { flash: "deepseek-v4-flash" } },
+  models: { default: "deepseek-v4-flash", aliases: { flash: "deepseek-v4-flash", pro: "deepseek-v4-pro" } },
   capabilities: {
     thinking: "supported",
     tools: true,
@@ -72,7 +90,8 @@ export const deepseekManifest: ProviderManifest = {
     configDirName: ".claude-deepseek",
     baseUrl: "https://api.deepseek.com/anthropic",
     authTokenEnvVar: "DEEPSEEK_API_KEY",
-    clearEnvVars: ["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"],
+    clearEnvVars: [...MODEL_IDENTITY_ENV_VARS, "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"],
+    statusLineCommand: "continuum-statusline",
     nativeResume: {
       supported: true,
       resume: { kind: "flag", flag: "--resume" },
@@ -82,6 +101,11 @@ export const deepseekManifest: ProviderManifest = {
     contextDelivery: { kind: "append-system-prompt", systemFlag: "--append-system-prompt" },
     mcp: { supported: true, serverName: "continuum" },
     mcpLaunch: { kind: "mcp-config-flag", flag: "--mcp-config" },
+    // CONTINUUM's economic policy is stricter than Claude Code's provider
+    // mapping: every implicit Claude tier is Flash. Pro is only selected by
+    // an explicit user model choice and is never inferred from the opus alias,
+    // task difficulty, retries, or context size.
+    modelTierMap: { opus: "flash", sonnet: "flash", haiku: "flash", subagent: "flash" },
   },
   // Optional Tencent MemoryProxy route — only used when explicitly enabled
   // (`continuum auth deepseek --proxy`, or config.proxyRouting.deepseek="proxy").
@@ -92,7 +116,8 @@ export const deepseekManifest: ProviderManifest = {
     proxyBaseUrl: "http://127.0.0.1:8096",
     proxyPathSuffix: "/claude-code/default",
     proxyUserKeyEnvVar: "CONTINUUM_TENCENT_PROXY_USER_KEY",
-    clearEnvVars: ["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"],
+    clearEnvVars: [...MODEL_IDENTITY_ENV_VARS, "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"],
+    statusLineCommand: "continuum-statusline",
     nativeResume: {
       supported: true,
       resume: { kind: "flag", flag: "--resume" },
@@ -102,6 +127,8 @@ export const deepseekManifest: ProviderManifest = {
     contextDelivery: { kind: "append-system-prompt", systemFlag: "--append-system-prompt" },
     mcp: { supported: true, serverName: "continuum" },
     mcpLaunch: { kind: "mcp-config-flag", flag: "--mcp-config" },
+    // Same Flash-only implicit tier mapping as the direct route.
+    modelTierMap: { opus: "flash", sonnet: "flash", haiku: "flash", subagent: "flash" },
   },
   proxyUserKey: { envVar: "CONTINUUM_TENCENT_PROXY_USER_KEY", credentialName: "proxy-user-key" },
 };
@@ -121,7 +148,7 @@ export const codexManifest: ProviderManifest = {
   environment: { owns: ["OPENAI_API_KEY", "CODEX_HOME", "CODEX_ACCESS_TOKEN"] },
   cliLaunch: {
     kind: "native",
-    clearEnvVars: ["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"],
+    clearEnvVars: [...MODEL_IDENTITY_ENV_VARS, "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"],
     nativeResume: {
       supported: true,
       resume: { kind: "subcommand", subcommand: "resume" },

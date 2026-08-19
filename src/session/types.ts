@@ -33,6 +33,11 @@ export interface ProviderRef {
   readonly model: string;
 }
 
+export interface ModelPreference {
+  readonly model: string;
+  readonly source: "user" | "project";
+}
+
 export interface WorkItem {
   readonly id: string;
   readonly description: string;
@@ -92,6 +97,17 @@ export interface HandoffMetadata {
   readonly at: string;
 }
 
+export interface RolloverRecord {
+  readonly rolloverId: string;
+  readonly at: string;
+  readonly providerId: string;
+  readonly fromNativeSessionId: string;
+  readonly toNativeSessionId: string;
+  readonly handoffFile: string;
+  readonly reason: string;
+  readonly estimatedCostAvoidedUsd: number;
+}
+
 export interface TaskSession {
   readonly schemaVersion: number;
   readonly sessionId: string;
@@ -107,6 +123,8 @@ export interface TaskSession {
   readonly mode: SessionMode;
   readonly workingDirectory: string;
   readonly activeProvider: ProviderRef;
+  /** Explicit model choice only; absent means provider default (Flash for DeepSeek). */
+  readonly modelPreference?: ModelPreference;
   readonly taskGoal: string;
   readonly status: SessionStatus;
 
@@ -136,6 +154,8 @@ export interface TaskSession {
    * + brief fallback. Never a fabricated id.
    */
   readonly nativeSessionIds?: Readonly<Record<string, string>>;
+  /** Bounded audit trail; logical session/project identity remains unchanged. */
+  readonly rollovers?: readonly RolloverRecord[];
 }
 
 export interface CreateSessionInput {
@@ -146,6 +166,7 @@ export interface CreateSessionInput {
   readonly mode?: SessionMode;
   readonly workingDirectory: string;
   readonly activeProvider: ProviderRef;
+  readonly modelPreference?: ModelPreference;
   readonly taskGoal: string;
   readonly git?: GitFingerprint;
 }

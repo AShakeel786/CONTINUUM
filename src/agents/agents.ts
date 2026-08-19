@@ -32,6 +32,7 @@ import type { ProviderAuthMethod } from "../config/types.js";
 import type { Prompt, PromptOutput } from "../auth/prompt.js";
 import { UnknownProviderError } from "../providers/errors.js";
 import { availabilityOf, evaluateProvider, type LaunchKind, type ProviderAvailability, type ProviderUsability } from "../launcher/usability.js";
+import { InvalidCredentialError } from "../auth/errors.js";
 import { AgentValidationError } from "./errors.js";
 
 export type { ProviderUsability };
@@ -266,7 +267,13 @@ export class AgentManager {
       cliAuthManager: this.cliAuthManager,
       prompt: this.deps.prompt,
     });
-    const result = await setup.setup(metadata, preferredMethod);
+    let result: Awaited<ReturnType<typeof setup.setup>>;
+    try {
+      result = await setup.setup(metadata, preferredMethod);
+    } catch (err) {
+      if (err instanceof InvalidCredentialError) throw new AgentValidationError(metadata.providerId, err.message);
+      throw err;
+    }
     if (result.method === "api" && !result.credentialUri) return false;
 
     // Validate before writing config — never persist a config reference that

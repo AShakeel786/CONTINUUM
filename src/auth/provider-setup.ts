@@ -22,6 +22,7 @@ import type { ContinuumConfig } from "../config/types.js";
 import type { Prompt } from "./prompt.js";
 import type { ProviderAuthMetadata } from "./types.js";
 import type { ProviderAuthConfigEntry, ProviderAuthMethod } from "../config/types.js";
+import { InvalidCredentialError } from "./errors.js";
 
 export type SetupAction = "setup" | "replace" | "remove";
 
@@ -44,6 +45,30 @@ export interface ProviderSetupResult {
 }
 
 const API_KEY_CREDENTIAL_NAME = "api-key";
+
+/**
+ * Literal example/placeholder values that don't contain an obvious
+ * placeholder word (so the generic heuristic below wouldn't catch them) but
+ * are still never acceptable as a stored credential — `sk-deepseek-1` is
+ * the exact value proven, in a real incident, to have been pasted into a
+ * live setup flow and later mistaken for a working key. Matched
+ * case-insensitively. Deliberately a SHORT, precise list: anything that
+ * merely *resembles* a placeholder (e.g. a test fixture like
+ * "sk-deepseek-key-123") is legitimate and must not be rejected — only
+ * exact, known-bad values and the generic word heuristic below apply.
+ */
+const KNOWN_PLACEHOLDER_VALUES = new Set(["sk-deepseek-1", "your-api-key-here"]);
+
+/** Generic placeholder-word heuristic: real API keys are long, opaque, random strings — they never spell out English placeholder words, and a short value that does is almost certainly a copy-pasted example, not a real credential. */
+const PLACEHOLDER_WORD_RE = /(test|example|placeholder|dummy|sample|fixture|changeme|xxxx)/i;
+const PLACEHOLDER_WORD_MAX_LENGTH = 20;
+
+/** True when a value is an obvious example/placeholder, never a real credential. */
+export function looksLikeObviousPlaceholder(value: string): boolean {
+  const lower = value.toLowerCase();
+  if (KNOWN_PLACEHOLDER_VALUES.has(lower)) return true;
+  return value.length < PLACEHOLDER_WORD_MAX_LENGTH && PLACEHOLDER_WORD_RE.test(value);
+}
 
 export class ProviderSetup {
   constructor(private readonly deps: ProviderSetupDeps) {}
@@ -69,6 +94,9 @@ export class ProviderSetup {
     const value = await prompt.askSecret(label);
     const trimmed = value.trim();
     if (!trimmed) return { providerId: metadata.providerId, method: "api", credentialUri: undefined };
+    if (looksLikeObviousPlaceholder(trimmed)) {
+      throw new InvalidCredentialError(metadata.providerId, "that looks like a placeholder/example value, not a real API key — paste your actual key");
+    }
     const uri = await credentialManager.setCredential(metadata.providerId, API_KEY_CREDENTIAL_NAME, trimmed);
     return { providerId: metadata.providerId, method: "api", credentialUri: uri };
   }
@@ -101,6 +129,9 @@ export class ProviderSetup {
     const value = await prompt.askSecret(label);
     const trimmed = value.trim();
     if (!trimmed) return undefined;
+    if (looksLikeObviousPlaceholder(trimmed)) {
+      throw new InvalidCredentialError(metadata.providerId, "that looks like a placeholder/example value, not a real proxy user key — paste your actual key");
+    }
     return credentialManager.setCredential(metadata.providerId, metadata.proxyUserKey.credentialName, trimmed);
   }
 

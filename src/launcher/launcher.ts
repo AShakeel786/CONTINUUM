@@ -23,6 +23,7 @@
 
 import { randomUUID } from "node:crypto";
 import { basename } from "node:path";
+import { dirname } from "node:path";
 import type { ProjectRegistry } from "../registry/registry.js";
 import type { ProjectRecord } from "../registry/types.js";
 import type { ProviderRegistry } from "../providers/registry.js";
@@ -51,6 +52,9 @@ import { LocalDependencyUnavailableError, NoAuthenticatedAgentError, NoProjectEr
 import type { ProxyReadiness } from "../health/launch-guard.js";
 import { computeProviderUsability, type ProviderUsability } from "./usability.js";
 import type { LaunchOptions, LaunchPlan, LaunchPreparation } from "./types.js";
+import { DEFAULT_ROLLOVER_POLICY, evaluateRollover } from "../cost/calculator.js";
+import { nativeSessionFile, readClaudeUsage } from "../cost/native-usage.js";
+import { createRolloverHandoff } from "../cost/rollover.js";
 
 export type { ProviderUsability } from "./usability.js";
 
@@ -173,7 +177,7 @@ export class Launcher {
    * everything for the caller to inspect and/or spawn. Safe-by-default.
    */
   async prepareLaunch(
-    target: { projectKey?: string; cwd?: string; providerId?: string; taskGoal?: string; sessionId?: string; mode?: "general" | "current-directory" },
+    target: { projectKey?: string; cwd?: string; providerId?: string; modelAlias?: string; taskGoal?: string; sessionId?: string; mode?: "general" | "current-directory" },
     opts: LaunchOptions,
   ): Promise<LaunchPreparation> {
     // Resume path: the session already knows its project + active provider.
@@ -240,8 +244,26 @@ export class Launcher {
       }
     }
 
-    const model = adapter.resolveModel(project.defaultModel);
+    // DeepSeek is Flash-by-default. Only a direct CLI model override, an
+    // explicitly saved project default, or an explicitly user-selected model
+    // on this logical session may select Pro. Legacy activeProvider.model is
+    // deliberately not treated as consent to continue Pro.
+    const sessionModelPreference =
+      existingSession && !target.modelAlias && project.defaultModel === undefined && existingSession.modelPreference?.source === "user"
+        ? existingSession.modelPreference.model
+        : undefined;
+    const requestedModel = target.modelAlias ?? project.defaultModel ?? sessionModelPreference;
+    const model = adapter.resolveModel(requestedModel);
     const providerRef: ProviderRef = { providerId, model };
+    const modelDecision = {
+      automatic: requestedModel === undefined,
+      reason:
+        requestedModel !== undefined
+          ? `explicit ${target.modelAlias ? "user" : project.defaultModel ? "project" : "session"} model selection: ${requestedModel}`
+          : providerId === "deepseek"
+            ? "automatic-default-flash: no explicit user/project/session model preference"
+            : "provider default",
+    };
 
     // Session identity: resume an existing session, or create a new one.
     let session: TaskSession | undefined;
@@ -281,6 +303,12 @@ export class Launcher {
         });
         session = await this.deps.sessionManager.setActiveProvider(session.sessionId, to);
       }
+      if (providerId === "deepseek" && (target.modelAlias || project.defaultModel)) {
+        session = await this.deps.sessionManager.setModelPreference(session.sessionId, {
+          model,
+          source: target.modelAlias ? "user" : "project",
+        });
+      }
     } else {
       const goal = target.taskGoal ?? "(untitled)";
       session = await this.deps.sessionManager.createSession({
@@ -289,6 +317,9 @@ export class Launcher {
         mode: sessionMode,
         workingDirectory: project.path,
         activeProvider: providerRef,
+        ...(providerId === "deepseek" && requestedModel !== undefined
+          ? { modelPreference: { model, source: target.modelAlias ? "user" as const : "project" as const } }
+          : {}),
         taskGoal: goal,
         git: currentGit,
       });
@@ -300,7 +331,32 @@ export class Launcher {
     // native session + resume-brief fallback. Never fabricates an id.
     const sameProviderResume =
       existingSession !== undefined && existingSession.activeProvider.providerId === providerId;
-    const resumeNativeSessionId = sameProviderResume ? session.nativeSessionIds?.[providerId] : undefined;
+    let resumeNativeSessionId = sameProviderResume ? session.nativeSessionIds?.[providerId] : undefined;
+    let rollover: LaunchPreparation["rollover"];
+    if (resumeNativeSessionId && providerId === "deepseek") {
+      const native = effectiveLaunch.nativeResume;
+      if (native?.supported) {
+        const file = await nativeSessionFile(native.sessionStore, resumeNativeSessionId);
+        if (file) {
+          const usage = await readClaudeUsage(file);
+          const mode = process.env.CONTINUUM_ROLLOVER_MODE as "automatic" | "tokens" | "off" | undefined;
+          const threshold = Number(process.env.CONTINUUM_ROLLOVER_TOKENS ?? DEFAULT_ROLLOVER_POLICY.contextTokenThreshold);
+          const policy = { ...DEFAULT_ROLLOVER_POLICY, ...(mode ? { mode } : {}), ...(Number.isFinite(threshold) ? { contextTokenThreshold: threshold } : {}) };
+          const decision = evaluateRollover(usage, model, policy);
+          if (decision.rollover) {
+            const oldId = resumeNativeSessionId;
+            const nextId = randomUUID();
+            const handoff = await createRolloverHandoff(dirname(this.deps.sessionBaseDir), session, decision.reason);
+            session = await this.deps.sessionManager.recordRollover(session.sessionId, {
+              rolloverId: handoff.rolloverId, at: new Date().toISOString(), providerId, fromNativeSessionId: oldId,
+              toNativeSessionId: nextId, handoffFile: handoff.file, reason: decision.reason, estimatedCostAvoidedUsd: decision.estimatedAvoidedUsd,
+            });
+            resumeNativeSessionId = undefined;
+            rollover = { fromNativeSessionId: oldId, toNativeSessionId: nextId, handoffFile: handoff.file, reason: decision.reason, estimatedCostAvoidedUsd: decision.estimatedAvoidedUsd };
+          }
+        }
+      }
+    }
 
     // Deterministic native session id: when NOT resuming and the provider
     // declares a session-id flag (Claude/DeepSeek), set the native id equal to
@@ -310,8 +366,8 @@ export class Launcher {
     if (!resumeNativeSessionId) {
       const nr = adapter.profile.cliLaunch.nativeResume;
       if (nr?.supported && nr.sessionIdFlag) {
-        setSessionId = session.sessionId;
-        await this.deps.sessionManager.recordNativeSessionId(session.sessionId, providerId, session.sessionId).catch(() => {});
+        setSessionId = rollover?.toNativeSessionId ?? session.sessionId;
+        await this.deps.sessionManager.recordNativeSessionId(session.sessionId, providerId, setSessionId).catch(() => {});
       }
     }
 
@@ -345,6 +401,7 @@ export class Launcher {
           sessionKey: session.sessionId,
           query: session.taskGoal,
           callerBlocks,
+          memoryRelevance: { query: session.taskGoal, projectName: project.name },
           memoryCore: { stable, dynamic },
         });
       } catch {
@@ -379,7 +436,7 @@ export class Launcher {
     // The launch secret (deepseek api-key in direct mode, proxy user key in
     // proxy mode) is sourced from the credential backend, not a manual env var —
     // see ctx.secrets below.
-    const launchCtx = await this.buildLaunchContext(adapter, metadata, project.defaultModel, project.path, resumeNativeSessionId, setSessionId, taskPrompt, contextSystem, route);
+    const launchCtx = await this.buildLaunchContext(adapter, metadata, requestedModel, project.path, resumeNativeSessionId, setSessionId, taskPrompt, contextSystem, route);
     const basePlan = adapter.buildCliLaunchPlan(launchCtx);
     const authEnv = metadata.api.supported ? await this.resolveAuthEnvSafely(adapter, metadata, route) : {};
 
@@ -410,6 +467,9 @@ export class Launcher {
       rendered,
       contextWindowTokens: contextWindow,
       contextTokensUsed: budget.inputTokensAfter.tokens,
+      route,
+      modelDecision,
+      ...(rollover ? { rollover } : {}),
       ...(resumeNativeSessionId ? { nativeResume: { providerId, nativeSessionId: resumeNativeSessionId } } : {}),
     };
   }

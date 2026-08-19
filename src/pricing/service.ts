@@ -65,6 +65,12 @@ export class PricingAwarenessService {
       config: this.config,
       priorRecord,
     });
+    const launchPeakEvent: PricingNotificationEvent[] = currentTier === "peak" && session.pricingAwareness?.currentTier !== "peak"
+      ? [{
+          kind: "peak-started", providerId, transitionAt: now.toISOString(), toTier: "peak",
+          message: `${displayName} is in peak pricing (${schedule.peakMultiplier ?? 1}×). Peak ends at ${nextTransition ? new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(nextTransition.at) : "an unknown time"} local; continue or hand it off.`,
+        }]
+      : [];
 
     const newState: SessionPricingState = {
       providerId,
@@ -75,7 +81,15 @@ export class PricingAwarenessService {
     };
 
     const updatedSession = await this.sessionManager.updatePricingAwareness(sessionId, newState);
-    return { session: updatedSession, events };
+    return { session: updatedSession, events: [...launchPeakEvent, ...events] };
+  }
+
+  status(providerId: string, now: Date = new Date()): { tier: "peak" | "off-peak"; multiplier: number; endsAt?: Date } | undefined {
+    const schedule = this.schedules.get(providerId);
+    if (!schedule) return undefined;
+    const tier = getCurrentTier(schedule, now);
+    const next = getNextTransition(schedule, now);
+    return { tier, multiplier: tier === "peak" ? schedule.peakMultiplier ?? 1 : 1, ...(tier === "peak" && next ? { endsAt: next.at } : {}) };
   }
 
   /** Human-readable diagnostics line for the session's current pricing-window state, e.g. for a status display. */

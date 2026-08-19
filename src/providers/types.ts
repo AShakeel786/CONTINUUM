@@ -203,6 +203,8 @@ export interface ProxyRoutedCliLaunch {
   readonly proxyPathSuffix: string;
   readonly proxyUserKeySecret: SecretRef;
   readonly clearEnvVars: readonly string[];
+  /** Optional supported Claude Code statusline command. */
+  readonly statusLineCommand?: string;
   /** Native-session resume capability (declared as data — see below). */
   readonly nativeResume?: NativeResumeDescriptor;
   /** MCP auto-connect capability (declared as data — see below). */
@@ -211,6 +213,8 @@ export interface ProxyRoutedCliLaunch {
   readonly contextDelivery?: ContextDelivery;
   /** How the CLI receives the CONTINUUM MCP server config at launch (declared as data). */
   readonly mcpLaunch?: McpLaunchSupply;
+  /** Maps Claude Code's internal model tiers to this provider's own models (see `ModelTierMap` below). */
+  readonly modelTierMap?: ModelTierMap;
 }
 
 /**
@@ -231,6 +235,8 @@ export interface RedirectedCliLaunch {
   /** Secret resolved as `ANTHROPIC_AUTH_TOKEN` (the upstream API key). */
   readonly authTokenSecret: SecretRef;
   readonly clearEnvVars: readonly string[];
+  /** Optional supported Claude Code statusline command. */
+  readonly statusLineCommand?: string;
   /** Native-session resume capability (declared as data — see below). */
   readonly nativeResume?: NativeResumeDescriptor;
   /** MCP auto-connect capability (declared as data — see below). */
@@ -239,6 +245,33 @@ export interface RedirectedCliLaunch {
   readonly contextDelivery?: ContextDelivery;
   /** How the CLI receives the CONTINUUM MCP server config at launch (declared as data). */
   readonly mcpLaunch?: McpLaunchSupply;
+  /** Maps Claude Code's internal model tiers to this provider's own models (see `ModelTierMap` below). */
+  readonly modelTierMap?: ModelTierMap;
+}
+
+// ── Model tier identity (data, not behavior) ────────────────────────────
+//
+// Claude Code (the binary) has its own internal notion of "opus"/"sonnet"/
+// "haiku" tiers plus a subagent default, used both for its visible
+// current-model label and for internal calls (subagents, background
+// classifiers) it makes on its own. When a `redirected`/`proxy-routed`
+// launch points that same binary at a third-party endpoint, those internal
+// references still default to Anthropic's own model names unless told
+// otherwise — which is how a DeepSeek session can visibly show "Opus 5"
+// while actually talking to DeepSeek. `modelTierMap` maps each Claude Code
+// tier to one of THIS provider's own `models.default`/`models.aliases`
+// entries (resolved through the same `resolveModel` every other model
+// reference uses), so the mapping is data, never a hardcoded model string.
+
+export interface ModelTierMap {
+  /** Alias resolved for `ANTHROPIC_DEFAULT_OPUS_MODEL` ("default" or a `models.aliases` key). */
+  readonly opus?: string;
+  /** Alias resolved for `ANTHROPIC_DEFAULT_SONNET_MODEL`. */
+  readonly sonnet?: string;
+  /** Alias resolved for `ANTHROPIC_DEFAULT_HAIKU_MODEL`. */
+  readonly haiku?: string;
+  /** Alias resolved for `CLAUDE_CODE_SUBAGENT_MODEL`. */
+  readonly subagent?: string;
 }
 
 export type CliLaunchDescriptor = NativeCliLaunch | ProxyRoutedCliLaunch | RedirectedCliLaunch;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ProviderSetup } from "../provider-setup.js";
+import { ProviderSetup, looksLikeObviousPlaceholder } from "../provider-setup.js";
 import { CredentialManager } from "../credential-manager.js";
 import { CliAuthManager } from "../cli-auth-manager.js";
 import { createCliAuthAdapter } from "../cli-auth-adapter.js";
@@ -8,6 +8,7 @@ import { FakeBackend } from "./fake-backend.js";
 import { claudeAuthMetadata } from "../provider-auth/claude.js";
 import { deepseekAuthMetadata } from "../provider-auth/deepseek.js";
 import { emptyConfig } from "../../config/types.js";
+import { InvalidCredentialError } from "../errors.js";
 import type { CliAuthAdapter } from "../types.js";
 
 /**
@@ -56,6 +57,54 @@ describe("ProviderSetup (API)", () => {
     const setup = new ProviderSetup({ credentialManager: mgr, cliAuthManager: fakeCliManager(), prompt });
     const result = await setup.setup(deepseekAuthMetadata, "api");
     expect(result.credentialUri).toBeUndefined();
+  });
+
+  it("rejects the exact placeholder value from the real incident (sk-deepseek-1) and never stores it", async () => {
+    const backend = new FakeBackend();
+    const mgr = new CredentialManager(backend);
+    const prompt = createScriptedPrompt({ secrets: ["sk-deepseek-1"] });
+    const setup = new ProviderSetup({ credentialManager: mgr, cliAuthManager: fakeCliManager(), prompt });
+    await expect(setup.setup(deepseekAuthMetadata, "api")).rejects.toThrowError(InvalidCredentialError);
+    expect(backend.peek("continuum:deepseek:api-key")).toBeUndefined();
+  });
+
+  it("rejects a short value that spells out an obvious placeholder word (case-insensitive)", async () => {
+    const backend = new FakeBackend();
+    const mgr = new CredentialManager(backend);
+    const prompt = createScriptedPrompt({ secrets: ["MY-TEST-KEY"] });
+    const setup = new ProviderSetup({ credentialManager: mgr, cliAuthManager: fakeCliManager(), prompt });
+    await expect(setup.setup(deepseekAuthMetadata, "api")).rejects.toThrowError(InvalidCredentialError);
+    expect(backend.peek("continuum:deepseek:api-key")).toBeUndefined();
+  });
+
+  it("accepts a realistic-shaped fixture key that merely resembles a placeholder (no false positive)", async () => {
+    const backend = new FakeBackend();
+    const mgr = new CredentialManager(backend);
+    // Long enough, and doesn't spell out a placeholder word — must NOT be
+    // rejected just because it contains the substring "deepseek".
+    const prompt = createScriptedPrompt({ secrets: ["sk-deepseek-key-123"] });
+    const setup = new ProviderSetup({ credentialManager: mgr, cliAuthManager: fakeCliManager(), prompt });
+    const result = await setup.setup(deepseekAuthMetadata, "api");
+    expect(result.credentialUri).toBe("credential://deepseek/api-key");
+    expect(backend.peek("continuum:deepseek:api-key")).toBe("sk-deepseek-key-123");
+  });
+});
+
+describe("looksLikeObviousPlaceholder", () => {
+  it("flags the exact known placeholder from the real incident", () => {
+    expect(looksLikeObviousPlaceholder("sk-deepseek-1")).toBe(true);
+    expect(looksLikeObviousPlaceholder("SK-DEEPSEEK-1")).toBe(true); // case-insensitive
+  });
+
+  it("flags short values containing an obvious placeholder word", () => {
+    expect(looksLikeObviousPlaceholder("your-api-key-here")).toBe(true);
+    expect(looksLikeObviousPlaceholder("test-key")).toBe(true);
+    expect(looksLikeObviousPlaceholder("example-token")).toBe(true);
+  });
+
+  it("does not flag a long, opaque, realistic-shaped key", () => {
+    expect(looksLikeObviousPlaceholder("sk-fabricated-realistic-looking-key-7bee9c")).toBe(false);
+    expect(looksLikeObviousPlaceholder("sk-deepseek-key-123")).toBe(false);
   });
 });
 

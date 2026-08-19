@@ -15,10 +15,13 @@ import type {
   CliLaunchDescriptor,
   CliLaunchPlan,
   LaunchRoute,
+  ModelTierMap,
   ProviderAdapter,
   ProviderCapabilities,
   ProviderProfile,
 } from "./types.js";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 function resolveSecretFromCtx(providerId: string, ref: SecretRef, ctx?: CliLaunchContext): string {
   // Prefer the caller-injected secret env (credential backend), falling back
@@ -37,6 +40,7 @@ class DataDrivenProviderAdapter implements ProviderAdapter {
 
   resolveModel(alias?: string): string {
     if (!alias || alias === "default") return this.profile.models.default;
+    if (alias === this.profile.models.default || Object.values(this.profile.models.aliases ?? {}).includes(alias)) return alias;
     const mapped = this.profile.models.aliases?.[alias];
     if (!mapped) {
       throw new UnknownModelAliasError(this.profile.id, alias, Object.keys(this.profile.models.aliases ?? {}));
@@ -87,7 +91,7 @@ class DataDrivenProviderAdapter implements ProviderAdapter {
     // it must be followed by a flag (the system-prompt flag), never by the
     // positional task prompt — otherwise the prompt would be swallowed as a
     // config path. Hence: session args → mcp args → context args.
-    const args = [...this.sessionArgs(launch, ctx), ...this.mcpArgs(launch, ctx), ...this.contextArgs(launch, ctx)];
+    const args = [...this.sessionArgs(launch, ctx), ...this.mcpArgs(launch, ctx), ...this.statusLineArgs(launch, ctx), ...this.contextArgs(launch, ctx)];
     switch (launch.kind) {
       case "native":
         return {
@@ -114,6 +118,8 @@ class DataDrivenProviderAdapter implements ProviderAdapter {
           env: {
             ANTHROPIC_BASE_URL: launch.baseUrl,
             ANTHROPIC_AUTH_TOKEN: token,
+            ...(launch.statusLineCommand ? { CONTINUUM_STATUS_PROVIDER: this.profile.displayName, CONTINUUM_STATUS_MODEL: this.resolveModel(ctx.modelAlias), CONTINUUM_STATUS_HANDOFF: "ready" } : {}),
+            ...this.modelIdentityEnv(launch.modelTierMap, ctx),
           },
           clearEnvVars: launch.clearEnvVars,
           configDir: launch.configDirName,
@@ -137,12 +143,45 @@ class DataDrivenProviderAdapter implements ProviderAdapter {
           env: {
             ANTHROPIC_BASE_URL: `${launch.proxyBaseUrl}${launch.proxyPathSuffix}`,
             ANTHROPIC_AUTH_TOKEN: token,
+            ...(launch.statusLineCommand ? { CONTINUUM_STATUS_PROVIDER: this.profile.displayName, CONTINUUM_STATUS_MODEL: this.resolveModel(ctx.modelAlias), CONTINUUM_STATUS_HANDOFF: "ready" } : {}),
+            ...this.modelIdentityEnv(launch.modelTierMap, ctx),
           },
           clearEnvVars: launch.clearEnvVars,
           configDir: launch.configDirName,
         };
       }
     }
+  }
+
+  /**
+   * Model-identity env for a `redirected`/`proxy-routed` launch: the Claude
+   * Code binary is pointed at a third-party endpoint, but without these it
+   * still reports/uses Anthropic's own default tier models internally
+   * (visibly, in its own UI, and for subagent/background calls it makes on
+   * its own) — the exact mechanism behind a DeepSeek session showing "Opus
+   * 5" while every request actually goes to DeepSeek. `ANTHROPIC_MODEL`
+   * (the primary/visible model) stays a recognized Claude catalog alias;
+   * `modelOverrides` maps that alias to the selected provider model on the
+   * wire. Tier vars are only set when the profile declares a `modelTierMap`
+   * (native launches never get any of this — Anthropic's own tiers are
+   * correct there).
+   */
+  private modelIdentityEnv(tierMap: ModelTierMap | undefined, ctx: CliLaunchContext): Record<string, string> {
+    const resolvedPrimary = this.resolveModel(ctx.modelAlias);
+    // Claude Code validates ANTHROPIC_MODEL against its own catalog. Keep the
+    // client-facing alias recognized while routing the selected alias through
+    // the provider-specific tier variable; DeepSeek still receives the real
+    // V4 model in the request body, but no longer emits an unrecognized-model
+    // warning for its provider model id.
+    const env: Record<string, string> = { ANTHROPIC_MODEL: "sonnet" };
+    // Keep Claude's catalog-facing values recognized. The supported
+    // modelOverrides setting below maps these IDs to the actual provider
+    // model sent over the redirected API connection.
+    if (tierMap?.opus) env.ANTHROPIC_DEFAULT_OPUS_MODEL = "claude-opus-5";
+    if (tierMap?.sonnet) env.ANTHROPIC_DEFAULT_SONNET_MODEL = "claude-sonnet-5";
+    if (tierMap?.haiku) env.ANTHROPIC_DEFAULT_HAIKU_MODEL = "claude-haiku-4-5";
+    if (tierMap?.subagent) env.CLAUDE_CODE_SUBAGENT_MODEL = "claude-sonnet-5";
+    return env;
   }
 
   /**
@@ -179,6 +218,25 @@ class DataDrivenProviderAdapter implements ProviderAdapter {
     if (!supply || supply.kind !== "mcp-config-flag") return [];
     if (!ctx.mcpConfig) return [];
     return [supply.flag, ctx.mcpConfig];
+  }
+
+  /** Claude Code's supported statusLine setting is a persistent in-TUI HUD. */
+  private statusLineArgs(launch: CliLaunchDescriptor, ctx: CliLaunchContext): readonly string[] {
+    if (launch.kind === "native" || !launch.statusLineCommand) return [];
+    const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+    const script = join(root, "scripts", "continuum-statusline.mjs");
+    const command = `${process.execPath} ${JSON.stringify(script)}`;
+    return ["--settings", JSON.stringify({
+      statusLine: { type: "command", command, refreshInterval: 5, padding: 0 },
+      // Claude validates these catalog IDs locally, then uses the documented
+      // provider override as the wire model. This preserves correct context
+      // metadata without exposing DeepSeek IDs to the catalog validator.
+      modelOverrides: {
+        "claude-sonnet-5": this.resolveModel(ctx.modelAlias),
+        "claude-opus-5": this.resolveModel("flash"),
+        "claude-haiku-4-5": this.resolveModel("flash"),
+      },
+    })];
   }
 
   /**

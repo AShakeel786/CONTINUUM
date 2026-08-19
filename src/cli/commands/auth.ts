@@ -6,6 +6,7 @@
 import { ProviderSetup } from "../../auth/provider-setup.js";
 import { createPrompt, noopOutput } from "../../auth/prompt.js";
 import { UnknownProviderError } from "../../providers/errors.js";
+import { InvalidCredentialError } from "../../auth/errors.js";
 import type { CliIo } from "../index.js";
 import { buildContext, ensureBackendRecorded } from "./common.js";
 
@@ -76,7 +77,7 @@ export async function runAuthCommand(args: readonly string[], io: CliIo): Promis
     out(`✓ ${providerId} routing: ${proxy && metadata.proxyUserKey?.supported ? "proxy" : "direct"}.\n`);
     return 0;
   } catch (err) {
-    if (err instanceof UnknownProviderError) {
+    if (err instanceof UnknownProviderError || err instanceof InvalidCredentialError) {
       out(`${err.message}\n`);
       return 2;
     }

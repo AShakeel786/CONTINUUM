@@ -29,6 +29,8 @@ import { runSessionsCommand } from "./commands/sessions.js";
 import { runMcpCommand } from "./commands/mcp.js";
 import { runMcpSetupCommand } from "./commands/mcp-setup.js";
 import type { PromptOutput } from "../auth/prompt.js";
+import { runCostCommand } from "./commands/cost.js";
+import { runDeepSeekSmokeCommand } from "./commands/test-deepseek.js";
 
 export interface CliIo {
   readonly out?: PromptOutput;
@@ -88,6 +90,12 @@ export async function main(argv: readonly string[]): Promise<number> {
       return runMcpCommand(rest, io);
     case "mcp-setup":
       return runMcpSetupCommand(rest, io);
+    case "cost":
+      return runCostCommand(rest, io);
+    case "test":
+      if (rest[0] === "deepseek") return runDeepSeekSmokeCommand(rest.slice(1), io);
+      io.out?.("Usage: continuum test deepseek [--max-usd=0.05]\n");
+      return 2;
     default:
       io.out?.(`Unknown command "${command}".\n`);
       printHelp(io);
@@ -115,6 +123,8 @@ function printHelp(io: CliIo): void {
       "  sessions          List/close/archive/clean sessions",
       "  mcp               Run the MCP server (JSON-RPC over stdio)",
       "  mcp-setup         Idempotently register CONTINUUM MCP with Claude/Codex",
+      "  cost [session]    Estimated DeepSeek usage/cost summary (not billing)",
+      "  test deepseek     Run one bounded live DeepSeek Flash + telemetry check",
       "  --version         Print the version",
       "  --help            Show this help",
       "",
@@ -183,6 +193,8 @@ const COMMAND_USAGE: Readonly<Record<string, string>> = {
   sessions: "Usage: continuum sessions [list] [--limit N] [--status active|archived|all]\n       continuum sessions close <id>\n       continuum sessions archive <id>\n       continuum sessions clean [--dry-run]\n       continuum sessions purge [--older-than ISO]\n\n  List (active by default), close, archive, clean smoke/test noise, or purge finished sessions.",
   mcp: "Usage: continuum mcp\n\n  Run the MCP server (JSON-RPC over stdio).",
   "mcp-setup": "Usage: continuum mcp-setup\n\n  Idempotently register CONTINUUM MCP with Claude/Codex.",
+  cost: "Usage: continuum cost [sessionId]\n\n  Show estimated usage/cost telemetry; validate against DeepSeek billing exports.",
+  test: "Usage: continuum test deepseek [--max-usd=0.05]\n\n  Run a bounded live Flash request, resume it, and verify native telemetry.",
 };
 
 function printCommandHelp(command: string | undefined, io: CliIo): void {

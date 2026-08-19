@@ -8,6 +8,7 @@
 import type { ProjectRecord } from "../registry/types.js";
 import type { ProviderRef, TaskSession } from "../session/types.js";
 import type { RenderedContext } from "../rendering/types.js";
+import type { LaunchRoute } from "../providers/types.js";
 
 /** A concrete plan for spawning a provider CLI. */
 export interface LaunchPlan {
@@ -62,4 +63,8 @@ export interface LaunchPreparation {
   readonly contextWindowTokens: number;
   /** Tokens actually occupied by the rendered context after budgeting/trimming — the Token Manager's own `inputTokensAfter` count, not re-estimated. */
   readonly contextTokensUsed: number;
+  /** The launch route actually resolved for this run (direct default; proxy only when explicitly configured) — see `LauncherDeps.getProviderRoute`. */
+  readonly route: LaunchRoute;
+  readonly modelDecision: { readonly automatic: boolean; readonly reason: string };
+  readonly rollover?: { readonly fromNativeSessionId: string; readonly toNativeSessionId: string; readonly handoffFile: string; readonly reason: string; readonly estimatedCostAvoidedUsd: number };
 }

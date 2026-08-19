@@ -27,14 +27,14 @@ describe("native resume args (data-driven, no provider switch)", () => {
   it("DeepSeek direct path builds --resume <id> (Claude Code semantics) and injects the upstream key env", () => {
     process.env.DEEPSEEK_API_KEY = "sk-ds-api-test";
     const plan = createProviderAdapter(deepseekProfile).buildCliLaunchPlan({ workingDir: "/x", resumeNativeSessionId: "ds-123" });
-    expect(plan.args).toEqual(["--resume", "ds-123"]);
+    expect(plan.args.slice(0, 2)).toEqual(["--resume", "ds-123"]);
     expect(plan.env.ANTHROPIC_BASE_URL).toBe("https://api.deepseek.com/anthropic");
   });
 
   it("DeepSeek proxy path (route=proxy) builds --resume <id> and injects proxy env", () => {
     process.env.CONTINUUM_TENCENT_PROXY_USER_KEY = "sk-proxy-test";
     const plan = createProviderAdapter(deepseekProfile).buildCliLaunchPlan({ workingDir: "/x", resumeNativeSessionId: "ds-123", route: "proxy" });
-    expect(plan.args).toEqual(["--resume", "ds-123"]);
+    expect(plan.args.slice(0, 2)).toEqual(["--resume", "ds-123"]);
     expect(plan.env.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:8096/claude-code/default");
   });
 
@@ -42,7 +42,8 @@ describe("native resume args (data-driven, no provider switch)", () => {
     expect(createProviderAdapter(claudeProfile).buildCliLaunchPlan({ workingDir: "/x" }).args).toEqual([]);
     expect(createProviderAdapter(codexProfile).buildCliLaunchPlan({ workingDir: "/x" }).args).toEqual([]);
     process.env.DEEPSEEK_API_KEY = "sk-ds-api-test";
-    expect(createProviderAdapter(deepseekProfile).buildCliLaunchPlan({ workingDir: "/x" }).args).toEqual([]);
+    const deepseekArgs = createProviderAdapter(deepseekProfile).buildCliLaunchPlan({ workingDir: "/x" }).args;
+    expect(deepseekArgs[0]).toBe("--settings");
   });
 
   it("declares nativeResume in every profile (data, serializable, no functions)", () => {
@@ -65,7 +66,7 @@ describe("native resume args (data-driven, no provider switch)", () => {
 
     process.env.DEEPSEEK_API_KEY = "sk-ds-api-test";
     const ds = createProviderAdapter(deepseekProfile).buildCliLaunchPlan({ workingDir: "/x", setSessionId: "sess-2" });
-    expect(ds.args).toEqual(["--session-id", "sess-2"]);
+    expect(ds.args.slice(0, 2)).toEqual(["--session-id", "sess-2"]);
 
     // Codex declares no sessionIdFlag → a setSessionId is ignored (store-scan fallback).
     const codex = createProviderAdapter(codexProfile).buildCliLaunchPlan({ workingDir: "/x", setSessionId: "sess-3" });

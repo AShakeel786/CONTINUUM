@@ -121,6 +121,33 @@ describe("buildContextEnvelope — the one assembly path", () => {
     expect(envelope.dynamic.blocks).toHaveLength(0);
   });
 
+  it("fails closed for unrelated launch memory when relevance gating is requested", () => {
+    const envelope = buildContextEnvelope({
+      sessionKey: "coding",
+      query: "fix the authentication middleware",
+      memoryRelevance: { query: "fix the authentication middleware", projectName: "continuum" },
+      memoryCore: {
+        stable: { persona: { content: "CAR 525 aviation study persona" }, sceneIndex: [{ path: "scene_blocks/aviation.md", summary: "airworthiness study" }] },
+        dynamic: { items: [{ id: "irrelevant", content: "unrelated transport regulation memory", score: 0.99 }] },
+      },
+    });
+    expect(envelope.stable.blocks).toHaveLength(0);
+    expect(envelope.dynamic.blocks).toHaveLength(0);
+  });
+
+  it("retains a relevant project memory when relevance gating is requested", () => {
+    const envelope = buildContextEnvelope({
+      sessionKey: "coding",
+      query: "fix authentication middleware",
+      memoryRelevance: { query: "fix authentication middleware", projectName: "continuum" },
+      memoryCore: {
+        stable: { persona: null, sceneIndex: [] },
+        dynamic: { items: [{ id: "relevant", content: "continuum authentication middleware uses provider auth", score: 0.8 }] },
+      },
+    });
+    expect(envelope.dynamic.blocks.map((b) => b.id)).toEqual(["memorycore:recall:relevant"]);
+  });
+
   it("stamps metadata (sessionKey, query, assembledAt) without leaking secrets into extra", () => {
     const envelope = buildContextEnvelope({
       sessionKey: "sess-1",
