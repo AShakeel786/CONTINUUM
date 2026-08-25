@@ -96,6 +96,8 @@ interface FallbackDepsOpts {
   readonly chain?: readonly string[];
   readonly extraProfiles?: readonly ProviderProfile[];
   readonly extraManifests?: readonly ProviderManifest[];
+  /** Executable detection override — claude present unless explicitly disabled. */
+  readonly findExecutable?: (executable: string) => string | undefined;
 }
 
 async function buildFallbackDeps(opts: FallbackDepsOpts = {}) {
@@ -137,6 +139,9 @@ async function buildFallbackDeps(opts: FallbackDepsOpts = {}) {
     prompt: createScriptedPrompt({}),
     sessionBaseDir: sessionDir,
     ...(opts.chain ? { preferredProviderChain: opts.chain } : {}),
+    ...(opts.findExecutable
+      ? { findExecutable: opts.findExecutable }
+      : { findExecutable: (e: string) => (e === "claude" ? "/fake/claude" : undefined) }),
   };
   return { deps, registry, sessionManager, dataDir };
 }
@@ -153,16 +158,16 @@ describe("launchPrepared automatic-routing fallback", () => {
     mockedRun.mockReset();
   });
 
-  it("falls back to DeepSeek when the chain-routed Ox Alpha fails (rate-limit), and the session follows", async () => {
+  it("dispatches the chain-routed Ox Alpha to its Claude Code harness (no API agent, redirected env)", async () => {
     const { deps, registry, sessionManager, dataDir } = await buildFallbackDeps({ oxUsable: true, deepseekUsable: true });
     const project = await registry.add({ name: `fb-${Math.random().toString(36).slice(2, 8)}`, path: "/work/fb" });
     const launcher = new Launcher(deps);
     const launchPrep = await launcher.prepareLaunch({ projectKey: project.id, taskGoal: "do it" }, { permissionMode: "safe" });
     expect(launchPrep.providerRef.providerId).toBe("ox-alpha");
     expect(launchPrep.autoRoute?.index).toBe(0);
+    expect(launchPrep.runtimeKind).toBe("cli");
 
-    mockedRun.mockRejectedValueOnce(new ApiAgentError("rate-limited", { kind: "rate-limit" }));
-    const { out, lines } = collectOut();
+    const { out } = collectOut();
     let spawnedPlan: LaunchPlan | undefined;
     const exit = await launchPrepared(
       { launcher, providers: deps.providers, sessionManager, dataDir },
@@ -172,24 +177,22 @@ describe("launchPrepared automatic-routing fallback", () => {
     );
 
     expect(exit).toBe(0);
-    expect(mockedRun).toHaveBeenCalledTimes(1);
-    expect(spawnedPlan?.providerId).toBe("deepseek");
-    expect(spawnedPlan?.model).toBe("deepseek-v4-flash");
-    expect(lines.join("\n")).toContain("falling back to DeepSeek");
-    expect(lines.join("\n")).toContain("automatic-fallback: ox-alpha → deepseek");
-    // The API runner received the resolved auth env from the launch plan
-    // (credential store value), not a process.env mutation.
-    expect(mockedRun.mock.calls[0]![0].env).toEqual({ OPENROUTER_API_KEY: "sk-ox-test" });
-    const session = await sessionManager.loadSession(launchPrep.session!.sessionId);
-    expect(session.activeProvider.providerId).toBe("deepseek");
+    expect(mockedRun).not.toHaveBeenCalled();
+    expect(spawnedPlan?.providerId).toBe("ox-alpha");
+    expect(spawnedPlan?.executable).toBe("claude");
+    expect(spawnedPlan?.env.ANTHROPIC_BASE_URL).toBe("https://openrouter.ai/api");
+    expect(spawnedPlan?.env.ANTHROPIC_AUTH_TOKEN).toBe("sk-ox-test");
+    expect(spawnedPlan?.configDir).toContain(".claude-oxalpha");
   });
 
-  it("an explicit (non-chain-routed) launch never falls back — it fails fast", async () => {
-    const { deps, registry, sessionManager, dataDir } = await buildFallbackDeps({ oxUsable: true, deepseekUsable: true });
+  it("an explicit launch on the API harness never falls back — it fails fast", async () => {
+    const noCli = { findExecutable: () => undefined };
+    const { deps, registry, sessionManager, dataDir } = await buildFallbackDeps({ oxUsable: true, deepseekUsable: true, ...noCli });
     const project = await registry.add({ name: `fb-${Math.random().toString(36).slice(2, 8)}`, path: "/work/fb" });
     const launcher = new Launcher(deps);
     const launchPrep = await launcher.prepareLaunch({ projectKey: project.id, providerId: "ox-alpha", taskGoal: "do it" }, { permissionMode: "safe" });
     expect(launchPrep.autoRoute).toBeUndefined();
+    expect(launchPrep.runtimeKind).toBe("api");
 
     mockedRun.mockRejectedValueOnce(new ApiAgentError("rate-limited", { kind: "rate-limit" }));
     const { out, lines } = collectOut();
@@ -201,12 +204,14 @@ describe("launchPrepared automatic-routing fallback", () => {
     expect(lines.join("\n")).not.toContain("falling back");
   });
 
-  it("fails fast when the chain has no usable fallback member", async () => {
-    const { deps, registry, sessionManager, dataDir } = await buildFallbackDeps({ oxUsable: true }); // deepseek has no credential
+  it("fails fast when the chain has no usable fallback member (API harness)", async () => {
+    const noCli = { findExecutable: () => undefined };
+    const { deps, registry, sessionManager, dataDir } = await buildFallbackDeps({ oxUsable: true, ...noCli }); // deepseek: no credential, no claude
     const project = await registry.add({ name: `fb-${Math.random().toString(36).slice(2, 8)}`, path: "/work/fb" });
     const launcher = new Launcher(deps);
     const launchPrep = await launcher.prepareLaunch({ projectKey: project.id, taskGoal: "do it" }, { permissionMode: "safe" });
     expect(launchPrep.providerRef.providerId).toBe("ox-alpha");
+    expect(launchPrep.runtimeKind).toBe("api");
 
     mockedRun.mockRejectedValueOnce(new ApiAgentError("auth failed", { kind: "auth" }));
     const { out, lines } = collectOut();
@@ -218,10 +223,12 @@ describe("launchPrepared automatic-routing fallback", () => {
   });
 
   it("never falls back on a local (non-ApiAgentError) failure", async () => {
-    const { deps, registry, sessionManager, dataDir } = await buildFallbackDeps({ oxUsable: true, deepseekUsable: true });
+    const noCli = { findExecutable: () => undefined };
+    const { deps, registry, sessionManager, dataDir } = await buildFallbackDeps({ oxUsable: true, deepseekUsable: true, ...noCli });
     const project = await registry.add({ name: `fb-${Math.random().toString(36).slice(2, 8)}`, path: "/work/fb" });
     const launcher = new Launcher(deps);
     const launchPrep = await launcher.prepareLaunch({ projectKey: project.id, taskGoal: "do it" }, { permissionMode: "safe" });
+    expect(launchPrep.runtimeKind).toBe("api");
 
     mockedRun.mockRejectedValueOnce(new Error("local bug in tool registry"));
     const { out, lines } = collectOut();
@@ -247,6 +254,7 @@ describe("launchPrepared automatic-routing fallback", () => {
     const { deps, registry, sessionManager, dataDir } = await buildFallbackDeps({
       oxUsable: true,
       chain: ["ox-alpha", "api-b"],
+      findExecutable: () => undefined,
       extraManifests: [apiBManifest],
       extraProfiles: [manifestToProfile(apiBManifest)],
     });
@@ -254,6 +262,7 @@ describe("launchPrepared automatic-routing fallback", () => {
     const launcher = new Launcher(deps);
     const launchPrep = await launcher.prepareLaunch({ projectKey: project.id, taskGoal: "do it" }, { permissionMode: "safe" });
     expect(launchPrep.providerRef.providerId).toBe("ox-alpha");
+    expect(launchPrep.runtimeKind).toBe("api");
 
     mockedRun.mockRejectedValue(new ApiAgentError("rate-limited", { kind: "rate-limit" }));
     const { out } = collectOut();

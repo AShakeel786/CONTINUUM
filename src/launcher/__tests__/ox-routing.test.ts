@@ -59,6 +59,8 @@ interface BuildOpts {
   readonly deepseekUsable?: boolean;
   readonly chain?: readonly string[];
   readonly oxProfile?: ProviderProfile;
+  /** When set, overrides executable detection (claude present/absent) for deterministic harness selection. */
+  readonly findExecutable?: (executable: string) => string | undefined;
 }
 
 async function buildDeps(opts: BuildOpts = {}) {
@@ -93,6 +95,8 @@ async function buildDeps(opts: BuildOpts = {}) {
     prompt: createScriptedPrompt({}),
     sessionBaseDir: sessionDir,
     ...(opts.chain ? { preferredProviderChain: opts.chain } : {}),
+    // Deterministic harness selection: claude present unless overridden.
+    ...(opts.findExecutable ? { findExecutable: opts.findExecutable } : { findExecutable: (e: string) => (e === "claude" ? "/fake/claude" : undefined) }),
   };
   return { deps, registry };
 }
@@ -109,17 +113,29 @@ async function projectWithDefault(defaultProvider?: string, defaultModel?: strin
 }
 
 describe("automatic provider-preference chain (Ox Alpha Free → DeepSeek)", () => {
-  it("1. default-less project, ox usable → ox-alpha, chain-routed, promo reason", async () => {
+  it("1. default-less project, ox usable → ox-alpha, chain-routed, Claude Code harness, promo reason", async () => {
     const { deps, project } = await projectWithDefault();
     const launcher = new Launcher(deps);
     const prep = await launcher.prepareLaunch({ projectKey: project.id, taskGoal: "hello" }, { permissionMode: "safe" });
     expect(prep.providerRef.providerId).toBe("ox-alpha");
     expect(prep.providerRef.model).toBe("stealth/ox-alpha");
     expect(prep.autoRoute).toEqual({ chain: ["ox-alpha", "deepseek"], index: 0 });
-    expect(prep.runtimeKind).toBe("api");
+    expect(prep.runtimeKind).toBe("cli");
+    expect(prep.plan.executable).toBe("claude");
+    expect(prep.plan.env.ANTHROPIC_BASE_URL).toBe("https://openrouter.ai/api");
     expect(prep.modelDecision.automatic).toBe(true);
     expect(prep.modelDecision.reason).toContain("automatic-preference");
     expect(prep.modelDecision.reason).toContain("limited-time free promo");
+  });
+
+  it("1b. without the claude executable, ox falls back to the direct API harness (still chain-routed)", async () => {
+    const { deps, registry } = await buildDeps({ oxUsable: true, deepseekUsable: true, findExecutable: () => undefined });
+    const p = await registry.add({ name: `p-${Math.random().toString(36).slice(2, 8)}`, path: "/work/x" });
+    const launcher = new Launcher(deps);
+    const prep = await launcher.prepareLaunch({ projectKey: p.id, taskGoal: "hello" }, { permissionMode: "safe" });
+    expect(prep.providerRef.providerId).toBe("ox-alpha");
+    expect(prep.autoRoute?.index).toBe(0);
+    expect(prep.runtimeKind).toBe("api");
   });
 
   it("2. deepseek-default project, ox unusable → deepseek stays; existing reason preserved", async () => {
@@ -161,6 +177,27 @@ describe("automatic provider-preference chain (Ox Alpha Free → DeepSeek)", () 
     const prep = await launcher.prepareLaunch({ projectKey: project.id, providerId: "deepseek", taskGoal: "x" }, { permissionMode: "safe" });
     expect(prep.providerRef.providerId).toBe("deepseek");
     expect(prep.autoRoute).toBeUndefined();
+  });
+
+  it("5b. an explicit ox-alpha selection stays on ox-alpha (never silently switched)", async () => {
+    const { deps, project } = await projectWithDefault();
+    const launcher = new Launcher(deps);
+    const prep = await launcher.prepareLaunch({ projectKey: project.id, providerId: "ox-alpha", taskGoal: "x" }, { permissionMode: "safe" });
+    expect(prep.providerRef.providerId).toBe("ox-alpha");
+    expect(prep.providerRef.model).toBe("stealth/ox-alpha");
+    expect(prep.runtimeKind).toBe("cli");
+    expect(prep.autoRoute).toBeUndefined();
+  });
+
+  it("5c. ox bypass mode emits the verified Claude Code flag; safe mode does not", async () => {
+    const { deps, project } = await projectWithDefault();
+    const launcher = new Launcher(deps);
+    const bypass = await launcher.prepareLaunch({ projectKey: project.id, providerId: "ox-alpha", taskGoal: "x" }, { permissionMode: "bypass" });
+    expect(bypass.plan.bypassPermissions).toBe(true);
+    expect(bypass.plan.args).toContain("--dangerously-skip-permissions");
+    const safe = await launcher.prepareLaunch({ projectKey: project.id, providerId: "ox-alpha", taskGoal: "x" }, { permissionMode: "safe" });
+    expect(safe.plan.bypassPermissions).toBe(false);
+    expect(safe.plan.args).not.toContain("--dangerously-skip-permissions");
   });
 
   it("6. explicit --model selection is never chain-routed", async () => {

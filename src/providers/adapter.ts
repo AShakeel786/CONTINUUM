@@ -202,13 +202,16 @@ class DataDrivenProviderAdapter implements ProviderAdapter {
   }
 
   /**
-   * Full-access flag for native CLIs that declare a `permissionBypassFlag`.
-   * Emitted only when the caller requests `permissionMode: "bypass"`; safe
-   * mode (and providers with no declared flag) add nothing. Never emulated.
+   * Full-access flag for native/redirected CLIs that declare a
+   * `permissionBypassFlag` (the same verified Claude Code flag both harness
+   * kinds use). Emitted only when the caller requests `permissionMode:
+   * "bypass"`; safe mode (and providers with no declared flag) add nothing.
+   * Never emulated.
    */
   private permissionArgs(launch: CliLaunchDescriptor, ctx: CliLaunchContext): readonly string[] {
-    if (launch.kind !== "native" || ctx.permissionMode !== "bypass" || !launch.permissionBypassFlag) return [];
-    return [launch.permissionBypassFlag];
+    const flag = launch.kind === "native" || launch.kind === "redirected" ? launch.permissionBypassFlag : undefined;
+    if (ctx.permissionMode !== "bypass" || !flag) return [];
+    return [flag];
   }
 
   /**
@@ -257,11 +260,15 @@ class DataDrivenProviderAdapter implements ProviderAdapter {
       statusLine: { type: "command", command, refreshInterval: 5, padding: 0 },
       // Claude validates these catalog IDs locally, then uses the documented
       // provider override as the wire model. This preserves correct context
-      // metadata without exposing DeepSeek IDs to the catalog validator.
+      // metadata without exposing provider model IDs to the catalog
+      // validator. The sonnet (primary) override follows an explicit model
+      // selection first, then the profile's declared tier mapping; the
+      // opus/haiku tiers follow the profile's declared mapping (falling back
+      // to the historical `flash` alias only when no mapping is declared).
       modelOverrides: {
-        "claude-sonnet-5": this.resolveModel(ctx.modelAlias),
-        "claude-opus-5": this.resolveModel("flash"),
-        "claude-haiku-4-5": this.resolveModel("flash"),
+        "claude-sonnet-5": this.resolveModel(ctx.modelAlias ?? launch.modelTierMap?.sonnet ?? "default"),
+        "claude-opus-5": this.resolveModel(launch.modelTierMap?.opus ?? "flash"),
+        "claude-haiku-4-5": this.resolveModel(launch.modelTierMap?.haiku ?? "flash"),
       },
     })];
   }

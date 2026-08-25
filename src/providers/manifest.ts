@@ -67,6 +67,8 @@ export type ManifestCliLaunch =
       readonly authTokenEnvVar: string;
       /** Maps Claude Code's internal model tiers to this provider's own models (see `ModelTierMap`). */
       readonly modelTierMap?: ModelTierMap;
+      /** Verified native flag that skips all permission approvals (Claude Code `--dangerously-skip-permissions`). */
+      readonly permissionBypassFlag?: string;
     })
   | (ManifestCliLaunchCommon & {
       readonly kind: "proxy-routed";
@@ -136,6 +138,12 @@ export interface ProviderManifest {
   readonly modelDiscovery?: import("./types.js").ModelDiscovery;
   /** Optional temporary/promotional state (e.g. limited-time free preview). `until` is optional and only set when an authoritative end timestamp is known. */
   readonly promo?: PromoInfo;
+  /**
+   * True when BOTH a coding-agent CLI harness and a direct-API harness are
+   * declared: the CLI harness is preferred, and the generic API agent is
+   * selected instead when the CLI executable is unavailable.
+   */
+  readonly apiFallback?: boolean;
 }
 
 const ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -213,6 +221,8 @@ export function validateManifest(input: unknown): readonly string[] {
     if (typeof m.promo.note !== "string" || m.promo.note.trim().length === 0) errors.push("promo.note is required");
   }
 
+  if (m.apiFallback !== undefined && typeof m.apiFallback !== "boolean") errors.push("apiFallback must be a boolean");
+
   // Structural validation for the (new) dual-route launch descriptors.
   const launch = m.cliLaunch;
   if (launch && launch.kind === "redirected") {
@@ -282,6 +292,7 @@ function toCliLaunch(m: ProviderManifest): CliLaunchDescriptor {
       baseUrl: l.baseUrl,
       authTokenSecret: secretRef(l.authTokenEnvVar),
       clearEnvVars: l.clearEnvVars ?? [],
+      ...(l.permissionBypassFlag ? { permissionBypassFlag: l.permissionBypassFlag } : {}),
       ...(l.nativeResume ? { nativeResume: l.nativeResume } : {}),
       ...(l.mcp ? { mcp: l.mcp } : {}),
       ...(l.contextDelivery ? { contextDelivery: l.contextDelivery } : {}),
@@ -353,6 +364,7 @@ export function manifestToProfile(m: ProviderManifest): ProviderProfile {
     ...(m.modelDiscovery ? { modelDiscovery: m.modelDiscovery } : {}),
     ...(proxyCliLaunch ? { proxyCliLaunch } : {}),
     ...(m.promo ? { promo: m.promo } : {}),
+    ...(m.apiFallback ? { apiFallback: true } : {}),
   };
 }
 

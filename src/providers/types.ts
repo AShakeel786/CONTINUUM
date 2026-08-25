@@ -273,6 +273,13 @@ export interface RedirectedCliLaunch {
   readonly clearEnvVars: readonly string[];
   /** Optional supported Claude Code statusline command. */
   readonly statusLineCommand?: string;
+  /**
+   * Native flag that launches with all tool permission approvals skipped
+   * (verified: Claude Code `--dangerously-skip-permissions`). Same semantics
+   * as `NativeCliLaunch.permissionBypassFlag` — emitted only when the caller
+   * requests `permissionMode: "bypass"`; absent = full-access unsupported.
+   */
+  readonly permissionBypassFlag?: string;
   /** Native-session resume capability (declared as data — see below). */
   readonly nativeResume?: NativeResumeDescriptor;
   /** MCP auto-connect capability (declared as data — see below). */
@@ -481,6 +488,14 @@ export interface ProviderProfile {
   readonly proxyCliLaunch?: ProxyRoutedCliLaunch;
   /** Optional temporary/promotional state (e.g. limited-time free). See `PromoInfo`. */
   readonly promo?: PromoInfo;
+  /**
+   * True when the provider declares BOTH a coding-agent CLI harness and a
+   * direct-API harness: the CLI harness is preferred, and the generic API
+   * agent is selected instead when the CLI executable is unavailable. Never
+   * fakes the CLI path — an unavailable executable selects the API harness
+   * honestly via usability.
+   */
+  readonly apiFallback?: boolean;
 }
 
 // ── CLI launch adapter ──────────────────────────────────────────────────

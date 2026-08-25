@@ -144,11 +144,17 @@ export async function evaluateProvider(
   // 2. CLI-launchable providers without their own CLI auth adapter (e.g.
   //    DeepSeek, whose `claude` CLI is redirected to a remote endpoint or an
   //    optional proxy): the declared launch executable must be detected, plus
-  //    the credential(s) required by the selected route.
+  //    the credential(s) required by the selected route. A provider that also
+  //    declares `apiFallback` (Ox Alpha) is NOT reported unusable when the
+  //    CLI executable is missing — the generic direct-API harness is selected
+  //    instead, honestly reported with `launchKind: "direct-api"`.
   if (adapter.profile.capabilities.cliAvailable) {
     const executable = adapter.resolveCliLaunch(route).executable;
     const findExecutable = deps.findExecutable ?? findExecutableOnPath;
     const installed = findExecutable(executable) !== undefined;
+    if (!installed && adapter.profile.apiFallback) {
+      return evaluateDirectApi(adapter, metadata, deps, route);
+    }
     if (!installed) {
       return { usable: false, reason: `${id} CLI not installed (${executable} not found)`, launchKind: "cli", cliInstalled: false };
     }

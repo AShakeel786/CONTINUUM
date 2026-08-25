@@ -283,4 +283,20 @@ describe("provider identity promo line", () => {
     );
     expect(expired).not.toContain("Promo:");
   });
+
+  it("shows Claude Code as the client and route for the redirected harness", () => {
+    const providers = {
+      has: () => true,
+      get: () => ({
+        profile: { displayName: "Ox Alpha Free", baseUrl: "https://openrouter.ai/api/v1" },
+        resolveCliLaunch: () => ({ kind: "redirected", executable: "claude", baseUrl: "https://openrouter.ai/api" }),
+      }) as unknown as ReturnType<ProviderRegistry["get"]>,
+    } as unknown as ProviderRegistry;
+    const identity = buildProviderIdentity(
+      prep({ providerRef: { providerId: "ox-alpha", model: "stealth/ox-alpha" }, runtimeKind: "cli" }),
+      providers,
+    );
+    expect(identity.client).toBe("Claude Code");
+    expect(identity.route).toBe("Claude Code → openrouter.ai");
+  });
 });

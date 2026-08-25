@@ -59,9 +59,22 @@ describe("oxAlphaManifest (OpenRouter — Ox Alpha Free)", () => {
     expect(profile.models.default).toBe("stealth/ox-alpha");
     expect(profile.auth.kind).toBe("bearer-token");
     if (profile.auth.kind === "bearer-token") expect(profile.auth.secret.envVar).toBe("OPENROUTER_API_KEY");
-    expect(profile.capabilities.cliAvailable).toBe(false);
+    expect(profile.capabilities.cliAvailable).toBe(true);
     expect(profile.capabilities.contextWindowTokens).toBe(1_000_000);
+    expect(profile.apiFallback).toBe(true);
     expect(profile.environment.owns).toContain("OPENROUTER_API_KEY");
+    // Claude Code harness: redirected to OpenRouter's Anthropic-compatible
+    // endpoint, with its own config dir and every tier mapped to the single
+    // provider model on the wire.
+    expect(profile.cliLaunch.kind).toBe("redirected");
+    if (profile.cliLaunch.kind === "redirected") {
+      expect(profile.cliLaunch.baseUrl).toBe("https://openrouter.ai/api");
+      expect(profile.cliLaunch.configDirName).toBe(".claude-oxalpha");
+      expect(profile.cliLaunch.clearEnvVars).toContain("ANTHROPIC_API_KEY");
+      expect(profile.cliLaunch.permissionBypassFlag).toBe("--dangerously-skip-permissions");
+      expect(profile.cliLaunch.modelTierMap).toEqual({ opus: "default", sonnet: "default", haiku: "default", subagent: "default" });
+      expect(profile.cliLaunch.nativeResume?.supported).toBe(true);
+    }
     // Limited-time free preview: no authoritative end date is published
     // upstream, so `until` is omitted rather than guessed.
     expect(profile.promo).toEqual({ note: "FREE" });
@@ -102,17 +115,73 @@ describe("oxAlphaManifest (OpenRouter — Ox Alpha Free)", () => {
     expect(bundledManifests[4]!.id).toBe("ox-alpha");
   });
 
-  it("is a direct-API provider: usable with a stored key, otherwise not", async () => {
+  it("is a dual-harness provider: Claude Code CLI preferred, direct API when claude is missing", async () => {
     const adapter = createProviderAdapter(manifestToProfile(oxAlphaManifest));
     const metadata = manifestToAuthMetadata(oxAlphaManifest);
-    const deps = { cliAuthManager: new CliAuthManager(), credentialManager: new CredentialManager(new FakeBackend()) };
-    const withoutKey = await evaluateProvider(adapter, metadata, deps);
-    expect(withoutKey.usable).toBe(false);
-    expect(withoutKey.launchKind).toBe("direct-api");
-    await deps.credentialManager.setCredential("ox-alpha", "api-key", FIXTURE_KEY);
-    const withKey = await evaluateProvider(adapter, metadata, deps);
-    expect(withKey.usable).toBe(true);
-    expect(withKey.launchKind).toBe("direct-api");
+    const credentialManager = new CredentialManager(new FakeBackend());
+    const base = { cliAuthManager: new CliAuthManager(), credentialManager };
+    const withCli = { ...base, findExecutable: (e: string) => (e === "claude" ? "/fake/claude" : undefined) };
+    const withoutCli = { ...base, findExecutable: () => undefined };
+
+    const noKey = await evaluateProvider(adapter, metadata, withoutCli);
+    expect(noKey.usable).toBe(false);
+    expect(noKey.launchKind).toBe("direct-api");
+
+    await credentialManager.setCredential("ox-alpha", "api-key", FIXTURE_KEY);
+    const cliHarness = await evaluateProvider(adapter, metadata, withCli);
+    expect(cliHarness.usable).toBe(true);
+    expect(cliHarness.launchKind).toBe("cli");
+    const apiHarness = await evaluateProvider(adapter, metadata, withoutCli);
+    expect(apiHarness.usable).toBe(true);
+    expect(apiHarness.launchKind).toBe("direct-api");
+  });
+
+  it("builds the Claude Code launch plan: redirected env, wire-model overrides, no process.env mutation", () => {
+    const adapter = createProviderAdapter(manifestToProfile(oxAlphaManifest));
+    const plan = adapter.buildCliLaunchPlan({
+      workingDir: "/work/ox",
+      secrets: { OPENROUTER_API_KEY: FIXTURE_KEY },
+      taskPrompt: "hello",
+      permissionMode: "bypass",
+      setSessionId: "sess-1",
+    });
+    expect(plan.executable).toBe("claude");
+    expect(plan.env.ANTHROPIC_BASE_URL).toBe("https://openrouter.ai/api");
+    expect(plan.env.ANTHROPIC_AUTH_TOKEN).toBe(FIXTURE_KEY);
+    expect(plan.env.ANTHROPIC_MODEL).toBe("sonnet"); // catalog-facing alias
+    expect(plan.clearEnvVars).toContain("ANTHROPIC_API_KEY");
+    expect(plan.configDir).toBe(".claude-oxalpha");
+    expect(plan.args).toContain("--dangerously-skip-permissions");
+    expect(plan.args).toContain("--session-id");
+    const settingsArg = plan.args.find((a) => a.startsWith('{"statusLine"'));
+    expect(settingsArg).toBeDefined();
+    const settings = JSON.parse(settingsArg!);
+    expect(settings.modelOverrides["claude-sonnet-5"]).toBe("stealth/ox-alpha");
+    expect(settings.modelOverrides["claude-opus-5"]).toBe("stealth/ox-alpha");
+    expect(settings.modelOverrides["claude-haiku-4-5"]).toBe("stealth/ox-alpha");
+    // Env isolation: the plan is pure data — process.env was not mutated.
+    const before = { ANTHROPIC_BASE_URL: process.env.ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN: process.env.ANTHROPIC_AUTH_TOKEN, OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY };
+    expect(process.env.ANTHROPIC_BASE_URL).toBe(before.ANTHROPIC_BASE_URL);
+    expect(process.env.ANTHROPIC_AUTH_TOKEN).toBe(before.ANTHROPIC_AUTH_TOKEN);
+    expect(process.env.OPENROUTER_API_KEY).toBe(before.OPENROUTER_API_KEY);
+  });
+
+  it("builds resume args for the ox Claude Code harness", () => {
+    const adapter = createProviderAdapter(manifestToProfile(oxAlphaManifest));
+    const plan = adapter.buildCliLaunchPlan({
+      workingDir: "/work/ox",
+      secrets: { OPENROUTER_API_KEY: FIXTURE_KEY },
+      resumeNativeSessionId: "native-123",
+    });
+    expect(plan.args).toContain("--resume");
+    expect(plan.args).toContain("native-123");
+  });
+
+  it("fails loudly (ProviderAuthError) when the ox credential is missing at launch time", () => {
+    const adapter = createProviderAdapter(manifestToProfile(oxAlphaManifest));
+    expect(() =>
+      adapter.buildCliLaunchPlan({ workingDir: "/work/ox", secrets: {} }),
+    ).toThrow(/cannot launch redirected session/);
   });
 
   it("declares the automatic preference chain as Ox Alpha first, DeepSeek second", () => {

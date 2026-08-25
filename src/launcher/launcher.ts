@@ -54,7 +54,7 @@ import type { ContextBlock } from "../context/types.js";
 import type { Prompt, PromptOutput } from "../auth/prompt.js";
 import { LocalDependencyUnavailableError, NoAuthenticatedAgentError, NoProjectError, ProviderNotAuthenticatedError } from "./errors.js";
 import type { ProxyReadiness } from "../health/launch-guard.js";
-import { computeProviderUsability, type ProviderUsability } from "./usability.js";
+import { evaluateProvider, type ProviderUsability } from "./usability.js";
 import type { LaunchOptions, LaunchPlan, LaunchPreparation } from "./types.js";
 import { DEFAULT_ROLLOVER_POLICY, evaluateRollover } from "../cost/calculator.js";
 import { nativeSessionFile, readClaudeUsage } from "../cost/native-usage.js";
@@ -109,6 +109,11 @@ export interface LauncherDeps {
    * `DEFAULT_PROVIDER_PREFERENCE_CHAIN` (Ox Alpha Free → DeepSeek).
    */
   readonly preferredProviderChain?: readonly string[];
+  /**
+   * Executable-detection seam for CLI-harness usability (test override).
+   * Defaults to the PATH/absolute lookup used by `findExecutableOnPath`.
+   */
+  readonly findExecutable?: (executable: string) => string | undefined;
 }
 
 export type SpawnFn = (plan: LaunchPlan) => Promise<{ exitCode: number | null }>;
@@ -180,12 +185,14 @@ export class Launcher {
   private async isProviderUsable(
     adapter: ProviderAdapter,
     metadata: ProviderAuthMetadata,
-  ): Promise<{ usable: boolean; reason?: string }> {
-    return computeProviderUsability(adapter, metadata, {
+  ): Promise<{ usable: boolean; reason?: string; launchKind?: import("../launcher/usability.js").LaunchKind }> {
+    const evaluation = await evaluateProvider(adapter, metadata, {
       cliAuthManager: this.deps.cliAuthManager,
       credentialManager: this.deps.credentialManager,
+      ...(this.deps.findExecutable ? { findExecutable: this.deps.findExecutable } : {}),
       route: this.routeFor(adapter.profile.id),
     });
+    return { usable: evaluation.usable, reason: evaluation.reason, launchKind: evaluation.launchKind };
   }
 
   /**
@@ -264,6 +271,11 @@ export class Launcher {
       if (metadata.cli.supported) throw new ProviderNotAuthenticatedError(providerId, usable.reason ?? "not authenticated");
       throw new ProviderNotAuthenticatedError(providerId, usable.reason ?? "no API key");
     }
+    // Which harness carries this launch: the provider's coding-agent CLI when
+    // selected (Claude Code redirected for Ox Alpha/DeepSeek), or the generic
+    // direct-API agent (apiFallback providers with no CLI executable, and
+    // API-only providers). Comes from the usability evaluation, never guessed.
+    const runtimeKind = usable.launchKind === "cli" ? "cli" : "api";
 
     // The effective launch route for this run (direct default; proxy only when
     // explicitly configured). Used below for the dependency gate and the plan.
@@ -291,7 +303,7 @@ export class Launcher {
     // launch descriptor declares a real native bypass flag — a requested
     // bypass with no flag is surfaced as a visible note, never silently run.
     const requestedPermission = opts.permissionMode ?? adapter.profile.defaultPermissionMode ?? "safe";
-    const canBypass = effectiveLaunch.kind === "native" && !!effectiveLaunch.permissionBypassFlag;
+    const canBypass = (effectiveLaunch.kind === "native" || effectiveLaunch.kind === "redirected") && !!effectiveLaunch.permissionBypassFlag;
     const bypassPermissions = requestedPermission === "bypass" && canBypass;
     const permissionNote =
       requestedPermission === "bypass" && !canBypass
@@ -543,7 +555,17 @@ export class Launcher {
     // already replaced by the provider default above — never a stale id.
     const launchCtx = await this.buildLaunchContext(adapter, metadata, model, project.path, resumeNativeSessionId, setSessionId, taskPrompt, contextSystem, route, bypassPermissions ? "bypass" : "safe", knownModelIds);
     const basePlan = adapter.buildCliLaunchPlan(launchCtx);
-    const authEnv = metadata.api.supported ? await this.resolveAuthEnvSafely(adapter, metadata, route) : {};
+    // Auth env for the selected harness: a CLI launch carries its secret via
+    // the adapter's own plan env (redirected → ANTHROPIC_AUTH_TOKEN, native →
+    // the provider env var); an API-harness launch has no child process, so
+    // the stored credential is resolved into plan.env for the in-process
+    // runner's auth headers.
+    const authEnv =
+      runtimeKind === "api"
+        ? metadata.api.supported
+          ? await this.resolveApiHarnessAuthEnv(adapter, metadata)
+          : {}
+        : await this.resolveAuthEnvSafely(adapter, metadata, route);
 
     const plan: LaunchPlan = {
       providerId,
@@ -568,7 +590,7 @@ export class Launcher {
       staleReasons,
       memoryCoreAvailable,
       memoryCoreNote,
-      runtimeKind: adapter.getCapabilities().cliAvailable ? "cli" : "api",
+      runtimeKind,
       rendered,
       contextWindowTokens: contextWindow,
       contextTokensUsed: budget.inputTokensAfter.tokens,
@@ -612,6 +634,22 @@ export class Launcher {
   supportsDeterministicSessionId(providerId: string): boolean {
     const nr = this.adapterFor(providerId).profile.cliLaunch.nativeResume;
     return !!nr && nr.supported && !!nr.sessionIdFlag;
+  }
+
+  /**
+   * Credential env for an API-harness launch: the same stored credential the
+   * CLI harness uses, resolved into `plan.env` so the in-process api-agent
+   * runner's `buildAuthHeaders` can find it (via the plan.env seam). Never
+   * mutates process.env; falls back to an explicitly-exported var.
+   */
+  private async resolveApiHarnessAuthEnv(adapter: ProviderAdapter, metadata: ProviderAuthMetadata): Promise<Record<string, string>> {
+    const envVar = metadata.api.supported ? metadata.api.envVar : undefined;
+    if (!envVar) return {};
+    try {
+      return await resolveProviderAuthEnv(adapter, this.deps.credentialManager);
+    } catch {
+      return process.env[envVar] ? { [envVar]: process.env[envVar]! } : {};
+    }
   }
 
   private async resolveAuthEnvSafely(adapter: ProviderAdapter, metadata: ProviderAuthMetadata, route: LaunchRoute): Promise<Record<string, string>> {

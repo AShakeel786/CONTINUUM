@@ -265,7 +265,7 @@ export function buildProviderIdentity(prep: LaunchPreparation, providers: Provid
     launch.kind === "native"
       ? `Native → ${hostOf(adapter.profile.baseUrl)}`
       : launch.kind === "redirected"
-        ? `Direct → ${hostOf(launch.baseUrl)}`
+        ? `${client} → ${hostOf(launch.baseUrl)}`
         : `Proxy → ${hostOf(launch.proxyBaseUrl)}${launch.proxyPathSuffix} (Tencent MemoryProxy)`;
   return { provider: adapter.profile.displayName, model: prep.providerRef.model, client, route, ...(promo ? { promo } : {}) };
 }

@@ -258,15 +258,21 @@ export const antigravityManifest: ProviderManifest = {
 
 /**
  * Ox Alpha Free — a time-boxed free preview coding model (the same model
- * OpenCode Go exposes as `ox-alpha-free`), reached through OpenRouter's
- * OpenAI-compatible API as `stealth/ox-alpha`. Direct-API only (no coding-
- * agent CLI exists for it): CONTINUUM's own api-agent runtime speaks to
- * `https://openrouter.ai/api/v1` with the user's OpenRouter API key
- * (stored via `continuum auth ox-alpha` in the OS credential store, never
- * in this repo). The `promo` block marks the limited-time free window —
- * while it is active, automatic preference routing may select it; after
- * `until` it is no longer advertised or auto-preferred, but stays
- * explicitly selectable.
+ * OpenCode Go exposes as `ox-alpha-free`), reached through OpenRouter as
+ * `stealth/ox-alpha`.
+ *
+ * Two harnesses, one credential (OpenRouter API key, stored via
+ * `continuum auth ox-alpha` in the OS credential store, never in this repo):
+ *   - Preferred: Claude Code, redirected to OpenRouter's Anthropic-compatible
+ *     endpoint (`ANTHROPIC_BASE_URL=https://openrouter.ai/api`) with the wire
+ *     model set through Claude Code's documented `modelOverrides` mechanism
+ *     (catalog alias client-side, `stealth/ox-alpha` on the wire).
+ *   - Fallback (`apiFallback`): CONTINUUM's generic direct-API agent loop,
+ *     selected automatically when the `claude` executable is unavailable.
+ * The `promo` block marks the limited-time free window — while it is active,
+ * automatic preference routing may select it; a declared-and-passed `until`
+ * would stop advertising/auto-preference, but the provider stays explicitly
+ * selectable.
  */
 export const oxAlphaManifest: ProviderManifest = {
   schemaVersion: 1,
@@ -277,16 +283,47 @@ export const oxAlphaManifest: ProviderManifest = {
   auth: { kind: "bearer-token", envVar: "OPENROUTER_API_KEY" },
   models: { default: "stealth/ox-alpha" },
   capabilities: {
-    cliAvailable: false,
+    cliAvailable: true,
     contextWindowTokens: 1_000_000,
-    notes: "OpenRouter — stealth/ox-alpha (Ox Alpha Free, the same model OpenCode Go lists as ox-alpha-free). Limited-time free preview; requires an OpenRouter API key stored via `continuum auth ox-alpha` (never in this repo).",
+    notes: "OpenRouter — stealth/ox-alpha (Ox Alpha Free). Runs Claude Code redirected to OpenRouter's Anthropic-compatible endpoint (modelOverrides → stealth/ox-alpha), with the direct API-agent as an automatic fallback harness when the claude CLI is unavailable. Limited-time free preview; the OpenRouter API key is stored via `continuum auth ox-alpha` (never in this repo).",
   },
   environment: { owns: ["OPENROUTER_API_KEY"] },
+  apiFallback: true,
+  cliLaunch: {
+    kind: "redirected",
+    // A dedicated config dir so ox sessions never touch the user's global
+    // Claude config (~/.claude) or DeepSeek's (~/.claude-deepseek).
+    configDirName: ".claude-oxalpha",
+    baseUrl: "https://openrouter.ai/api",
+    authTokenEnvVar: "OPENROUTER_API_KEY",
+    clearEnvVars: [...MODEL_IDENTITY_ENV_VARS, "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"],
+    statusLineCommand: "continuum-statusline",
+    // Full access is opt-in (`--bypass-permissions`), same verified flag the
+    // native Claude profile uses; the default stays safe approval mode.
+    permissionBypassFlag: "--dangerously-skip-permissions",
+    nativeResume: {
+      supported: true,
+      resume: { kind: "flag", flag: "--resume" },
+      sessionStore: { kind: "files", rootDir: "~/.claude-oxalpha/projects", extension: ".jsonl", idFrom: "basename" },
+      sessionIdFlag: "--session-id",
+    },
+    contextDelivery: { kind: "append-system-prompt", systemFlag: "--append-system-prompt" },
+    mcp: { supported: true, serverName: "continuum" },
+    mcpLaunch: { kind: "mcp-config-flag", flag: "--mcp-config" },
+    // Every Claude Code tier maps to the single provider model on the wire
+    // ("default" resolves through `resolveModel`, same as any alias key).
+    modelTierMap: { opus: "default", sonnet: "default", haiku: "default", subagent: "default" },
+  },
   // Limited-time free preview: no authoritative end timestamp is published
   // upstream, so `until` is deliberately omitted (never guessed). Routing
   // preference therefore follows current usability, not a date.
   promo: { note: "FREE" },
 };
+// Live-compatibility note (not an ox incompatibility): on FIRST run in a
+// workspace, Claude Code shows its own workspace-trust dialog and ignores
+// `.claude/settings.json` allow-lists until the user accepts it once
+// (`~/.claude-oxalpha/.claude.json`). That is standard interactive Claude
+// Code behavior, identical for native Claude and DeepSeek launches.
 
 /**
  * Automatic provider-preference chain: when a launch carries no explicit
