@@ -42,6 +42,8 @@ export interface LauncherContext {
   readonly cliAuthManager: import("../../auth/cli-auth-manager.js").CliAuthManager;
   readonly authMetadata: ReadonlyMap<string, import("../../auth/types.js").ProviderAuthMetadata>;
   readonly dataDir: string;
+  /** True when the canonical resolver found both an endpoint and service token. */
+  readonly memoryCoreConfigured: boolean;
 }
 
 export async function buildLauncherContext(options: { dataDir?: string; prompt: Prompt; onDependencyProgress?: (line: string) => void }): Promise<LauncherContext> {
@@ -61,6 +63,12 @@ export async function buildLauncherContext(options: { dataDir?: string; prompt: 
   const sessionManager = new SessionManager(new FileSessionStore(sessionBaseDir));
 
   const memoryResolution = await resolveMemoryCoreConfig({ credentialManager });
+  const healthOptions = {
+    ...DEFAULT_OPTIONS,
+    // Configuration is endpoint + credential resolution, not merely whether
+    // the optional URL override happened to be exported by this shell.
+    tencentConfigured: memoryResolution.config !== undefined,
+  };
 
   // Launch-route resolution: dual-route providers (DeepSeek) default to direct;
   // the optional Tencent proxy path is only used when explicitly configured.
@@ -82,7 +90,7 @@ export async function buildLauncherContext(options: { dataDir?: string; prompt: 
     memoryCoreReason: memoryResolution.reason,
     repoMapBuilder: (projectPath, query, budgetTokens) => buildRepoMap(projectPath, query, { budgetTokens }, repoMapCache),
     pruneStore: new FilePruneStore(dataDir),
-    ensureProxyReady: makeEnsureProxyReady({ runtime: liveRuntime, options: DEFAULT_OPTIONS, policy: DEFAULT_POLICY }),
+    ensureProxyReady: makeEnsureProxyReady({ runtime: liveRuntime, options: healthOptions, policy: DEFAULT_POLICY }),
     getProviderRoute,
     ...(options.onDependencyProgress ? { onDependencyProgress: options.onDependencyProgress } : {}),
   };
@@ -102,5 +110,6 @@ export async function buildLauncherContext(options: { dataDir?: string; prompt: 
     cliAuthManager,
     authMetadata,
     dataDir,
+    memoryCoreConfigured: memoryResolution.config !== undefined,
   };
 }

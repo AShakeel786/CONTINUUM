@@ -47,6 +47,11 @@ export async function runDoctorCommand(args: readonly string[], io: CliIo): Prom
   });
   const authReport = await authDoctor.diagnose(config);
 
+  // Resolve the canonical memory configuration before runtime diagnosis. The
+  // local endpoint defaults to 127.0.0.1 and the token may live in Keychain,
+  // so checking only CONTINUUM_MEMORY_CORE_URL misclassifies configured Macs.
+  const memoryResolution = await resolveMemoryCoreConfig({ credentialManager: ctx.credentialManager });
+
   // ── Runtime health doctor (Phase 14) ───────────────────────────────────
   const providerExecutables = DEFAULT_OPTIONS.providerExecutables;
   const healthDoctor = new HealthDoctor({
@@ -55,6 +60,7 @@ export async function runDoctorCommand(args: readonly string[], io: CliIo): Prom
       ...DEFAULT_OPTIONS,
       stateFile: join(ctx.dataDir, "health-state.json"),
       memoryCoreUrl: DEFAULT_OPTIONS.memoryCoreUrl,
+      tencentConfigured: memoryResolution.config !== undefined,
     },
     policy: { ...DEFAULT_POLICY },
     probes: {
@@ -74,7 +80,6 @@ export async function runDoctorCommand(args: readonly string[], io: CliIo): Prom
 
   // Gather the memory + native-CLI surface up front, so a healthy `--repair`
   // can collapse to a short no-op instead of printing the full report twice.
-  const memoryResolution = await resolveMemoryCoreConfig({ credentialManager: ctx.credentialManager });
   const mcpHealth = await verifyMcpHealth(mcpServerCommand());
 
   const nativeCli: { profileId: string; contractOk: boolean; contractDetail: string; mcpRegistered: boolean }[] = [];

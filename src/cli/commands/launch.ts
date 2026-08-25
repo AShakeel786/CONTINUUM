@@ -48,11 +48,15 @@ import { nativeSessionFile, readClaudeTurns, readClaudeUsage } from "../../cost/
  * launch already enforces auth via prepareLaunch. Failure-tolerant: a broken
  * preflight must never block a launch.
  */
-export async function runLaunchPreflight(): Promise<readonly string[]> {
+export async function runLaunchPreflight(memoryCoreConfigured = DEFAULT_OPTIONS.tencentConfigured): Promise<readonly string[]> {
   try {
     const doctor = new HealthDoctor({
       runtime: liveRuntime,
-      options: { ...DEFAULT_OPTIONS, stateFile: join(resolveDataDir(), "health-state.json") },
+      options: {
+        ...DEFAULT_OPTIONS,
+        stateFile: join(resolveDataDir(), "health-state.json"),
+        tencentConfigured: memoryCoreConfigured,
+      },
       policy: { ...DEFAULT_POLICY },
       probes: {
         staleProcesses: async () => scanStaleProviderProcesses([...DEFAULT_OPTIONS.providerExecutables]),
@@ -132,13 +136,23 @@ export async function checkPricing(
  * CONTINUUM session. Never throws — a failed capture just means the next
  * resume falls back to the resume brief.
  */
-async function recordNativeSessionAfterLaunch(launcher: Launcher, prep: LaunchPreparation, startedAtMs: number): Promise<void> {
-  if (!prep.session) return;
+export function needsNativeSessionCapture(launcher: Launcher, prep: LaunchPreparation): boolean {
+  // A resume already has the authoritative provider-native id. Scanning the
+  // store again can select an unrelated concurrently-created conversation and
+  // corrupt the logical session's bridge.
+  return !!prep.session && !prep.nativeResume && !launcher.supportsDeterministicSessionId(prep.providerRef.providerId);
+}
+
+async function recordNativeSessionAfterLaunch(launcher: Launcher, prep: LaunchPreparation, startedAtMs: number): Promise<boolean> {
+  if (!prep.session) return true;
+  if (prep.nativeResume) return true;
   // Deterministic providers (Claude/DeepSeek) already recorded their id in
   // prepareLaunch — no store-scan needed (and it could pick the wrong file).
-  if (launcher.supportsDeterministicSessionId(prep.providerRef.providerId)) return;
+  if (launcher.supportsDeterministicSessionId(prep.providerRef.providerId)) return true;
   const id = await launcher.captureNativeSessionId(prep.providerRef.providerId, startedAtMs);
-  if (id) await launcher.recordNativeSessionId(prep.session.sessionId, prep.providerRef.providerId, id);
+  if (!id) return false;
+  await launcher.recordNativeSessionId(prep.session.sessionId, prep.providerRef.providerId, id);
+  return true;
 }
 
 /**
@@ -223,8 +237,22 @@ export async function launchPrepared(ctx: { launcher: Launcher; providers: Provi
     }
   }
   let rolloverWarned = false;
+  // Codex cannot be assigned a native session id up front. Capture it while
+  // the child is alive so a closed terminal or killed parent does not leave
+  // the logical session without a native conversation to resume.
+  let nativeSessionCaptured = !needsNativeSessionCapture(ctx.launcher, prep);
+  let nativeCaptureInFlight: Promise<void> | undefined;
+  const captureNativeSession = async (): Promise<void> => {
+    if (nativeSessionCaptured) return;
+    if (nativeCaptureInFlight) return nativeCaptureInFlight;
+    nativeCaptureInFlight = (async () => {
+      nativeSessionCaptured = await recordNativeSessionAfterLaunch(ctx.launcher, prep, startedAt);
+    })().finally(() => { nativeCaptureInFlight = undefined; });
+    return nativeCaptureInFlight;
+  };
   const monitor = setInterval(async () => {
     try {
+      await captureNativeSession();
       const peak = ctx.pricing?.status(prep.providerRef.providerId);
       if (peak?.tier === "peak") {
         const end = peak.endsAt ? new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(peak.endsAt) : "unknown";
@@ -258,10 +286,14 @@ export async function launchPrepared(ctx: { launcher: Launcher; providers: Provi
     } catch { /* advisory monitor */ }
   }, 5_000);
   monitor.unref();
-  const result = await spawnFn(prep.plan);
+  const spawned = spawnFn(prep.plan);
+  // Native stores are often created during spawn. Catch that fast path now;
+  // the monitor retries when provider initialization takes longer.
+  await captureNativeSession();
+  const result = await spawned;
   clearInterval(monitor);
   if (lastPeak) process.stderr.write("\u001b]0;CONTINUUM\u0007");
-  await recordNativeSessionAfterLaunch(ctx.launcher, prep, startedAt);
+  await captureNativeSession();
   if (prep.session && prep.providerRef.providerId === "deepseek") {
     try {
       const launch = ctx.providers.get(prep.providerRef.providerId).resolveCliLaunch(prep.route);
@@ -298,7 +330,7 @@ export async function ensureMcpRegistration(): Promise<void> {
 export async function runLaunchCommand(args: readonly string[], io: CliIo): Promise<number> {
   const out = io.out ?? noopOutput();
   const prompt = createPrompt();
-  const { launcher, pricing, handoffManager, providers, sessionManager, dataDir } = await buildLauncherContext({
+  const { launcher, pricing, handoffManager, providers, sessionManager, dataDir, memoryCoreConfigured } = await buildLauncherContext({
     prompt,
     onDependencyProgress: (line) => out(`ℹ️  ${line}\n`),
   });
@@ -324,7 +356,7 @@ export async function runLaunchCommand(args: readonly string[], io: CliIo): Prom
   try {
     // Preflight: surface stack problems BEFORE the interactive session starts.
     // Never blocks launch — degraded mode is a launcher feature, not an error.
-    for (const warning of await runLaunchPreflight()) out(`⚠️  ${warning}\n`);
+    for (const warning of await runLaunchPreflight(memoryCoreConfigured)) out(`⚠️  ${warning}\n`);
 
     const prep = await launcher.prepareLaunch(
       { ...(mode ? {} : projectKey ? { projectKey } : {}), ...(mode ? { mode } : {}), providerId, modelAlias, taskGoal },
