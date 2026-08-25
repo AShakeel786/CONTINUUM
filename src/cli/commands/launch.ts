@@ -11,6 +11,7 @@
 
 import { createPrompt, noopOutput } from "../../auth/prompt.js";
 import { spawnCli } from "../../launcher/spawn.js";
+import { classifyCliFailure } from "../../launcher/cli-failure.js";
 import { LocalDependencyUnavailableError, NoAuthenticatedAgentError, NoProjectError, ProviderNotAuthenticatedError } from "../../launcher/errors.js";
 import { listRecentSessions } from "../../launcher/session-list.js";
 import { suggestHandoffOnPeakEvent } from "../../pricing/handoff-suggestion.js";
@@ -202,20 +203,26 @@ async function nextAutomaticFallback(
   return undefined;
 }
 
+/** Retained stderr tail (bytes) for auto-routed CLI failure classification. */
+const AUTO_ROUTE_STDERR_TAIL_BYTES = 8192;
+
 /**
  * Carry a prepared launch: API providers run the generic CONTINUUM API agent;
  * CLI providers spawn their native binary (with native-session capture).
  *
  * Automatic-routing fallback: when the launch was selected by the provider-
- * preference chain (`prep.autoRoute`) and its API agent fails at runtime
- * (rate-limit/auth/network/server errors — any `ApiAgentError`), the launch
- * falls back to the next usable chain member instead of breaking. Explicit
- * provider/model selections never fall back — they keep the original
- * fail-fast behavior. Local (non-`ApiAgentError`) failures never fall back
- * either. Bounded by the finite chain; the re-prepared launch carries no
- * `autoRoute`, so a fallback can itself never cascade.
+ * preference chain (`prep.autoRoute`) and it fails at RUNTIME, the launch
+ * falls back to the next usable chain member instead of breaking. On the API
+ * harness any typed `ApiAgentError` qualifies (rate-limit/auth/network/server).
+ * On the CLI harness the child's exit code plus a bounded sanitized stderr
+ * tail are classified generically (see launcher/cli-failure.ts): provider-
+ * side failures (rate-limit/upstream/network/auth) fall back; user interrupts,
+ * ordinary task failures, permission denials and anything unattributable do
+ * not. Explicit provider/model selections never fall back — they keep the
+ * original fail-fast behavior. Bounded by the finite chain; the re-prepared
+ * launch carries no `autoRoute`, so a fallback can itself never cascade.
  */
-export async function launchPrepared(ctx: { launcher: Launcher; providers: ProviderRegistry; sessionManager: SessionManager; pricing?: PricingAwarenessService; dataDir: string }, prep: LaunchPreparation, out: (s: string) => void, spawnFn: (plan: import("../../launcher/types.js").LaunchPlan) => Promise<{ exitCode: number | null }> = spawnCli): Promise<number> {
+export async function launchPrepared(ctx: { launcher: Launcher; providers: ProviderRegistry; sessionManager: SessionManager; pricing?: PricingAwarenessService; dataDir: string }, prep: LaunchPreparation, out: (s: string) => void, spawnFn: (plan: import("../../launcher/types.js").LaunchPlan) => Promise<{ exitCode: number | null; stderrTail?: string }> = spawnCli): Promise<number> {
   if (prep.runtimeKind === "api") {
     let current = prep;
     for (;;) {
@@ -345,7 +352,14 @@ export async function launchPrepared(ctx: { launcher: Launcher; providers: Provi
     } catch { /* advisory monitor */ }
   }, 5_000);
   monitor.unref();
-  const spawned = spawnFn(prep.plan);
+  // Auto-routed CLI launches opt into bounded stderr capture so a runtime
+  // provider failure can be classified and routed to the next chain member;
+  // explicit-provider launches spawn with plain inherited stdio.
+  const cliPlan =
+    prep.autoRoute && prep.session
+      ? { ...prep.plan, stderrTailBytes: AUTO_ROUTE_STDERR_TAIL_BYTES }
+      : prep.plan;
+  const spawned = spawnFn(cliPlan);
   // Native stores are often created during spawn. Catch that fast path now;
   // the monitor retries when provider initialization takes longer.
   await captureNativeSession();
@@ -372,6 +386,40 @@ export async function launchPrepared(ctx: { launcher: Launcher; providers: Provi
         }
       }
     } catch { /* telemetry must not break launch */ }
+  }
+  // Automatic-routing runtime fallback (CLI harness): classify the failed
+  // child's exit code plus bounded sanitized stderr tail and, only for a
+  // provider-side failure (rate-limit/upstream/network/auth), continue on the
+  // next usable chain member — the same semantics the API-agent branch above
+  // applies to any ApiAgentError. User interrupts, ordinary task failures,
+  // permission denials and unattributable exits surface normally.
+  if (
+    prep.autoRoute && prep.session &&
+    result.exitCode !== null && result.exitCode !== 0
+  ) {
+    const classification = classifyCliFailure(result.exitCode, result.stderrTail);
+    const fallback = classification.fallbackEligible
+      ? await nextAutomaticFallback(ctx, prep)
+      : undefined;
+    if (!fallback) return result.exitCode;
+    const failedAdapter = ctx.providers.get(prep.providerRef.providerId);
+    const fallbackAdapter = ctx.providers.get(fallback);
+    out(`ℹ️  ${failedAdapter.profile.displayName} unavailable (${classification.kind}) — falling back to ${fallbackAdapter.profile.displayName} (automatic routing).\n`);
+    let next: LaunchPreparation;
+    try {
+      next = await ctx.launcher.prepareLaunch(
+        { sessionId: prep.session.sessionId, providerId: fallback },
+        { autoFallbackFrom: prep.providerRef.providerId },
+      );
+    } catch (prepareErr) {
+      out(`✗ Automatic fallback to ${fallbackAdapter.profile.displayName} failed: ${prepareErr instanceof Error ? prepareErr.message : String(prepareErr)}\n`);
+      return result.exitCode;
+    }
+    out(`Model decision: ${next.providerRef.model} — ${next.modelDecision.reason}\n`);
+    if (ctx.pricing) await recordLaunchDecisions(next, ctx.dataDir, ctx.pricing).catch(() => {});
+    // Bounded: `next` is prepared from an existing session (resume path), so
+    // it carries no `autoRoute` and this cannot cascade.
+    return launchPrepared(ctx, next, out, spawnFn);
   }
   return result.exitCode ?? 0;
 }

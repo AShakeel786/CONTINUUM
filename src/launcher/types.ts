@@ -24,6 +24,14 @@ export interface LaunchPlan {
   readonly configDir?: string;
   /** Safe-by-default: true means the launch requires explicit opt-in bypass. */
   readonly bypassPermissions: boolean;
+  /**
+   * When set, spawn tees the child's stderr to the terminal AND retains the
+   * last N bytes in memory so an auto-routed launch can classify a runtime
+   * provider failure and fall back (see launcher/cli-failure.ts). Absent →
+   * stdio fully inherited, nothing captured — explicit-provider launches
+   * never set this.
+   */
+  readonly stderrTailBytes?: number;
 }
 
 /** Which runtime carries a launch: the provider's native CLI, or CONTINUUM's generic API agent. */

@@ -274,3 +274,205 @@ describe("launchPrepared automatic-routing fallback", () => {
     expect(mockedRun.mock.calls[1]![0].adapter.profile.id).toBe("api-b");
   });
 });
+
+// ── CLI-harness automatic-routing fallback (runtime provider failure) ──────
+
+const OX_429_TAIL = "API Error: Request rejected (429) · Provider returned error";
+
+describe("launchPrepared CLI-harness automatic-routing fallback", () => {
+  beforeEach(() => {
+    process.env[MEMORY_CORE_ENV_ONLY_ENV] = "1";
+    mockedRun.mockReset();
+  });
+
+  function spawnScripted(scripts: Array<{ exitCode: number | null; stderrTail?: string }>) {
+    const plans: LaunchPlan[] = [];
+    const spawnFn = async (plan: LaunchPlan) => {
+      plans.push(plan);
+      return scripts.shift() ?? { exitCode: 0 };
+    };
+    return { plans, spawnFn };
+  }
+
+  it("auto-routed Ox CLI 429 falls back to DeepSeek via its own CLI harness", async () => {
+    const { deps, registry, sessionManager, dataDir } = await buildFallbackDeps({ oxUsable: true, deepseekUsable: true });
+    const project = await registry.add({ name: `cf-${Math.random().toString(36).slice(2, 8)}`, path: "/work/cf" });
+    const launcher = new Launcher(deps);
+    const launchPrep = await launcher.prepareLaunch({ projectKey: project.id, taskGoal: "do it" }, { permissionMode: "safe" });
+    expect(launchPrep.providerRef.providerId).toBe("ox-alpha");
+    expect(launchPrep.autoRoute?.index).toBe(0);
+    expect(launchPrep.runtimeKind).toBe("cli");
+    const sessionId = launchPrep.session!.sessionId;
+    // The deterministic native id is recorded into the session store during
+    // prepareLaunch; the returned snapshot predates that write.
+    const oxNativeId = (await sessionManager.loadSession(sessionId)).nativeSessionIds?.["ox-alpha"];
+    expect(oxNativeId).toBeTruthy();
+
+    const { plans, spawnFn } = spawnScripted([{ exitCode: 1, stderrTail: OX_429_TAIL }]);
+    const { out, lines } = collectOut();
+    const exit = await launchPrepared({ launcher, providers: deps.providers, sessionManager, dataDir }, launchPrep, out, spawnFn);
+
+    expect(exit).toBe(0);
+    expect(plans.length).toBe(2);
+    expect(plans[0]!.providerId).toBe("ox-alpha");
+    // The failed attempt requested bounded stderr capture; the fallback did not need to.
+    expect(plans[0]!.stderrTailBytes).toBeTruthy();
+    expect(plans[1]!.providerId).toBe("deepseek");
+    expect(plans[1]!.env.ANTHROPIC_BASE_URL).toBe("https://api.deepseek.com/anthropic");
+    expect(lines.join("\n")).toContain("falling back to DeepSeek");
+
+    // Session/handoff semantics: provider transition recorded, native id intact.
+    const session = await sessionManager.loadSession(sessionId);
+    expect(session.activeProvider.providerId).toBe("deepseek");
+    expect(session.lastHandoff?.fromProvider.providerId).toBe("ox-alpha");
+    expect(session.nativeSessionIds?.["ox-alpha"]).toBe(oxNativeId);
+  });
+
+  it("auto-routed CLI upstream-provider failure (5xx) also falls back", async () => {
+    const { deps, registry, sessionManager, dataDir } = await buildFallbackDeps({ oxUsable: true, deepseekUsable: true });
+    const project = await registry.add({ name: `cf-${Math.random().toString(36).slice(2, 8)}`, path: "/work/cf" });
+    const launcher = new Launcher(deps);
+    const launchPrep = await launcher.prepareLaunch({ projectKey: project.id, taskGoal: "do it" }, { permissionMode: "safe" });
+
+    const { plans, spawnFn } = spawnScripted([{ exitCode: 1, stderrTail: "API Error: 502 Bad Gateway" }]);
+    const { out, lines } = collectOut();
+    const exit = await launchPrepared({ launcher, providers: deps.providers, sessionManager, dataDir }, launchPrep, out, spawnFn);
+
+    expect(exit).toBe(0);
+    expect(plans.length).toBe(2);
+    expect(plans[1]!.providerId).toBe("deepseek");
+    expect(lines.join("\n")).toContain("falling back");
+  });
+
+  it("an explicit Ox CLI failure never switches providers silently", async () => {
+    const { deps, registry, sessionManager, dataDir } = await buildFallbackDeps({ oxUsable: true, deepseekUsable: true });
+    const project = await registry.add({ name: `cf-${Math.random().toString(36).slice(2, 8)}`, path: "/work/cf" });
+    const launcher = new Launcher(deps);
+    const launchPrep = await launcher.prepareLaunch({ projectKey: project.id, providerId: "ox-alpha", taskGoal: "do it" }, { permissionMode: "safe" });
+    expect(launchPrep.autoRoute).toBeUndefined();
+
+    const { plans, spawnFn } = spawnScripted([{ exitCode: 1, stderrTail: OX_429_TAIL }]);
+    const { out, lines } = collectOut();
+    const exit = await launchPrepared({ launcher, providers: deps.providers, sessionManager, dataDir }, launchPrep, out, spawnFn);
+
+    expect(exit).toBe(1);
+    expect(plans.length).toBe(1);
+    expect(lines.join("\n")).not.toContain("falling back");
+  });
+
+  it("a user interrupt never falls back", async () => {
+    const { deps, registry, sessionManager, dataDir } = await buildFallbackDeps({ oxUsable: true, deepseekUsable: true });
+    const project = await registry.add({ name: `cf-${Math.random().toString(36).slice(2, 8)}`, path: "/work/cf" });
+    const launcher = new Launcher(deps);
+    const launchPrep = await launcher.prepareLaunch({ projectKey: project.id, taskGoal: "do it" }, { permissionMode: "safe" });
+
+    for (const result of [{ exitCode: 130, stderrTail: "" as string }, { exitCode: null }, { exitCode: 1, stderrTail: "Interrupted by user" }]) {
+      const { plans, spawnFn } = spawnScripted([result]);
+      const lines: string[] = [];
+      const exit = await launchPrepared({ launcher, providers: deps.providers, sessionManager, dataDir }, launchPrep, (s) => lines.push(s), spawnFn);
+      expect(exit).toBe(result.exitCode ?? 0);
+      expect(plans.length).toBe(1);
+      expect(lines.join("\n")).not.toContain("falling back");
+    }
+  });
+
+  it("an ordinary task/local CLI failure never falls back", async () => {
+    const { deps, registry, sessionManager, dataDir } = await buildFallbackDeps({ oxUsable: true, deepseekUsable: true });
+    const project = await registry.add({ name: `cf-${Math.random().toString(36).slice(2, 8)}`, path: "/work/cf" });
+    const launcher = new Launcher(deps);
+    const launchPrep = await launcher.prepareLaunch({ projectKey: project.id, taskGoal: "do it" }, { permissionMode: "safe" });
+
+    for (const stderr of ["✗ Tests failed: 3 failing, 12 passing", "Error: ENOENT: no such file or directory", "Permission denied: /etc/hosts", "fatal: unable to push to upstream branch of 'origin'"]) {
+      const { plans, spawnFn } = spawnScripted([{ exitCode: 1, stderrTail: stderr }]);
+      const lines: string[] = [];
+      const exit = await launchPrepared({ launcher, providers: deps.providers, sessionManager, dataDir }, launchPrep, (s) => lines.push(s), spawnFn);
+      expect(exit).toBe(1);
+      expect(plans.length).toBe(1);
+      expect(lines.join("\n")).not.toContain("falling back");
+    }
+  });
+
+  it("the fallback chain cannot loop — a failing fallback member is final", async () => {
+    const { deps, registry, sessionManager, dataDir } = await buildFallbackDeps({ oxUsable: true, deepseekUsable: true });
+    const project = await registry.add({ name: `cf-${Math.random().toString(36).slice(2, 8)}`, path: "/work/cf" });
+    const launcher = new Launcher(deps);
+    const launchPrep = await launcher.prepareLaunch({ projectKey: project.id, taskGoal: "do it" }, { permissionMode: "safe" });
+
+    const { plans, spawnFn } = spawnScripted([
+      { exitCode: 1, stderrTail: OX_429_TAIL },
+      { exitCode: 1, stderrTail: OX_429_TAIL },
+    ]);
+    const lines: string[] = [];
+    const exit = await launchPrepared({ launcher, providers: deps.providers, sessionManager, dataDir }, launchPrep, (s) => lines.push(s), spawnFn);
+
+    expect(exit).toBe(1);
+    expect(plans.length).toBe(2); // ox once, deepseek once — no third attempt
+  });
+
+  it("a successful auto-routed CLI launch never touches fallback and captures nothing extra", async () => {
+    const { deps, registry, sessionManager, dataDir } = await buildFallbackDeps({ oxUsable: true, deepseekUsable: true });
+    const project = await registry.add({ name: `cf-${Math.random().toString(36).slice(2, 8)}`, path: "/work/cf" });
+    const launcher = new Launcher(deps);
+    const launchPrep = await launcher.prepareLaunch({ projectKey: project.id, taskGoal: "do it" }, { permissionMode: "safe" });
+
+    const { plans, spawnFn } = spawnScripted([]);
+    const lines: string[] = [];
+    const exit = await launchPrepared({ launcher, providers: deps.providers, sessionManager, dataDir }, launchPrep, (s) => lines.push(s), spawnFn);
+
+    expect(exit).toBe(0);
+    expect(plans.length).toBe(1);
+    expect(plans[0]!.providerId).toBe("ox-alpha");
+    expect(lines.join("\n")).not.toContain("falling back");
+  });
+
+  it("explicit DeepSeek and native Claude CLI failures keep fail-fast behavior", async () => {
+    const { deps, registry, sessionManager, dataDir } = await buildFallbackDeps({ oxUsable: true, deepseekUsable: true });
+    const project = await registry.add({ name: `cf-${Math.random().toString(36).slice(2, 8)}`, path: "/work/cf" });
+    const launcher = new Launcher(deps);
+
+    for (const providerId of ["deepseek", "claude"] as const) {
+      const launchPrep = await launcher.prepareLaunch({ projectKey: project.id, providerId, taskGoal: "do it" }, { permissionMode: "safe" });
+      expect(launchPrep.runtimeKind).toBe("cli");
+      const { plans, spawnFn } = spawnScripted([{ exitCode: 1, stderrTail: OX_429_TAIL }]);
+      const lines: string[] = [];
+      const exit = await launchPrepared({ launcher, providers: deps.providers, sessionManager, dataDir }, launchPrep, (s) => lines.push(s), spawnFn);
+      expect(exit).toBe(1);
+      expect(plans.length).toBe(1);
+      expect(lines.join("\n")).not.toContain("falling back");
+    }
+  });
+
+  it("a CLI failure can fall forward onto an API-harness chain member", async () => {
+    const apiBManifest: ProviderManifest = {
+      schemaVersion: 1,
+      id: "api-b",
+      displayName: "API B",
+      protocol: "openai-compatible",
+      baseUrl: "https://example.com/v1",
+      auth: { kind: "bearer-token", envVar: "B_KEY" },
+      models: { default: "b-model" },
+      capabilities: { cliAvailable: false },
+    };
+    const { deps, registry, sessionManager, dataDir } = await buildFallbackDeps({
+      oxUsable: true,
+      chain: ["ox-alpha", "api-b"],
+      extraManifests: [apiBManifest],
+      extraProfiles: [manifestToProfile(apiBManifest)],
+    });
+    const project = await registry.add({ name: `cf-${Math.random().toString(36).slice(2, 8)}`, path: "/work/cf" });
+    const launcher = new Launcher(deps);
+    const launchPrep = await launcher.prepareLaunch({ projectKey: project.id, taskGoal: "do it" }, { permissionMode: "safe" });
+    expect(launchPrep.runtimeKind).toBe("cli");
+
+    mockedRun.mockResolvedValueOnce({ finalContent: "fallback ok" } as never);
+    const { plans, spawnFn } = spawnScripted([{ exitCode: 1, stderrTail: OX_429_TAIL }]);
+    const lines: string[] = [];
+    const exit = await launchPrepared({ launcher, providers: deps.providers, sessionManager, dataDir }, launchPrep, (s) => lines.push(s), spawnFn);
+
+    expect(exit).toBe(0);
+    expect(plans.length).toBe(1);
+    expect(mockedRun).toHaveBeenCalledTimes(1);
+    expect(mockedRun.mock.calls[0]![0].adapter.profile.id).toBe("api-b");
+    expect(lines.join("\n")).toContain("falling back to API B");
+  });
+});

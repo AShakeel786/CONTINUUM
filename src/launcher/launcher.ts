@@ -126,7 +126,7 @@ export interface LauncherDeps {
   readonly seedConfigDirProjectTrust?: (configDir: string, projectPath: string) => Promise<void>;
 }
 
-export type SpawnFn = (plan: LaunchPlan) => Promise<{ exitCode: number | null }>;
+export type SpawnFn = (plan: LaunchPlan) => Promise<{ exitCode: number | null; stderrTail?: string }>;
 
 const DEFAULT_OUTPUT_RESERVE = 8192;
 const REPO_MAP_BUDGET_TOKENS = 1200;

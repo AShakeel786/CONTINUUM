@@ -14,7 +14,7 @@ import { spawn } from "node:child_process";
 import type { LaunchPlan } from "./types.js";
 import { resolveConfigDir } from "./config-dir.js";
 
-export function spawnCli(plan: LaunchPlan): Promise<{ exitCode: number | null }> {
+export function spawnCli(plan: LaunchPlan): Promise<{ exitCode: number | null; stderrTail?: string }> {
   return new Promise((resolve, reject) => {
     // Clear stale/inherited vars FIRST, then apply the plan's own env on top.
     // `clearEnvVars` exists to strip leftover values inherited from the
@@ -33,14 +33,31 @@ export function spawnCli(plan: LaunchPlan): Promise<{ exitCode: number | null }>
     // line of defense and must never hand a relative path to the CLI.
     if (plan.configDir) env.CLAUDE_CONFIG_DIR = resolveConfigDir(plan.configDir);
 
+    // Bounded stderr capture is opt-in per plan (auto-routed launches only):
+    // stderr is still teed through live so the child's UI is unchanged; only
+    // a bounded tail is retained for failure classification. stdout stays
+    // fully inherited — the provider CLI owns the screen.
+    const captureBytes = plan.stderrTailBytes ?? 0;
+    const capture = captureBytes > 0;
+
     const child = spawn(plan.executable, [...plan.args], {
       cwd: plan.workingDir,
       env,
-      stdio: "inherit",
+      stdio: capture ? ["inherit", "inherit", "pipe"] : "inherit",
     });
 
+    let tail: string | undefined;
+    if (capture && child.stderr) {
+      tail = "";
+      child.stderr.setEncoding("utf8");
+      child.stderr.on("data", (chunk: string) => {
+        process.stderr.write(chunk);
+        tail = (tail + chunk).slice(-captureBytes);
+      });
+    }
+
     child.on("error", reject);
-    child.on("close", (code) => resolve({ exitCode: code }));
+    child.on("close", (code) => resolve(tail !== undefined ? { exitCode: code, stderrTail: tail } : { exitCode: code }));
   });
 }
 
@@ -62,4 +79,4 @@ export function spawnCliCaptured(plan: LaunchPlan): Promise<{ exitCode: number |
 }
 
 /** The default spawn function, injected as the launcher's spawn boundary in tests. */
-export const defaultSpawn: (plan: LaunchPlan) => Promise<{ exitCode: number | null }> = spawnCli;
+export const defaultSpawn: (plan: LaunchPlan) => Promise<{ exitCode: number | null; stderrTail?: string }> = spawnCli;
