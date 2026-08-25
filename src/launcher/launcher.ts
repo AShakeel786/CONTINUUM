@@ -46,7 +46,7 @@ import { allocateBudget } from "../token/budget.js";
 import { renderContextForProvider, renderedSystemToText } from "../rendering/render.js";
 import { buildResumeInstructionsBlock, buildSessionMaintenanceBlock } from "../handoff/resume-block.js";
 import { findRecentNativeSessionId } from "./native-session.js";
-import { ensureConfigDirSettingsFlag, resolveConfigDir } from "./config-dir.js";
+import { ensureConfigDirOnboardingState, ensureConfigDirProjectTrust, ensureConfigDirSettingsFlag, resolveConfigDir } from "./config-dir.js";
 import { mcpServerCommand } from "../mcp/registration.js";
 import { repoMapBlock } from "../repo-map/repo-map.js";
 import { applyReversiblePruning } from "../context/pruning.js";
@@ -120,6 +120,10 @@ export interface LauncherDeps {
    * bypass confirmation inside the provider's isolated config dir.
    */
   readonly seedConfigDirFlag?: (configDir: string, key: string, value: unknown) => Promise<void>;
+  /** Optional Ox-only onboarding-state seeding seam (test override). */
+  readonly seedConfigDirOnboarding?: (configDir: string) => Promise<void>;
+  /** Optional Ox-only workspace-trust seeding seam (test override). */
+  readonly seedConfigDirProjectTrust?: (configDir: string, projectPath: string) => Promise<void>;
 }
 
 export type SpawnFn = (plan: LaunchPlan) => Promise<{ exitCode: number | null }>;
@@ -598,6 +602,16 @@ export class Launcher {
     if (bypassPermissions && plan.configDir) {
       const seedFlag = this.deps.seedConfigDirFlag ?? ensureConfigDirSettingsFlag;
       await seedFlag(plan.configDir, "skipDangerousModePermissionPrompt", true);
+      // Ox uses a fresh CLAUDE_CONFIG_DIR. Claude Code otherwise pauses at
+      // its theme/security onboarding before honoring the bypass flag. Keep
+      // this strictly Ox-scoped; DeepSeek and native Claude retain their
+      // existing config and permission behavior.
+      if (providerId === "ox-alpha") {
+        const seedOnboarding = this.deps.seedConfigDirOnboarding ?? ensureConfigDirOnboardingState;
+        await seedOnboarding(plan.configDir);
+        const seedTrust = this.deps.seedConfigDirProjectTrust ?? ensureConfigDirProjectTrust;
+        await seedTrust(plan.configDir, project.path);
+      }
     }
 
     return {
