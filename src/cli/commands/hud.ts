@@ -35,6 +35,7 @@ import type { LaunchPreparation } from "../../launcher/types.js";
 import type { Launcher } from "../../launcher/launcher.js";
 import type { ProviderRegistry } from "../../providers/registry.js";
 import type { PricingAwarenessService } from "../../pricing/service.js";
+import { formatPromoLabel } from "../../providers/promo.js";
 
 export type HandoffHudState = "ready" | "pending" | "off";
 
@@ -50,6 +51,8 @@ export interface HudData {
   readonly memoryOff: boolean;
   readonly bypass: boolean;
   readonly peak?: { readonly multiplier: number; readonly endsAt?: Date };
+  /** Active temporary/promotional label (e.g. `FREE (until Aug 27)`); absent when the provider has no active promo. */
+  readonly promo?: string;
 }
 
 /** Terminal-title status survives redraws by native Claude UIs. */
@@ -111,6 +114,9 @@ export async function buildHudData(
     memoryOff: !prep.memoryCoreAvailable,
     bypass: prep.plan.bypassPermissions,
     peak: (() => { const s = deps.pricing?.status(prep.providerRef.providerId); return s?.tier === "peak" ? { multiplier: s.multiplier, ...(s.endsAt ? { endsAt: s.endsAt } : {}) } : undefined; })(),
+    promo: deps.providers.has(prep.providerRef.providerId)
+      ? formatPromoLabel(deps.providers.get(prep.providerRef.providerId).profile.promo)
+      : undefined,
   };
 }
 
@@ -151,6 +157,8 @@ function buildSegments(d: HudData): Segment[] {
   }
   segs.push({ text: `handoff ${d.handoff}`, weight: 5 });
   if (d.memoryOff) segs.push({ text: "memory off", weight: 6 });
+  // Lowest priority: dropped first on narrow terminals, after "memory off".
+  if (d.promo) segs.push({ text: d.promo, weight: 7 });
   return segs;
 }
 
@@ -220,6 +228,8 @@ export interface ProviderIdentity {
   readonly model: string;
   readonly client: string;
   readonly route: string;
+  /** Active temporary/promotional label; absent when the provider has no active promo. */
+  readonly promo?: string;
 }
 
 function hostOf(url: string): string {
@@ -239,12 +249,14 @@ function clientNameFor(executable: string): string {
 
 export function buildProviderIdentity(prep: LaunchPreparation, providers: ProviderRegistry): ProviderIdentity {
   const adapter = providers.get(prep.providerRef.providerId);
+  const promo = formatPromoLabel(adapter.profile.promo);
   if (prep.runtimeKind === "api") {
     return {
       provider: adapter.profile.displayName,
       model: prep.providerRef.model,
       client: "CONTINUUM (direct API — no coding-agent CLI)",
       route: `Direct API → ${hostOf(adapter.profile.baseUrl)}`,
+      ...(promo ? { promo } : {}),
     };
   }
   const launch = adapter.resolveCliLaunch(prep.route);
@@ -255,14 +267,21 @@ export function buildProviderIdentity(prep: LaunchPreparation, providers: Provid
       : launch.kind === "redirected"
         ? `Direct → ${hostOf(launch.baseUrl)}`
         : `Proxy → ${hostOf(launch.proxyBaseUrl)}${launch.proxyPathSuffix} (Tencent MemoryProxy)`;
-  return { provider: adapter.profile.displayName, model: prep.providerRef.model, client, route };
+  return { provider: adapter.profile.displayName, model: prep.providerRef.model, client, route, ...(promo ? { promo } : {}) };
 }
 
 const IDENTITY_DISCLAIMER =
   "(Claude Code's own on-screen model/session labels are client branding only — this block is CONTINUUM's authoritative provider/model identity.)";
 
 export function formatProviderIdentity(id: ProviderIdentity): string {
-  return [`Provider: ${id.provider}`, `Model: ${id.model}`, `Client: ${id.client}`, `Route: ${id.route}`, IDENTITY_DISCLAIMER].join("\n");
+  return [
+    `Provider: ${id.provider}`,
+    `Model: ${id.model}`,
+    `Client: ${id.client}`,
+    `Route: ${id.route}`,
+    ...(id.promo ? [`Promo: ${id.promo}`] : []),
+    IDENTITY_DISCLAIMER,
+  ].join("\n");
 }
 
 /** Print the provider-identity block. Never throws — best-effort, like `printHud`. */

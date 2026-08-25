@@ -60,8 +60,8 @@ describe("ProviderRegistry", () => {
     expect(() => registry.getCapabilities("unknown")).toThrowError(UnknownProviderError);
   });
 
-  it("createDefaultProviderRegistry registers exactly Claude + DeepSeek + Codex + Antigravity today", () => {
+  it("createDefaultProviderRegistry registers exactly the bundled providers today", () => {
     const registry = createDefaultProviderRegistry();
-    expect([...registry.listIds()].sort()).toEqual(["antigravity", "claude", "codex", "deepseek"]);
+    expect([...registry.listIds()].sort()).toEqual(["antigravity", "claude", "codex", "deepseek", "ox-alpha"]);
   });
 });

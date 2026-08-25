@@ -184,30 +184,89 @@ function formatApiAgentFailure(providerLabel: string, err: ApiAgentError): strin
 }
 
 /**
+ * Next usable automatic-fallback candidate after a chain-routed provider
+ * failed at runtime: the first usable member AFTER the current chain index.
+ * Usability is re-checked at fallback time (auth may have changed).
+ */
+async function nextAutomaticFallback(
+  ctx: { launcher: Launcher; providers: ProviderRegistry },
+  current: LaunchPreparation,
+): Promise<string | undefined> {
+  const route = current.autoRoute!;
+  for (let i = route.index + 1; i < route.chain.length; i++) {
+    const id = route.chain[i]!;
+    if (!ctx.providers.has(id)) continue;
+    const usable = await ctx.launcher.providerUsability(id);
+    if (usable.usable) return id;
+  }
+  return undefined;
+}
+
+/**
  * Carry a prepared launch: API providers run the generic CONTINUUM API agent;
  * CLI providers spawn their native binary (with native-session capture).
+ *
+ * Automatic-routing fallback: when the launch was selected by the provider-
+ * preference chain (`prep.autoRoute`) and its API agent fails at runtime
+ * (rate-limit/auth/network/server errors — any `ApiAgentError`), the launch
+ * falls back to the next usable chain member instead of breaking. Explicit
+ * provider/model selections never fall back — they keep the original
+ * fail-fast behavior. Local (non-`ApiAgentError`) failures never fall back
+ * either. Bounded by the finite chain; the re-prepared launch carries no
+ * `autoRoute`, so a fallback can itself never cascade.
  */
 export async function launchPrepared(ctx: { launcher: Launcher; providers: ProviderRegistry; sessionManager: SessionManager; pricing?: PricingAwarenessService; dataDir: string }, prep: LaunchPreparation, out: (s: string) => void, spawnFn: (plan: import("../../launcher/types.js").LaunchPlan) => Promise<{ exitCode: number | null }> = spawnCli): Promise<number> {
   if (prep.runtimeKind === "api") {
-    const adapter = ctx.providers.get(prep.providerRef.providerId);
-    const tools = await buildToolRegistry({ dataDir: ctx.dataDir });
-    const cache = new ToolResultCache({}, join(ctx.dataDir, "tool-cache"));
-    const scopeProvider = makeScopeProvider({ projectPath: prep.project.path, sessionManager: ctx.sessionManager });
-    const sessionId = prep.session?.sessionId;
-    const recordToolActivity = sessionId
-      ? (tool: string, summary: string) => ctx.sessionManager.recordToolActivity(sessionId, tool, summary).then(() => undefined)
-      : undefined;
-    try {
-      const result = await runApiAgent({ adapter, tools, rendered: prep.rendered, query: prep.session?.taskGoal ?? "", onOutput: out, cache, scopeProvider, recordToolActivity });
-      if (result.finalContent) out(`\n${result.finalContent}\n`);
-      return 0;
-    } catch (err) {
-      if (err instanceof ApiAgentError) {
-        out(formatApiAgentFailure(adapter.profile.displayName, err));
-        return 1;
+    let current = prep;
+    for (;;) {
+      const adapter = ctx.providers.get(current.providerRef.providerId);
+      const tools = await buildToolRegistry({ dataDir: ctx.dataDir });
+      const cache = new ToolResultCache({}, join(ctx.dataDir, "tool-cache"));
+      const scopeProvider = makeScopeProvider({ projectPath: current.project.path, sessionManager: ctx.sessionManager });
+      const sessionId = current.session?.sessionId;
+      const recordToolActivity = sessionId
+        ? (tool: string, summary: string) => ctx.sessionManager.recordToolActivity(sessionId, tool, summary).then(() => undefined)
+        : undefined;
+      try {
+        // `plan.env` carries the provider's resolved auth env (sourced from
+        // the credential store by prepareLaunch) — hand it to the in-process
+        // runner so its auth headers resolve without touching process.env.
+        const result = await runApiAgent({ adapter, tools, rendered: current.rendered, query: current.session?.taskGoal ?? "", onOutput: out, cache, scopeProvider, recordToolActivity, env: current.plan.env });
+        if (result.finalContent) out(`\n${result.finalContent}\n`);
+        return 0;
+      } catch (err) {
+        if (!(err instanceof ApiAgentError)) {
+          out(`API agent error: ${err instanceof Error ? err.message : String(err)}\n`);
+          return 1;
+        }
+        const fallback = current.autoRoute && current.session ? await nextAutomaticFallback(ctx, current) : undefined;
+        if (!fallback) {
+          out(formatApiAgentFailure(adapter.profile.displayName, err));
+          return 1;
+        }
+        const fallbackAdapter = ctx.providers.get(fallback);
+        out(`ℹ️  ${adapter.profile.displayName} unavailable (${err.kind ?? "API error"}) — falling back to ${fallbackAdapter.profile.displayName} (automatic routing).\n`);
+        let next: LaunchPreparation;
+        try {
+          next = await ctx.launcher.prepareLaunch(
+            { sessionId: current.session!.sessionId, providerId: fallback },
+            { autoFallbackFrom: current.providerRef.providerId },
+          );
+        } catch (prepareErr) {
+          out(`✗ Automatic fallback to ${fallbackAdapter.profile.displayName} failed: ${prepareErr instanceof Error ? prepareErr.message : String(prepareErr)}\n`);
+          return 1;
+        }
+        out(`Model decision: ${next.providerRef.model} — ${next.modelDecision.reason}\n`);
+        if (ctx.pricing) await recordLaunchDecisions(next, ctx.dataDir, ctx.pricing).catch(() => {});
+        if (next.runtimeKind === "api") {
+          current = next; // the fallback itself is an API provider — keep looping
+          continue;
+        }
+        // The fallback provider runs through its native CLI — re-enter the
+        // dispatch so it takes the CLI path below. Bounded: the re-prepared
+        // launch has no `autoRoute`, so it cannot fall back again.
+        return launchPrepared(ctx, next, out, spawnFn);
       }
-      out(`API agent error: ${err instanceof Error ? err.message : String(err)}\n`);
-      return 1;
     }
   }
   const startedAt = Date.now();

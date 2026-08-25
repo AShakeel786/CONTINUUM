@@ -81,6 +81,24 @@ export interface ModelMapping {
   readonly aliases?: Readonly<Record<string, string>>;
 }
 
+// ── Promotional availability ────────────────────────────────────────────
+
+/**
+ * A temporary/limited-time promotional state (e.g. "free preview").
+ * `until` is OPTIONAL and only ever carries an authoritative end timestamp
+ * from the upstream source — when the exact end date is unknown it is
+ * omitted rather than guessed, and the promo reads as "limited time".
+ * Automatic preference routing never depends on a guessed date: it follows
+ * current provider usability (plus `until`, only when one was authoritatively
+ * declared). An expired promo is no longer advertised or auto-preferred, but
+ * the provider remains explicitly selectable (it may simply become paid).
+ */
+export interface PromoInfo {
+  /** Authoritative end timestamp (ISO) — optional; omit when the exact end date is not known. */
+  readonly until?: string;
+  readonly note: string;
+}
+
 // ── Capabilities ─────────────────────────────────────────────────────
 
 export type ThinkingSupport = "none" | "supported" | "extended";
@@ -461,6 +479,8 @@ export interface ProviderProfile {
    * with a single launch path. Selected at runtime via `route: "proxy"`.
    */
   readonly proxyCliLaunch?: ProxyRoutedCliLaunch;
+  /** Optional temporary/promotional state (e.g. limited-time free). See `PromoInfo`. */
+  readonly promo?: PromoInfo;
 }
 
 // ── CLI launch adapter ──────────────────────────────────────────────────
@@ -574,9 +594,12 @@ export interface ProviderAdapter {
    * Build auth headers for a DIRECT API call to this provider (used by a
    * native LLMRunner-style caller, not by CLI launching). Resolves secrets
    * internally — the returned headers are the only place a real credential
-   * value should ever end up, and only in memory, never logged.
+   * value should ever end up, and only in memory, never logged. `env`
+   * overrides `process.env` as the secret-resolution source (the launcher
+   * passes the launch plan's resolved env so a credential from the OS store
+   * reaches the in-process API runner).
    */
-  buildAuthHeaders(): Readonly<Record<string, string>>;
+  buildAuthHeaders(env?: Readonly<Record<string, string | undefined>>): Readonly<Record<string, string>>;
 
   /** Build a launch plan for routing a coding-agent CLI through this provider. */
   buildCliLaunchPlan(ctx: CliLaunchContext): CliLaunchPlan;

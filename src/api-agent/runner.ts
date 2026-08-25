@@ -52,6 +52,13 @@ export interface RunnerDeps {
   readonly maxAttempts?: number;
   /** Fired before each retry backoff — the single hook for stateful "retrying" UX. */
   readonly onRetry?: (info: RetryInfo) => void;
+  /**
+   * Secret-resolution source for auth headers (defaults to `process.env`).
+   * The launcher passes the launch plan's resolved env so a credential from
+   * the OS store reaches this in-process runner — without mutating
+   * `process.env` globally.
+   */
+  readonly env?: Readonly<Record<string, string | undefined>>;
 }
 
 const DEFAULT_TIMEOUT_MS = 60_000;
@@ -203,13 +210,14 @@ export function createApiRunner(adapter: ProviderAdapter, deps: RunnerDeps = {})
   const sleep = deps.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
   const maxAttempts = deps.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
   const retry = { sleep, maxAttempts, onRetry: deps.onRetry };
+  const env = deps.env ?? process.env;
   const protocol = adapter.getCapabilities().protocol;
   const baseUrl = adapter.profile.baseUrl.replace(/\/+$/, "");
   const model = adapter.resolveModel();
 
   async function call(messages: readonly AgentMessage[], tools: readonly ToolDefinition[]): Promise<AgentTurnResult> {
-    if (protocol === "openai-compatible") return openAiCall(fetchImpl, retry, adapter, baseUrl, model, messages, tools);
-    if (protocol === "anthropic-messages") return anthropicCall(fetchImpl, retry, adapter, baseUrl, model, messages, tools);
+    if (protocol === "openai-compatible") return openAiCall(fetchImpl, retry, adapter, baseUrl, model, messages, tools, env);
+    if (protocol === "anthropic-messages") return anthropicCall(fetchImpl, retry, adapter, baseUrl, model, messages, tools, env);
     throw new ApiAgentError(`unsupported protocol: ${protocol}`);
   }
 
@@ -226,6 +234,7 @@ async function openAiCall(
   model: string,
   messages: readonly AgentMessage[],
   tools: readonly ToolDefinition[],
+  env: Readonly<Record<string, string | undefined>>,
 ): Promise<AgentTurnResult> {
   const wire = messages.map((m) => {
     switch (m.role) {
@@ -250,7 +259,7 @@ async function openAiCall(
     ...(tools.length ? { tools: toOpenAiTools(tools), tool_choice: "auto" } : {}),
   });
 
-  const headers = { "content-type": "application/json", ...adapter.buildAuthHeaders() };
+  const headers = { "content-type": "application/json", ...adapter.buildAuthHeaders(env) };
   const res = await callWithRetry(fetchImpl, `${baseUrl}/chat/completions`, { method: "POST", headers, body }, retry);
 
   const parsed = JSON.parse(res.body) as {
@@ -270,6 +279,7 @@ async function anthropicCall(
   model: string,
   messages: readonly AgentMessage[],
   tools: readonly ToolDefinition[],
+  env: Readonly<Record<string, string | undefined>>,
 ): Promise<AgentTurnResult> {
   // Anthropic has no system role in `messages`; system is a separate field.
   const systemParts = messages.filter((m) => m.role === "system").map((m) => (m as { content: string }).content);
@@ -301,7 +311,7 @@ async function anthropicCall(
     ...(tools.length ? { tools: toAnthropicTools(tools) } : {}),
   });
 
-  const headers = { "content-type": "application/json", "anthropic-version": "2023-06-01", ...adapter.buildAuthHeaders() };
+  const headers = { "content-type": "application/json", "anthropic-version": "2023-06-01", ...adapter.buildAuthHeaders(env) };
   const res = await callWithRetry(fetchImpl, `${baseUrl}/v1/messages`, { method: "POST", headers, body }, retry);
 
   const parsed = JSON.parse(res.body) as {

@@ -34,6 +34,7 @@ import { UnknownProviderError } from "../providers/errors.js";
 import { availabilityOf, evaluateProvider, type LaunchKind, type ProviderAvailability, type ProviderUsability } from "../launcher/usability.js";
 import { InvalidCredentialError } from "../auth/errors.js";
 import { AgentValidationError } from "./errors.js";
+import { formatPromoLabel } from "../providers/promo.js";
 
 export type { ProviderUsability };
 
@@ -60,6 +61,8 @@ export interface AgentDescriptor {
   readonly availability: ProviderAvailability;
   readonly usable: boolean;
   readonly reason?: string;
+  /** Active temporary/promotional label (e.g. `FREE (until Aug 27)`); absent when no active promo. */
+  readonly promo?: string;
 }
 
 export interface CustomAgentInput {
@@ -340,6 +343,7 @@ export class AgentManager {
         availability: availabilityOf(evaluation),
         usable: evaluation.usable,
         reason: evaluation.reason,
+        promo: formatPromoLabel(adapter.profile.promo),
       });
     }
     return out;

@@ -30,6 +30,8 @@ import type { ProviderRegistry } from "../providers/registry.js";
 import type { LaunchRoute, ProviderAdapter, ProviderProfile } from "../providers/types.js";
 import type { DiscoveredModel } from "../providers/model-discovery.js";
 import { discoverModelsFor } from "../providers/model-discovery.js";
+import { isPromoActive } from "../providers/promo.js";
+import { DEFAULT_PROVIDER_PREFERENCE_CHAIN } from "../providers/presets.js";
 import type { CredentialManager } from "../auth/credential-manager.js";
 import type { CliAuthManager } from "../auth/cli-auth-manager.js";
 import type { AuthVerifier } from "../auth/auth-verifier.js";
@@ -100,6 +102,13 @@ export interface LauncherDeps {
    * mechanism. A failure degrades to manifest models, never errors.
    */
   readonly discoverModels?: (profile: ProviderProfile) => Promise<readonly DiscoveredModel[]>;
+  /**
+   * Automatic provider-preference chain (overridable in tests). When a launch
+   * carries no explicit provider/model selection, the launcher walks this
+   * list and picks the first usable member. Defaults to the bundled
+   * `DEFAULT_PROVIDER_PREFERENCE_CHAIN` (Ox Alpha Free → DeepSeek).
+   */
+  readonly preferredProviderChain?: readonly string[];
 }
 
 export type SpawnFn = (plan: LaunchPlan) => Promise<{ exitCode: number | null }>;
@@ -215,6 +224,30 @@ export class Launcher {
       existingSession?.activeProvider.providerId ??
       project.defaultProvider;
 
+    // Automatic provider-preference chain (Ox Alpha Free → DeepSeek).
+    // Consulted ONLY when nothing explicit selected the provider: no
+    // `--provider`, no resumed session (its active provider is explicit
+    // state), no explicit model selection (`--model` / project defaultModel),
+    // and the would-be automatic candidate is undefined or itself a chain
+    // member (so a DeepSeek-default project upgrades to Ox while the promo
+    // is active; non-chain defaults like Claude are never touched). An
+    // explicit user/provider/model selection always overrides this chain.
+    let autoRoute: { chain: readonly string[]; index: number } | undefined;
+    const preferredChain = this.preferredChain;
+    if (
+      !target.providerId &&
+      !existingSession &&
+      target.modelAlias === undefined &&
+      project.defaultModel === undefined &&
+      (providerId === undefined || preferredChain.includes(providerId))
+    ) {
+      const picked = await this.pickPreferredProvider();
+      if (picked) {
+        providerId = picked.providerId;
+        autoRoute = { chain: preferredChain, index: picked.index };
+      }
+    }
+
     // First-launch with no explicit provider and no default: prompt from the
     // *configured + authenticated* providers (never auto-select).
     if (!providerId && !existingSession) {
@@ -305,12 +338,30 @@ export class Launcher {
     const providerRef: ProviderRef = { providerId, model };
     const modelDecision = {
       automatic: requestedModel === undefined,
-      reason:
-        requestedModel !== undefined
-          ? `explicit ${target.modelAlias ? "user" : project.defaultModel ? "project" : "session"} model selection: ${requestedModel}`
-          : providerId === "deepseek"
-            ? "automatic-default-flash: no explicit user/project/session model preference"
-            : "provider default",
+      reason: ((): string => {
+        if (requestedModel !== undefined) {
+          return `explicit ${target.modelAlias ? "user" : project.defaultModel ? "project" : "session"} model selection: ${requestedModel}`;
+        }
+        if (opts.autoFallbackFrom) {
+          return `automatic-fallback: ${opts.autoFallbackFrom} → ${providerId}`;
+        }
+        if (autoRoute) {
+          // Chain kept the would-be automatic candidate — preserve the exact
+          // existing reason strings (asserted by deepseek-routing tests).
+          if (providerId === project.defaultProvider) {
+            return providerId === "deepseek"
+              ? "automatic-default-flash: no explicit user/project/session model preference"
+              : "provider default";
+          }
+          const promoNote = providerId === "ox-alpha" ? " (limited-time free promo)" : "";
+          return project.defaultProvider
+            ? `automatic-preference: ${project.defaultProvider} default → ${providerId}${promoNote}`
+            : `automatic-preference: no default provider → ${providerId}${promoNote}`;
+        }
+        return providerId === "deepseek"
+          ? "automatic-default-flash: no explicit user/project/session model preference"
+          : "provider default";
+      })(),
     };
 
     // Session identity: resume an existing session, or create a new one.
@@ -523,6 +574,7 @@ export class Launcher {
       contextTokensUsed: budget.inputTokensAfter.tokens,
       route,
       modelDecision,
+      ...(autoRoute ? { autoRoute } : {}),
       ...(modelNote ? { modelNote } : {}),
       ...(permissionNote ? { permissionNote } : {}),
       ...(rollover ? { rollover } : {}),
@@ -667,6 +719,45 @@ export class Launcher {
       createdAt: timestamp,
       updatedAt: timestamp,
     };
+  }
+
+  private get preferredChain(): readonly string[] {
+    return this.deps.preferredProviderChain ?? DEFAULT_PROVIDER_PREFERENCE_CHAIN;
+  }
+
+  /**
+   * Walk the automatic provider-preference chain and return the first
+   * registered, promo-active, usable member — or undefined, in which case the
+   * caller keeps today's prompt/error behavior. Unregistered ids are skipped
+   * (test registries keep working), as are providers whose promo has expired
+   * (an expired promo is no longer auto-preferred, only explicitly selectable).
+   */
+  private async pickPreferredProvider(): Promise<{ providerId: string; index: number } | undefined> {
+    const chain = this.preferredChain;
+    for (let i = 0; i < chain.length; i++) {
+      const id = chain[i]!;
+      if (!this.deps.providers.has(id)) continue;
+      const adapter = this.deps.providers.get(id);
+      const promo = adapter.profile.promo;
+      if (promo && !isPromoActive(promo)) continue;
+      const metadata = this.deps.authMetadata.get(id);
+      if (!metadata) continue;
+      const usable = await this.isProviderUsable(adapter, metadata);
+      if (usable.usable) return { providerId: id, index: i };
+    }
+    return undefined;
+  }
+
+  /**
+   * Public usability probe for a single provider — the seam `launchPrepared`
+   * uses to find the next usable automatic-fallback candidate after a runtime
+   * failure. Callers guard with `providers.has(id)` first.
+   */
+  async providerUsability(providerId: string): Promise<{ usable: boolean; reason?: string }> {
+    const adapter = this.deps.providers.get(providerId);
+    const metadata = this.deps.authMetadata.get(providerId);
+    if (!metadata) return { usable: false, reason: "no auth metadata registered" };
+    return this.isProviderUsable(adapter, metadata);
   }
 
   /**

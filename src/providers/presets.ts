@@ -256,4 +256,45 @@ export const antigravityManifest: ProviderManifest = {
   },
 };
 
-export const bundledManifests: readonly ProviderManifest[] = [claudeManifest, deepseekManifest, codexManifest, antigravityManifest];
+/**
+ * Ox Alpha Free — a time-boxed free preview coding model (the same model
+ * OpenCode Go exposes as `ox-alpha-free`), reached through OpenRouter's
+ * OpenAI-compatible API as `stealth/ox-alpha`. Direct-API only (no coding-
+ * agent CLI exists for it): CONTINUUM's own api-agent runtime speaks to
+ * `https://openrouter.ai/api/v1` with the user's OpenRouter API key
+ * (stored via `continuum auth ox-alpha` in the OS credential store, never
+ * in this repo). The `promo` block marks the limited-time free window —
+ * while it is active, automatic preference routing may select it; after
+ * `until` it is no longer advertised or auto-preferred, but stays
+ * explicitly selectable.
+ */
+export const oxAlphaManifest: ProviderManifest = {
+  schemaVersion: 1,
+  id: "ox-alpha",
+  displayName: "Ox Alpha Free",
+  protocol: "openai-compatible",
+  baseUrl: "https://openrouter.ai/api/v1",
+  auth: { kind: "bearer-token", envVar: "OPENROUTER_API_KEY" },
+  models: { default: "stealth/ox-alpha" },
+  capabilities: {
+    cliAvailable: false,
+    contextWindowTokens: 1_000_000,
+    notes: "OpenRouter — stealth/ox-alpha (Ox Alpha Free, the same model OpenCode Go lists as ox-alpha-free). Limited-time free preview; requires an OpenRouter API key stored via `continuum auth ox-alpha` (never in this repo).",
+  },
+  environment: { owns: ["OPENROUTER_API_KEY"] },
+  // Limited-time free preview: no authoritative end timestamp is published
+  // upstream, so `until` is deliberately omitted (never guessed). Routing
+  // preference therefore follows current usability, not a date.
+  promo: { note: "FREE" },
+};
+
+/**
+ * Automatic provider-preference chain: when a launch carries no explicit
+ * provider/model selection, the launcher walks this list (skipping expired
+ * promos and unusable providers) and picks the first usable one. Ox Alpha
+ * Free is preferred while its promo is active; DeepSeek is the fallback.
+ * An explicit user/provider/model selection always overrides this chain.
+ */
+export const DEFAULT_PROVIDER_PREFERENCE_CHAIN: readonly string[] = ["ox-alpha", "deepseek"];
+
+export const bundledManifests: readonly ProviderManifest[] = [claudeManifest, deepseekManifest, codexManifest, antigravityManifest, oxAlphaManifest];

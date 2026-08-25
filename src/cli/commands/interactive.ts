@@ -191,9 +191,10 @@ async function startNewTaskFlow(deps: InteractiveMenuDeps, prompt: Prompt, out: 
 /** Human-readable state for the agent chooser (target: "Ready", "Ready · Direct", "Needs authentication"). */
 function agentStatusLabel(d: AgentDescriptor): string {
   switch (d.availability) {
-    case "ready":
-      if (d.auth.proxyUserKey) return d.route === "proxy" ? "Ready · Proxy" : "Ready · Direct";
-      return "Ready";
+    case "ready": {
+      const base = d.auth.proxyUserKey ? (d.route === "proxy" ? "Ready · Proxy" : "Ready · Direct") : "Ready";
+      return d.promo ? `${base} · ${d.promo}` : base;
+    }
     case "needs-authentication":
       return "Needs authentication";
     case "not-installed":
@@ -464,7 +465,8 @@ function formatAgentLine(a: AgentDescriptor): string {
   const launch = a.launchKind === "cli" ? "cli" : a.launchKind === "direct-api" ? "api" : "none";
   const cli = a.auth.cli ? ` CLI=${a.cliInstalled === false ? "not-installed" : a.cliInstalled === true ? "installed" : "unknown"}` : "";
   const route = a.auth.proxyUserKey ? ` route=${a.route ?? "direct"}` : "";
-  return `  - ${a.displayName} (${a.providerId}) [${source}] auth=${auth} launch=${launch} ${config} ${agentStatusLabel(a)}${cli}${route}\n`;
+  const promo = a.promo ? ` promo=${a.promo}` : "";
+  return `  - ${a.displayName} (${a.providerId}) [${source}] auth=${auth} launch=${launch} ${config} ${agentStatusLabel(a)}${cli}${route}${promo}\n`;
 }
 
 async function addAgentFlow(deps: InteractiveMenuDeps, prompt: Prompt, out: PromptOutput): Promise<void> {

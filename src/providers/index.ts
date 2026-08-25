@@ -8,10 +8,12 @@ export { claudeProfile } from "./profiles/claude.js";
 export { deepseekProfile } from "./profiles/deepseek.js";
 export { codexProfile } from "./profiles/codex.js";
 export { antigravityProfile } from "./profiles/antigravity.js";
+export { oxalphaProfile } from "./profiles/ox-alpha.js";
 export { discoverModelsFor, parseCliModelsOutput, parseCodexModelsCache, type DiscoveredModel, type ModelDiscoveryOptions } from "./model-discovery.js";
 export * from "./manifest.js";
 export * from "./manifest-store.js";
-export { bundledManifests, claudeManifest, deepseekManifest, codexManifest, antigravityManifest } from "./presets.js";
+export * from "./promo.js";
+export { bundledManifests, claudeManifest, deepseekManifest, codexManifest, antigravityManifest, oxAlphaManifest, DEFAULT_PROVIDER_PREFERENCE_CHAIN } from "./presets.js";
 
 import { createProviderAdapter } from "./adapter.js";
 import { ProviderRegistry } from "./registry.js";

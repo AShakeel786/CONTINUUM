@@ -36,6 +36,13 @@ export interface RunApiAgentDeps {
   readonly scopeProvider?: ToolScopeProvider;
   /** Automatic session continuity capture (tool → concise summary), after each tool execution. */
   readonly recordToolActivity?: (tool: string, summary: string) => Promise<void>;
+  /**
+   * Secret-resolution source for the runner's auth headers (defaults to
+   * `process.env`). The launcher passes the launch plan's resolved env so a
+   * credential stored in the OS credential store reaches the runner without
+   * mutating `process.env` globally.
+   */
+  readonly env?: Readonly<Record<string, string | undefined>>;
 }
 
 export interface RunApiAgentResult {
@@ -83,6 +90,7 @@ export async function runApiAgent(deps: RunApiAgentDeps): Promise<RunApiAgentRes
     ...(deps.fetch ? { fetch: deps.fetch } : {}),
     ...(deps.sleep ? { sleep: deps.sleep } : {}),
     ...(deps.maxAttempts !== undefined ? { maxAttempts: deps.maxAttempts } : {}),
+    ...(deps.env ? { env: deps.env } : {}),
     onRetry: (info) => {
       const delayS = (info.delayMs / 1000).toFixed(1);
       deps.onOutput?.(`${deps.adapter.profile.displayName} API connection failed — ${info.host} ${retryReason(info.kind)}. Retry ${info.attempt}/${info.maxAttempts} in ${delayS}s.\n`);

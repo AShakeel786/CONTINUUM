@@ -54,11 +54,11 @@ class DataDrivenProviderAdapter implements ProviderAdapter {
     return this.profile.cliLaunch;
   }
 
-  buildAuthHeaders(): Readonly<Record<string, string>> {
+  buildAuthHeaders(env?: Readonly<Record<string, string | undefined>>): Readonly<Record<string, string>> {
     const auth = this.profile.auth;
     switch (auth.kind) {
       case "api-key": {
-        const key = resolveSecret(this.profile.id, auth.secret);
+        const key = resolveSecret(this.profile.id, auth.secret, env);
         // Header convention follows the wire protocol, not the auth kind:
         // Anthropic's Messages API wants a raw `x-api-key`; OpenAI-compatible
         // APIs (DeepSeek's native endpoint) want `Authorization: Bearer`.
@@ -67,11 +67,11 @@ class DataDrivenProviderAdapter implements ProviderAdapter {
           : { Authorization: `Bearer ${key}` };
       }
       case "bearer-token": {
-        const token = resolveSecret(this.profile.id, auth.secret);
+        const token = resolveSecret(this.profile.id, auth.secret, env);
         return { Authorization: `Bearer ${token}` };
       }
       case "proxy-routed": {
-        const token = resolveSecret(this.profile.id, auth.secret);
+        const token = resolveSecret(this.profile.id, auth.secret, env);
         return { Authorization: `Bearer ${token}` };
       }
       case "cli-session":

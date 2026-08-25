@@ -18,6 +18,7 @@ import type {
   EnvironmentOwnership,
   ModelTierMap,
   NativeResumeDescriptor,
+  PromoInfo,
   Protocol,
   ProviderCapabilities,
   ProviderProfile,
@@ -133,6 +134,8 @@ export interface ProviderManifest {
   readonly defaultPermissionMode?: "safe" | "bypass";
   /** Live model-list discovery from the installed CLI (see types.ts `ModelDiscovery`). */
   readonly modelDiscovery?: import("./types.js").ModelDiscovery;
+  /** Optional temporary/promotional state (e.g. limited-time free preview). `until` is optional and only set when an authoritative end timestamp is known. */
+  readonly promo?: PromoInfo;
 }
 
 const ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -197,6 +200,17 @@ export function validateManifest(input: unknown): readonly string[] {
     if (cli.supported !== true) errors.push("cli.supported must be true when a cli block is present");
     if (typeof cli.executable !== "string" || cli.executable.trim().length === 0) errors.push("cli.executable is required");
     if (!Array.isArray(cli.loginArgs) || cli.loginArgs.length === 0) errors.push("cli.loginArgs is required");
+  }
+
+  // A promo is a limited-time/promotional state. `until` is OPTIONAL: it must
+  // only ever carry an authoritative end timestamp from the upstream source,
+  // and when the exact end date is unknown it is omitted (the promo then reads
+  // as "limited time" — a guessed date is deliberately never invented).
+  if (m.promo !== undefined) {
+    if (m.promo.until !== undefined && (typeof m.promo.until !== "string" || m.promo.until.trim().length === 0 || !Number.isFinite(Date.parse(m.promo.until)))) {
+      errors.push("promo.until, when present, must be a parseable date (omit it when the exact end date is not authoritatively known)");
+    }
+    if (typeof m.promo.note !== "string" || m.promo.note.trim().length === 0) errors.push("promo.note is required");
   }
 
   // Structural validation for the (new) dual-route launch descriptors.
@@ -338,6 +352,7 @@ export function manifestToProfile(m: ProviderManifest): ProviderProfile {
     ...(m.defaultPermissionMode ? { defaultPermissionMode: m.defaultPermissionMode } : {}),
     ...(m.modelDiscovery ? { modelDiscovery: m.modelDiscovery } : {}),
     ...(proxyCliLaunch ? { proxyCliLaunch } : {}),
+    ...(m.promo ? { promo: m.promo } : {}),
   };
 }
 

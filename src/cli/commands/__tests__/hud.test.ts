@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import { describe, expect, it } from "vitest";
-import { buildHudData, formatHud, formatTerminalTitle, printHud, type HudData } from "../hud.js";
+import { buildHudData, buildProviderIdentity, formatHud, formatProviderIdentity, formatTerminalTitle, printHud, type HudData } from "../hud.js";
 import type { LaunchPreparation } from "../../../launcher/types.js";
 import type { Launcher } from "../../../launcher/launcher.js";
 import type { ProviderRegistry } from "../../../providers/registry.js";
@@ -75,6 +75,13 @@ function fakeProviders(displayName = "Claude"): ProviderRegistry {
   } as unknown as ProviderRegistry;
 }
 
+function fakeProvidersWithPromo(displayName: string, promo: { until: string; note: string }): ProviderRegistry {
+  return {
+    has: () => true,
+    get: () => ({ profile: { displayName, promo } }) as ReturnType<ProviderRegistry["get"]>,
+  } as unknown as ProviderRegistry;
+}
+
 function fakeLauncher(authenticated: readonly { providerId: string; model: string }[]): Launcher {
   return { listAuthenticatedProviders: async () => authenticated } as unknown as Launcher;
 }
@@ -144,6 +151,17 @@ describe("buildHudData", () => {
     expect(data.contextUsed).toBe(18_000);
     expect(data.contextMax).toBe(100_000);
   });
+
+  it("surfaces an active promo label and omits it otherwise", async () => {
+    const active = await buildHudData(
+      prep({ providerRef: { providerId: "ox-alpha", model: "ox-alpha-free" } }),
+      { launcher: fakeLauncher([]), providers: fakeProvidersWithPromo("Ox Alpha Free", { until: "2099-01-01T00:00:00Z", note: "FREE" }) },
+    );
+    expect(active.promo).toBeDefined();
+    expect(active.promo).toContain("FREE");
+    const plain = await buildHudData(prep(), { launcher: fakeLauncher([]), providers: fakeProviders() });
+    expect(plain.promo).toBeUndefined();
+  });
 });
 
 describe("formatHud", () => {
@@ -190,6 +208,15 @@ describe("formatHud", () => {
     expect(line).not.toContain("handoff");
   });
 
+  it("shows an active promo segment at wide widths and drops it first on narrow ones", () => {
+    const promoBase: HudData = { ...base, promo: "FREE (until Aug 27)" };
+    const wide = formatHud(promoBase, 200);
+    expect(wide).toContain("FREE (until Aug 27)");
+    const narrow = formatHud(promoBase, 60);
+    // Promo is the lowest-priority segment: gone before provider/context/handoff.
+    expect(narrow).not.toContain("FREE");
+  });
+
   it("never exceeds the given width, hard-truncating with an ellipsis as a last resort", () => {
     const line = formatHud(base, 12);
     expect(line.length).toBeLessThanOrEqual(12);
@@ -217,5 +244,43 @@ describe("printHud", () => {
     const providers = { has: () => { throw new Error("registry exploded"); } } as unknown as ProviderRegistry;
     const lines: string[] = [];
     await expect(printHud((s) => lines.push(s), prep(), { launcher: fakeLauncher([]), providers }, 200)).resolves.toBeUndefined();
+  });
+});
+
+describe("provider identity promo line", () => {
+  function oxProviders(promo?: { until: string; note: string }): ProviderRegistry {
+    return {
+      has: () => true,
+      get: () => ({
+        profile: { displayName: "Ox Alpha Free", baseUrl: "https://openrouter.ai/zen/go/v1", promo },
+        resolveCliLaunch: () => ({ kind: "native", executable: "n/a" }),
+      }) as unknown as ReturnType<ProviderRegistry["get"]>,
+    } as unknown as ProviderRegistry;
+  }
+
+  it("shows Promo for an API-runtime provider with an active promo", () => {
+    const identity = buildProviderIdentity(
+      prep({ providerRef: { providerId: "ox-alpha", model: "ox-alpha-free" }, runtimeKind: "api" }),
+      oxProviders({ until: "2099-01-01T00:00:00Z", note: "FREE" }),
+    );
+    expect(identity.provider).toBe("Ox Alpha Free");
+    expect(identity.model).toBe("ox-alpha-free");
+    expect(identity.route).toContain("openrouter.ai");
+    const text = formatProviderIdentity(identity);
+    expect(text).toContain("Promo: FREE");
+  });
+
+  it("omits the Promo line without a promo (and for expired promos)", () => {
+    const none = formatProviderIdentity(
+      buildProviderIdentity(prep({ providerRef: { providerId: "ox-alpha", model: "ox-alpha-free" }, runtimeKind: "api" }), oxProviders()),
+    );
+    expect(none).not.toContain("Promo:");
+    const expired = formatProviderIdentity(
+      buildProviderIdentity(
+        prep({ providerRef: { providerId: "ox-alpha", model: "ox-alpha-free" }, runtimeKind: "api" }),
+        oxProviders({ until: "2000-01-01T00:00:00Z", note: "FREE" }),
+      ),
+    );
+    expect(expired).not.toContain("Promo:");
   });
 });

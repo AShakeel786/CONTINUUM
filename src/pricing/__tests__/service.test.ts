@@ -124,7 +124,7 @@ describe("suggestHandoffOnPeakEvent — user-selectable handoff, never automatic
 
     const suggestion = suggestHandoffOnPeakEvent(peakStarted!, handoffManager);
     expect(suggestion?.message).toContain("hand it off");
-    expect(suggestion?.availableProviders.map((p) => p.providerId).sort()).toEqual(["antigravity", "claude", "codex", "deepseek"]);
+    expect(suggestion?.availableProviders.map((p) => p.providerId).sort()).toEqual(["antigravity", "claude", "codex", "deepseek", "ox-alpha"]);
 
     // Provider was NOT changed -- suggesting is not the same as switching.
     const session = await sessionManager.loadSession("sess-1");

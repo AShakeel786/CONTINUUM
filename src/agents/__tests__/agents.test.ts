@@ -71,13 +71,34 @@ describe("AgentManager — list", () => {
     });
     const descriptors = await manager.listDescriptors();
     const ids = descriptors.map((d) => d.providerId).sort();
-    expect(ids).toEqual(["antigravity", "claude", "codex", "deepseek"]);
+    expect(ids).toEqual(["antigravity", "claude", "codex", "deepseek", "ox-alpha"]);
     const claude = descriptors.find((d) => d.providerId === "claude")!;
     expect(claude.source).toBe("builtin");
     expect(claude.auth.cli).toBe(true);
     expect(claude.auth.api).toBe(true);
     expect(claude.configured).toBe(false);
     expect(claude.usable).toBe(true); // fake CLI reports installed + authenticated
+  });
+
+  it("carries the active promo label on Ox Alpha Free and nowhere else", async () => {
+    const dataDir = tmp();
+    const backend = new FakeBackend();
+    const configStore = new ConfigStore(dataDir);
+    const manager = new AgentManager({
+      dataDir,
+      configStore,
+      credentialManager: new CredentialManager(backend),
+      prompt: createScriptedPrompt({}),
+      buildCliAuthManager: () => makeCliManager(),
+    });
+    const descriptors = await manager.listDescriptors();
+    const ox = descriptors.find((d) => d.providerId === "ox-alpha")!;
+    expect(ox.displayName).toBe("Ox Alpha Free");
+    expect(ox.promo).toBeDefined();
+    expect(ox.promo).toContain("FREE");
+    for (const d of descriptors.filter((x) => x.providerId !== "ox-alpha")) {
+      expect(d.promo).toBeUndefined();
+    }
   });
 });
 

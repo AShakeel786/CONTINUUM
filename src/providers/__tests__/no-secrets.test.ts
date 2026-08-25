@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { claudeProfile } from "../profiles/claude.js";
 import { deepseekProfile } from "../profiles/deepseek.js";
 import { codexProfile } from "../profiles/codex.js";
+import { oxalphaProfile } from "../profiles/ox-alpha.js";
 import { createDefaultProviderRegistry } from "../index.js";
 
 /**
@@ -47,8 +48,14 @@ describe("no secrets in provider profiles", () => {
     assertNoLiteralSecrets(codexProfile);
   });
 
+  it("Ox Alpha Free profile is fully JSON-serializable and secret-free", () => {
+    const json = JSON.stringify(oxalphaProfile);
+    expect(json).toBeTruthy();
+    assertNoLiteralSecrets(oxalphaProfile);
+  });
+
   it("every auth strategy that carries a secret uses a SecretRef (envVar name only), not a literal", () => {
-    for (const profile of [claudeProfile, deepseekProfile]) {
+    for (const profile of [claudeProfile, deepseekProfile, oxalphaProfile]) {
       const auth = profile.auth;
       if ("secret" in auth) {
         expect(Object.keys(auth.secret)).toEqual(["envVar"]);

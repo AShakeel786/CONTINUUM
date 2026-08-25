@@ -45,6 +45,14 @@ export interface LaunchOptions {
    * overridden and an explicit choice always wins.
    */
   readonly permissionMode?: "safe" | "bypass";
+  /**
+   * INTERNAL — set by `launchPrepared` when re-preparing a launch after an
+   * automatic-routing fallback. Records which provider just failed so the
+   * re-prepared `modelDecision.reason` reads `automatic-fallback: X → Y`
+   * instead of an ordinary (and misleading) resume/provider-change reason.
+   * Never set by callers.
+   */
+  readonly autoFallbackFrom?: string;
 }
 
 /** Result of computing a launch target without spawning anything — testable in isolation from process spawning. */
@@ -71,6 +79,13 @@ export interface LaunchPreparation {
   /** The launch route actually resolved for this run (direct default; proxy only when explicitly configured) — see `LauncherDeps.getProviderRoute`. */
   readonly route: LaunchRoute;
   readonly modelDecision: { readonly automatic: boolean; readonly reason: string };
+  /**
+   * Present only when the AUTOMATIC provider-preference chain selected this
+   * provider (no explicit provider/model/project selection). Carries the
+   * chain and the selected index so `launchPrepared` can fall back to the
+   * next usable chain member when the first choice fails at runtime.
+   */
+  readonly autoRoute?: { readonly chain: readonly string[]; readonly index: number };
   /**
    * Visible messaging when a requested/saved model was NOT in the installed
    * CLI's current model list and CONTINUUM fell back to the provider default
