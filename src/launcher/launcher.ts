@@ -46,7 +46,7 @@ import { allocateBudget } from "../token/budget.js";
 import { renderContextForProvider, renderedSystemToText } from "../rendering/render.js";
 import { buildResumeInstructionsBlock, buildSessionMaintenanceBlock } from "../handoff/resume-block.js";
 import { findRecentNativeSessionId } from "./native-session.js";
-import { resolveConfigDir } from "./config-dir.js";
+import { ensureConfigDirSettingsFlag, resolveConfigDir } from "./config-dir.js";
 import { mcpServerCommand } from "../mcp/registration.js";
 import { repoMapBlock } from "../repo-map/repo-map.js";
 import { applyReversiblePruning } from "../context/pruning.js";
@@ -114,6 +114,12 @@ export interface LauncherDeps {
    * Defaults to the PATH/absolute lookup used by `findExecutableOnPath`.
    */
   readonly findExecutable?: (executable: string) => string | undefined;
+  /**
+   * Config-dir settings seeding seam (test override). Defaults to
+   * `ensureConfigDirSettingsFlag`, which pre-accepts Claude Code's one-time
+   * bypass confirmation inside the provider's isolated config dir.
+   */
+  readonly seedConfigDirFlag?: (configDir: string, key: string, value: unknown) => Promise<void>;
 }
 
 export type SpawnFn = (plan: LaunchPlan) => Promise<{ exitCode: number | null }>;
@@ -304,7 +310,10 @@ export class Launcher {
     // bypass with no flag is surfaced as a visible note, never silently run.
     const requestedPermission = opts.permissionMode ?? adapter.profile.defaultPermissionMode ?? "safe";
     const canBypass = (effectiveLaunch.kind === "native" || effectiveLaunch.kind === "redirected") && !!effectiveLaunch.permissionBypassFlag;
-    const bypassPermissions = requestedPermission === "bypass" && canBypass;
+    // Bypass applies to CLI-harness runs only: the direct API-agent has no
+    // approval prompts, so an apiFallback run must neither emit a CLI
+    // permission flag nor claim FULL ACCESS.
+    const bypassPermissions = requestedPermission === "bypass" && canBypass && runtimeKind === "cli";
     const permissionNote =
       requestedPermission === "bypass" && !canBypass
         ? `${providerId} declares no native full-access flag — launching in normal approval mode.`
@@ -580,6 +589,16 @@ export class Launcher {
       configDir: resolveConfigDir(basePlan.configDir),
       bypassPermissions,
     };
+
+    // A bypass-default provider (Ox Alpha) pre-accepts Claude Code's
+    // one-time bypass-permissions confirmation inside its OWN isolated
+    // config dir, so neither fresh launches nor resumes ever prompt. The
+    // user's global Claude settings are never touched. Advisory — a failure
+    // here never blocks the launch.
+    if (bypassPermissions && plan.configDir) {
+      const seedFlag = this.deps.seedConfigDirFlag ?? ensureConfigDirSettingsFlag;
+      await seedFlag(plan.configDir, "skipDangerousModePermissionPrompt", true);
+    }
 
     return {
       plan,

@@ -8,7 +8,7 @@
  * backend — never the real OS credential store.
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -84,6 +84,7 @@ async function buildDeps(opts: BuildOpts = {}) {
   const store = new FileSessionStore(sessionDir);
   const sessionManager = new SessionManager(store);
 
+  const seedConfigDirFlag = vi.fn(async () => {});
   const deps: LauncherDeps = {
     projects: registry,
     providers,
@@ -97,8 +98,10 @@ async function buildDeps(opts: BuildOpts = {}) {
     ...(opts.chain ? { preferredProviderChain: opts.chain } : {}),
     // Deterministic harness selection: claude present unless overridden.
     ...(opts.findExecutable ? { findExecutable: opts.findExecutable } : { findExecutable: (e: string) => (e === "claude" ? "/fake/claude" : undefined) }),
+    // Never write the real home-dir settings.json in tests.
+    seedConfigDirFlag,
   };
-  return { deps, registry };
+  return { deps, registry, seedConfigDirFlag };
 }
 
 async function projectWithDefault(defaultProvider?: string, defaultModel?: string) {
@@ -198,6 +201,49 @@ describe("automatic provider-preference chain (Ox Alpha Free → DeepSeek)", () 
     const safe = await launcher.prepareLaunch({ projectKey: project.id, providerId: "ox-alpha", taskGoal: "x" }, { permissionMode: "safe" });
     expect(safe.plan.bypassPermissions).toBe(false);
     expect(safe.plan.args).not.toContain("--dangerously-skip-permissions");
+  });
+
+  it("5d. ox alpha ALWAYS launches with the bypass flag by default (fresh + resume), no explicit opt-in needed", async () => {
+    const { deps, registry, seedConfigDirFlag } = await buildDeps({ oxUsable: true, deepseekUsable: true });
+    const project = await registry.add({ name: `p-${Math.random().toString(36).slice(2, 8)}`, path: "/work/x" });
+    const launcher = new Launcher(deps);
+    // Fresh launch, no permission options at all → descriptor default = bypass.
+    const fresh = await launcher.prepareLaunch({ projectKey: project.id, providerId: "ox-alpha", taskGoal: "x" }, {});
+    expect(fresh.plan.bypassPermissions).toBe(true);
+    expect(fresh.plan.args).toContain("--dangerously-skip-permissions");
+    // The one-time bypass confirmation is pre-accepted inside the isolated
+    // ox config dir (never the user's global settings).
+    expect(seedConfigDirFlag).toHaveBeenCalledWith(expect.stringContaining(".claude-oxalpha"), "skipDangerousModePermissionPrompt", true);
+    // Resume with no permission options → bypass retained.
+    const resumed = await launcher.prepareLaunch({ sessionId: fresh.session!.sessionId }, {});
+    expect(resumed.providerRef.providerId).toBe("ox-alpha");
+    expect(resumed.plan.bypassPermissions).toBe(true);
+    expect(resumed.plan.args).toContain("--dangerously-skip-permissions");
+  });
+
+  it("5e. the direct API fallback harness never emits CLI permission flags", async () => {
+    const { deps, registry, seedConfigDirFlag } = await buildDeps({ oxUsable: true, findExecutable: () => undefined });
+    const p = await registry.add({ name: `p-${Math.random().toString(36).slice(2, 8)}`, path: "/work/x" });
+    const launcher = new Launcher(deps);
+    const prep = await launcher.prepareLaunch({ projectKey: p.id, providerId: "ox-alpha", taskGoal: "x" }, {});
+    expect(prep.runtimeKind).toBe("api");
+    expect(prep.plan.bypassPermissions).toBe(false);
+    expect(prep.plan.args).not.toContain("--dangerously-skip-permissions");
+    expect(seedConfigDirFlag).not.toHaveBeenCalled();
+  });
+
+  it("5f. DeepSeek and native Claude do NOT gain the bypass flag", async () => {
+    const { deps, registry, seedConfigDirFlag } = await buildDeps({ deepseekUsable: true });
+    const p = await registry.add({ name: `p-${Math.random().toString(36).slice(2, 8)}`, path: "/work/ds", defaultProvider: "deepseek" });
+    const launcher = new Launcher(deps);
+    const ds = await launcher.prepareLaunch({ projectKey: p.id, taskGoal: "x" }, {});
+    expect(ds.plan.bypassPermissions).toBe(false);
+    expect(ds.plan.args).not.toContain("--dangerously-skip-permissions");
+    const claudeP = await registry.add({ name: `p-${Math.random().toString(36).slice(2, 8)}`, path: "/work/c", defaultProvider: "claude" });
+    const cc = await launcher.prepareLaunch({ projectKey: claudeP.id, taskGoal: "x" }, {});
+    expect(cc.plan.bypassPermissions).toBe(false);
+    expect(cc.plan.args).not.toContain("--dangerously-skip-permissions");
+    expect(seedConfigDirFlag).not.toHaveBeenCalled();
   });
 
   it("6. explicit --model selection is never chain-routed", async () => {

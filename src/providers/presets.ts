@@ -289,6 +289,12 @@ export const oxAlphaManifest: ProviderManifest = {
   },
   environment: { owns: ["OPENROUTER_API_KEY"] },
   apiFallback: true,
+  // Full access by default: every CONTINUUM-launched Ox Alpha Claude Code
+  // session (fresh or resume) runs with the descriptor's verified bypass
+  // flag so tool approvals never prompt. Explicit `--safe` still selects
+  // normal approval mode. Scoped to this descriptor only — DeepSeek and
+  // native Claude keep their safe default.
+  defaultPermissionMode: "bypass",
   cliLaunch: {
     kind: "redirected",
     // A dedicated config dir so ox sessions never touch the user's global
