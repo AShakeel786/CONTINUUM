@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { verifyCliContract, type CliShell } from "../cli-contract.js";
 import { createProviderAdapter } from "../../providers/adapter.js";
 import { claudeProfile } from "../../providers/profiles/claude.js";
+import { deepseekProfile } from "../../providers/profiles/deepseek.js";
 import { codexProfile } from "../../providers/profiles/codex.js";
 import { antigravityProfile } from "../../providers/profiles/antigravity.js";
 
@@ -15,11 +16,27 @@ class FakeShell implements CliShell {
 }
 
 describe("verifyCliContract", () => {
-  it("passes when the declared resume + session-id + context-delivery + mcp-supply flags appear in --help", async () => {
-    const help = "Usage: claude\n  -r, --resume [value]\n  --session-id <uuid>\n  --append-system-prompt <prompt>\n  --mcp-config <configs...>\n";
+  it("passes when the declared resume + session-id + context-delivery + mcp-supply + bypass flags appear in --help", async () => {
+    const help =
+      "Usage: claude\n  -r, --resume [value]\n  --session-id <uuid>\n  --append-system-prompt <prompt>\n  --mcp-config <configs...>\n  --dangerously-skip-permissions  Run without approval prompts\n";
     const check = await verifyCliContract(new FakeShell(help), createProviderAdapter(claudeProfile));
     expect(check.ok).toBe(true);
     expect(check.detail).toContain("--resume");
+  });
+
+  it("fails clearly when the declared Claude bypass flag drifts (--dangerously-skip-permissions missing)", async () => {
+    const help = "Usage: claude\n  -r, --resume [value]\n  --session-id <uuid>\n  --append-system-prompt <prompt>\n  --mcp-config <configs...>\n  (no bypass flag)\n";
+    const check = await verifyCliContract(new FakeShell(help), createProviderAdapter(claudeProfile));
+    expect(check.ok).toBe(false);
+    expect(check.detail).toContain("CLI drift");
+    expect(check.detail).toContain("--dangerously-skip-permissions");
+  });
+
+  it("passes DeepSeek (redirected) when the shared Claude Code bypass flag appears in --help", async () => {
+    const help =
+      "Usage: claude\n  -r, --resume [value]\n  --session-id <uuid>\n  --append-system-prompt <prompt>\n  --mcp-config <configs...>\n  --dangerously-skip-permissions  Run without approval prompts\n";
+    const check = await verifyCliContract(new FakeShell(help), createProviderAdapter(deepseekProfile));
+    expect(check.ok).toBe(true);
   });
 
   it("passes Codex when `resume` subcommand + model/bypass flags appear in --help (no session-id, no mcp flag declared)", async () => {

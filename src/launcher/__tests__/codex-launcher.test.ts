@@ -94,15 +94,18 @@ describe("Launcher — Codex project launch", () => {
     expect(prep.plan.executable).toBe("codex");
     expect(prep.plan.env).toEqual({}); // no API key / OAuth token injected
     expect(prep.plan.configDir).toBeUndefined(); // native ~/.codex, not CLAUDE_CONFIG_DIR
-    expect(prep.plan.bypassPermissions).toBe(false); // safe-by-default
+    expect(prep.plan.bypassPermissions).toBe(false); // explicit --safe
   });
 
-  it("bypassPermissions stays false unless the caller explicitly opts in", async () => {
+  it("a default launch (no permission options) bypasses; explicit --safe suppresses the bypass flag", async () => {
     const { deps, registry } = await buildDeps();
     const p = await registry.add({ name: "CARS", path: "/work/CARS", defaultProvider: "codex" });
     const launcher = new Launcher(deps);
-    const prep = await launcher.prepareLaunch({ projectKey: p.id }, { permissionMode: "safe" });
-    expect(prep.plan.bypassPermissions).toBe(false);
+    const defaultPrep = await launcher.prepareLaunch({ projectKey: p.id }, {});
+    expect(defaultPrep.plan.bypassPermissions).toBe(true);
+    expect(defaultPrep.plan.args).toContain("--dangerously-bypass-approvals-and-sandbox");
+    const safePrep = await launcher.prepareLaunch({ projectKey: p.id }, { permissionMode: "safe" });
+    expect(safePrep.plan.bypassPermissions).toBe(false);
   });
 });
 

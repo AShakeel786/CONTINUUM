@@ -399,8 +399,8 @@ export async function runLaunchCommand(args: readonly string[], io: CliIo): Prom
   const modelAlias = opt(args, "--model");
   const taskGoal = opt(args, "--task", "-t");
   // Explicit permission choice only: `--bypass-permissions` forces full access,
-  // `--safe` forces normal approval mode. Absent → the provider's declared
-  // default applies (Codex/Antigravity default to full access, others to safe).
+  // `--safe` forces normal approval mode. Absent → the launcher's global
+  // bypass default applies for every CLI provider that declares a native flag.
   const bypass = args.includes("--bypass-permissions") || args.includes("--dangerously-bypass");
   const safe = args.includes("--safe");
   const permissionMode: "safe" | "bypass" | undefined = bypass ? "bypass" : safe ? "safe" : undefined;
@@ -545,8 +545,8 @@ export async function runHandoffCommand(args: readonly string[], io: CliIo): Pro
     out(`Handed off to ${chosenId} (session ${result.session.sessionId}, active provider set).\n`);
 
     // Launch the receiving agent in the same project, continuing the session.
-    // Handoff-receiving launches inherit the provider default permission mode
-    // (full access for Codex/Antigravity) — explicit `--safe` opts back out.
+    // Handoff-receiving launches inherit the global bypass default (every CLI
+    // provider with a declared native flag) — explicit `--safe` opts back out.
     const bypass = args.includes("--bypass-permissions") || args.includes("--dangerously-bypass");
     const safe = args.includes("--safe");
     const permissionMode: "safe" | "bypass" | undefined = bypass ? "bypass" : safe ? "safe" : undefined;

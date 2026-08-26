@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { join } from "node:path";
 import { buildMcpAddArgs, ensureMcpRegistered, isMcpRegistered, mcpServerCommand, registerMcpIfMissing, type McpShell } from "../registration.js";
 import { claudeProfile } from "../../providers/profiles/claude.js";
 import { codexProfile } from "../../providers/profiles/codex.js";
@@ -33,7 +34,9 @@ describe("mcpServerCommand", () => {
   it("is a secret-free `node <abs>/dist/mcp/bin.js` command", () => {
     const cmd = mcpServerCommand();
     expect(cmd[0]).toBe(process.execPath);
-    expect(cmd[1]).toContain("dist/mcp/bin.js");
+    // Platform-neutral: the path is assembled with the platform separator, so
+    // compare against a join-normalized tail instead of a hard-coded `/`.
+    expect(cmd[1]).toContain(join("dist", "mcp", "bin.js"));
     // No tokens/keys in the generated command.
     expect(JSON.stringify(cmd)).not.toMatch(/sk-|Bearer|token=/i);
   });

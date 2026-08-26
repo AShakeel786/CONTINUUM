@@ -31,6 +31,8 @@ import { createScriptedPrompt } from "../../auth/prompt.js";
 import type { CredentialBackend, CliAuthAdapter } from "../../auth/types.js";
 import type { ProviderProfile } from "../../providers/types.js";
 
+const CC_BYPASS = "--dangerously-skip-permissions";
+
 class FakeBackend implements CredentialBackend {
   readonly id = "fake";
   readonly securityLevel = "os-native" as const;
@@ -197,10 +199,10 @@ describe("automatic provider-preference chain (Ox Alpha Free → DeepSeek)", () 
     const launcher = new Launcher(deps);
     const bypass = await launcher.prepareLaunch({ projectKey: project.id, providerId: "ox-alpha", taskGoal: "x" }, { permissionMode: "bypass" });
     expect(bypass.plan.bypassPermissions).toBe(true);
-    expect(bypass.plan.args).toContain("--dangerously-skip-permissions");
+    expect(bypass.plan.args).toContain(CC_BYPASS);
     const safe = await launcher.prepareLaunch({ projectKey: project.id, providerId: "ox-alpha", taskGoal: "x" }, { permissionMode: "safe" });
     expect(safe.plan.bypassPermissions).toBe(false);
-    expect(safe.plan.args).not.toContain("--dangerously-skip-permissions");
+    expect(safe.plan.args).not.toContain("--dangerously");
   });
 
   it("5d. ox alpha ALWAYS launches with the bypass flag by default (fresh + resume), no explicit opt-in needed", async () => {
@@ -209,16 +211,25 @@ describe("automatic provider-preference chain (Ox Alpha Free → DeepSeek)", () 
     const launcher = new Launcher(deps);
     // Fresh launch, no permission options at all → descriptor default = bypass.
     const fresh = await launcher.prepareLaunch({ projectKey: project.id, providerId: "ox-alpha", taskGoal: "x" }, {});
+    expect(fresh.providerRef.model).toBe("stealth/ox-alpha"); // wire model, no gemini id
     expect(fresh.plan.bypassPermissions).toBe(true);
-    expect(fresh.plan.args).toContain("--dangerously-skip-permissions");
+    expect(fresh.plan.args[0]).toBe(CC_BYPASS); // bypass first, like Claude/DeepSeek redirected
+    expect(fresh.plan.args.filter((a) => a === CC_BYPASS)).toHaveLength(1); // exactly once
+    expect(fresh.plan.args).toContain("--session-id"); // Claude-family session handling
+    expect(fresh.plan.args).not.toContain("--conversation"); // agy-ism never leaks in
+    expect(fresh.plan.args.some((a) => a === "--model" || a.startsWith("--model="))).toBe(false); // no gemini model flag
     // The one-time bypass confirmation is pre-accepted inside the isolated
     // ox config dir (never the user's global settings).
     expect(seedConfigDirFlag).toHaveBeenCalledWith(expect.stringContaining(".claude-oxalpha"), "skipDangerousModePermissionPrompt", true);
-    // Resume with no permission options → bypass retained.
+    // Resume with no permission options → bypass retained, Claude-family resume.
     const resumed = await launcher.prepareLaunch({ sessionId: fresh.session!.sessionId }, {});
     expect(resumed.providerRef.providerId).toBe("ox-alpha");
+    expect(resumed.providerRef.model).toBe("stealth/ox-alpha");
     expect(resumed.plan.bypassPermissions).toBe(true);
-    expect(resumed.plan.args).toContain("--dangerously-skip-permissions");
+    expect(resumed.plan.args.slice(0, 3)).toEqual([CC_BYPASS, "--resume", fresh.session!.sessionId]);
+    expect(resumed.plan.args.filter((a) => a === CC_BYPASS)).toHaveLength(1);
+    expect(resumed.plan.args).not.toContain("--conversation");
+    expect(resumed.plan.args.some((a) => a === "--model" || a.startsWith("--model="))).toBe(false);
   });
 
   it("5e. the direct API fallback harness never emits CLI permission flags", async () => {
@@ -232,18 +243,21 @@ describe("automatic provider-preference chain (Ox Alpha Free → DeepSeek)", () 
     expect(seedConfigDirFlag).not.toHaveBeenCalled();
   });
 
-  it("5f. DeepSeek and native Claude do NOT gain the bypass flag", async () => {
+  it("5f. DeepSeek and native Claude ALSO default to the bypass flag (global bypass default)", async () => {
     const { deps, registry, seedConfigDirFlag } = await buildDeps({ deepseekUsable: true });
     const p = await registry.add({ name: `p-${Math.random().toString(36).slice(2, 8)}`, path: "/work/ds", defaultProvider: "deepseek" });
     const launcher = new Launcher(deps);
     const ds = await launcher.prepareLaunch({ projectKey: p.id, taskGoal: "x" }, {});
-    expect(ds.plan.bypassPermissions).toBe(false);
-    expect(ds.plan.args).not.toContain("--dangerously-skip-permissions");
+    expect(ds.plan.bypassPermissions).toBe(true);
+    expect(ds.plan.args).toContain("--dangerously-skip-permissions");
     const claudeP = await registry.add({ name: `p-${Math.random().toString(36).slice(2, 8)}`, path: "/work/c", defaultProvider: "claude" });
     const cc = await launcher.prepareLaunch({ projectKey: claudeP.id, taskGoal: "x" }, {});
-    expect(cc.plan.bypassPermissions).toBe(false);
-    expect(cc.plan.args).not.toContain("--dangerously-skip-permissions");
-    expect(seedConfigDirFlag).not.toHaveBeenCalled();
+    expect(cc.plan.bypassPermissions).toBe(true);
+    expect(cc.plan.args).toContain("--dangerously-skip-permissions");
+    // The one-time bypass confirmation is pre-accepted inside each provider's
+    // isolated config dir (never the user's global settings).
+    expect(seedConfigDirFlag).toHaveBeenCalledWith(expect.stringContaining(".claude-deepseek"), "skipDangerousModePermissionPrompt", true);
+    expect(seedConfigDirFlag).toHaveBeenCalledWith(expect.stringContaining(".claude-anthropic"), "skipDangerousModePermissionPrompt", true);
   });
 
   it("6. explicit --model selection is never chain-routed", async () => {

@@ -683,8 +683,8 @@ export async function runInteractiveCommand(args: readonly string[], io: CliIo):
     for (const warning of await runLaunchPreflight(ctx.memoryCoreConfigured)) out(`⚠️  ${warning}\n`);
     await ensureMcpRegistration();
 
-    // No explicit permission choice from the menu → the provider's declared
-    // default applies (Codex/Antigravity default to full access, others to safe).
+    // No explicit permission choice from the menu → the launcher's global
+    // bypass default applies for every CLI provider that declares a native flag.
     const prep: LaunchPreparation =
       decision.kind === "new"
         ? await ctx.launcher.prepareLaunch(

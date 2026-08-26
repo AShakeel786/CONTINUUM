@@ -4,10 +4,9 @@
  * TUI, etc.) runs unchanged, applies the launch plan's env (resolved
  * credentials + config dir), and returns the child's exit code.
  *
- * Safe-by-default is enforced one level up (the Launcher refuses to build a
- * plan with `bypassPermissions` unless the caller explicitly opted in); this
- * module merely paints the process arguments it was given — it makes no
- * permission decision of its own.
+ * The permission decision is made one level up (the Launcher resolves bypass
+ * vs safe and paints the flag into the plan); this module merely spawns the
+ * process arguments it was given — it makes no permission decision of its own.
  */
 
 import { spawn } from "node:child_process";

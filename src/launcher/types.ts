@@ -22,7 +22,7 @@ export interface LaunchPlan {
   readonly clearEnvVars: readonly string[];
   readonly workingDir: string;
   readonly configDir?: string;
-  /** Safe-by-default: true means the launch requires explicit opt-in bypass. */
+  /** True when the launch carries the provider's declared native full-access (bypass) flag. */
   readonly bypassPermissions: boolean;
 }
 
@@ -39,10 +39,10 @@ export interface ResolvedLaunchTarget {
 
 export interface LaunchOptions {
   /**
-   * Explicit launch permission mode. Absent → the provider's declared
-   * `defaultPermissionMode` applies (Codex/Antigravity default to "bypass",
-   * everything else to "safe"), so a provider default is never silently
-   * overridden and an explicit choice always wins.
+   * Explicit launch permission mode. Absent → "bypass" (full access) for
+   * every CLI-backed launch whose resolved descriptor declares a verified
+   * native bypass flag; "safe" explicitly restores normal approval mode.
+   * An explicit caller choice always wins.
    */
   readonly permissionMode?: "safe" | "bypass";
   /**

@@ -239,6 +239,15 @@ export interface ProxyRoutedCliLaunch {
   readonly proxyPathSuffix: string;
   readonly proxyUserKeySecret: SecretRef;
   readonly clearEnvVars: readonly string[];
+  /**
+   * Native flag that launches with all tool permission approvals skipped
+   * (verified: Claude Code `--dangerously-skip-permissions`). Same semantics
+   * as `NativeCliLaunch.permissionBypassFlag` — a proxy-routed launch still
+   * spawns Claude Code (pointed at the proxy), so the same verified flag
+   * applies. Emitted only when the caller requests `permissionMode: "bypass"`;
+   * absent = full-access unsupported for this route.
+   */
+  readonly permissionBypassFlag?: string;
   /** Optional supported Claude Code statusline command. */
   readonly statusLineCommand?: string;
   /** Native-session resume capability (declared as data — see below). */
@@ -468,15 +477,6 @@ export interface ProviderProfile {
   readonly capabilities: ProviderCapabilities;
   readonly environment: EnvironmentOwnership;
   readonly cliLaunch: CliLaunchDescriptor;
-  /**
-   * Default launch permission mode when the caller does not specify one
-   * (`"safe"` = normal approval prompts, `"bypass"` = full access with every
-   * tool approval skipped via the profile's native bypass flag). Absent →
-   * `"safe"`. Declared per provider so Codex/Antigravity default to full
-   * access while Claude/DeepSeek keep the safe default. An explicit caller
-   * choice always overrides this.
-   */
-  readonly defaultPermissionMode?: "safe" | "bypass";
   /** Live model-list discovery from the installed CLI (see `ModelDiscovery`). Absent = manifest models only. */
   readonly modelDiscovery?: ModelDiscovery;
   /**
@@ -548,11 +548,11 @@ export interface CliLaunchContext {
    */
   readonly route?: LaunchRoute;
   /**
-   * "bypass" emits the profile's declared native full-access flag (agy
-   * `--dangerously-skip-permissions`, Codex `--dangerously-bypass-approvals-
-   * and-sandbox`); "safe" (the default when absent) keeps normal approval
-   * prompts. The launcher resolves explicit caller choice > provider default
-   * > safe before building the plan.
+   * "bypass" emits the launch descriptor's declared native full-access flag;
+   * "safe" keeps normal approval prompts (and a bare adapter call with no
+   * `permissionMode` emits no bypass flag either). The launcher always passes
+   * an explicit value — it resolves explicit caller choice > the global
+   * bypass default before building the plan.
    */
   readonly permissionMode?: "safe" | "bypass";
   /**
