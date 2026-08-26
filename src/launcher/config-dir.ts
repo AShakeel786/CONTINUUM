@@ -46,8 +46,66 @@ export async function ensureConfigDirSettingsFlag(
     } catch {
       // No settings.json yet — start fresh.
     }
-    if (existing[key] === value) return;
-    const next = JSON.stringify({ ...existing, [key]: value }, null, 2);
+    const nextRecord = { ...existing, [key]: value };
+    if (JSON.stringify(existing) === JSON.stringify(nextRecord)) return;
+    const next = JSON.stringify(nextRecord, null, 2);
+    await mkdir(configDir, { recursive: true });
+    await writeFile(file, next, "utf8");
+  } catch {
+    // Advisory only.
+  }
+}
+
+/** Pre-accept Claude Code's first-run onboarding in the isolated config. */
+export async function ensureConfigDirOnboardingState(configDir: string): Promise<void> {
+  try {
+    const file = join(configDir, ".claude.json");
+    let existing: Record<string, unknown> = {};
+    try {
+      existing = JSON.parse(await readFile(file, "utf8")) as Record<string, unknown>;
+    } catch {
+      // No isolated Claude state yet — start fresh.
+    }
+    const nextRecord: Record<string, unknown> = { ...existing, hasCompletedOnboarding: true };
+    if (typeof existing.lastOnboardingVersion !== "string" && typeof existing.firstStartVersion === "string" && existing.firstStartVersion.length > 0) {
+      nextRecord.lastOnboardingVersion = existing.firstStartVersion;
+    }
+    if (JSON.stringify(existing) === JSON.stringify(nextRecord)) return;
+    await mkdir(configDir, { recursive: true });
+    await writeFile(file, JSON.stringify(nextRecord, null, 2), "utf8");
+  } catch {
+    // Advisory only.
+  }
+}
+
+/**
+ * Pre-accept Claude Code's workspace-trust screen in CONTINUUM's isolated
+ * provider config. Only the trust marker is written; MCP definitions,
+ * credentials, sessions, and runtime telemetry are never copied.
+ */
+export async function ensureConfigDirProjectTrust(configDir: string, projectPath: string): Promise<void> {
+  try {
+    const file = join(configDir, ".claude.json");
+    let existing: Record<string, unknown> = {};
+    try {
+      existing = JSON.parse(await readFile(file, "utf8")) as Record<string, unknown>;
+    } catch {
+      // No isolated Claude state yet — start fresh.
+    }
+    const projects = existing.projects && typeof existing.projects === "object" && !Array.isArray(existing.projects)
+      ? (existing.projects as Record<string, unknown>)
+      : {};
+    const current = projects[projectPath] && typeof projects[projectPath] === "object" && !Array.isArray(projects[projectPath])
+      ? (projects[projectPath] as Record<string, unknown>)
+      : {};
+    const nextProject = {
+      ...current,
+      hasTrustDialogAccepted: true,
+      projectOnboardingSeenCount: typeof current.projectOnboardingSeenCount === "number" ? current.projectOnboardingSeenCount : 1,
+    };
+    const nextRecord = { ...existing, projects: { ...projects, [projectPath]: nextProject } };
+    if (JSON.stringify(existing) === JSON.stringify(nextRecord)) return;
+    const next = JSON.stringify(nextRecord, null, 2);
     await mkdir(configDir, { recursive: true });
     await writeFile(file, next, "utf8");
   } catch {

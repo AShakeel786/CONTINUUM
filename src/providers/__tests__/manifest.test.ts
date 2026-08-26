@@ -36,6 +36,12 @@ describe("validateManifest", () => {
     expect(validateManifest(grokManifest)).toEqual([]);
   });
 
+  it("accepts explicit billing and rejects unknown billing classes", () => {
+    expect(validateManifest({ ...grokManifest, billing: "free" })).toEqual([]);
+    expect(hasError({ ...grokManifest, billing: "metered" }, "billing")).toBe(true);
+    expect(manifestToProfile({ ...grokManifest, billing: "free" }).billing).toBe("free");
+  });
+
   it("rejects a wrong schema version", () => {
     expect(hasError({ ...grokManifest, schemaVersion: 2 }, "schemaVersion")).toBe(true);
   });
@@ -88,7 +94,11 @@ describe("manifestToProfile + manifestToAuthMetadata (Grok/GLM proof)", () => {
     expect(profile.capabilities.cliAvailable).toBe(false); // API-only
 
     const meta = manifestToAuthMetadata(grokManifest);
-    expect(meta.api).toEqual({ supported: true, envVar: "XAI_API_KEY" });
+    expect(meta.api).toEqual({
+      supported: true,
+      envVar: "XAI_API_KEY",
+      credentialRef: { providerId: "grok", name: "api-key" },
+    });
     expect(meta.cli).toEqual({ supported: false });
 
     // Direct API auth (Bearer for openai-compatible), never a hardcoded key.

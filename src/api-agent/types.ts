@@ -10,6 +10,16 @@ export interface AgentToolCall {
   readonly name: string;
   /** JSON-encoded arguments string (as the wire protocol carries it). */
   readonly arguments: string;
+  /**
+   * Opaque OpenAI-compatible continuation fields required by the provider
+   * that issued this call (for example a reasoning/thought signature). They
+   * remain part of logical history but are replayed only to the same provider,
+   * so failover never sends provider-private fields to a replacement.
+   */
+  readonly providerContinuation?: {
+    readonly sourceProviderId: string;
+    readonly openAiExtraContent: Readonly<Record<string, unknown>>;
+  };
 }
 
 export type AgentMessage =
@@ -51,7 +61,7 @@ export class AgentLoopError extends Error {
  * are ever retried; "tls" | "auth" | "http-error" are config/credential
  * problems a retry cannot fix.
  */
-export type NetworkFailureKind = "dns" | "connection-refused" | "timeout" | "tls" | "auth" | "rate-limit" | "server-error" | "http-error";
+export type NetworkFailureKind = "dns" | "connection-refused" | "timeout" | "tls" | "auth" | "rate-limit" | "quota-exhausted" | "server-error" | "http-error";
 
 export class ApiAgentError extends Error {
   readonly kind?: NetworkFailureKind;
@@ -59,12 +69,15 @@ export class ApiAgentError extends Error {
   readonly host?: string;
   readonly retryable: boolean;
   readonly attempts?: number;
-  constructor(detail: string, opts?: { kind?: NetworkFailureKind; host?: string; retryable?: boolean; attempts?: number }) {
+  /** Absolute epoch timestamp at which this candidate may be retried. */
+  readonly retryAtMs?: number;
+  constructor(detail: string, opts?: { kind?: NetworkFailureKind; host?: string; retryable?: boolean; attempts?: number; retryAtMs?: number }) {
     super(detail);
     this.name = "ApiAgentError";
     this.kind = opts?.kind;
     this.host = opts?.host;
     this.retryable = opts?.retryable ?? false;
     this.attempts = opts?.attempts;
+    this.retryAtMs = opts?.retryAtMs;
   }
 }

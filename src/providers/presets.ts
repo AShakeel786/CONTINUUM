@@ -24,6 +24,76 @@ export const MODEL_IDENTITY_ENV_VARS = [
   "CLAUDE_CODE_SUBAGENT_MODEL",
 ] as const;
 
+/** Google Gemini Developer API through its documented OpenAI compatibility surface. */
+export const geminiFreeManifest: ProviderManifest = {
+  schemaVersion: 1,
+  id: "gemini-free",
+  displayName: "Gemini Free",
+  protocol: "openai-compatible",
+  baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+  auth: { kind: "bearer-token", envVar: "GEMINI_API_KEY" },
+  billing: "free",
+  models: { default: "gemini-3.7-flash" },
+  capabilities: {
+    thinking: "supported",
+    tools: true,
+    promptCache: "none",
+    cliAvailable: false,
+    contextWindowTokens: 1_048_576,
+    notes: "Gemini Developer API free tier through the OpenAI-compatible chat-completions endpoint.",
+  },
+  environment: { owns: ["GEMINI_API_KEY"] },
+};
+
+/** Groq free-plan API through its OpenAI-compatible endpoint. */
+export const groqFreeManifest: ProviderManifest = {
+  schemaVersion: 1,
+  id: "groq-free",
+  displayName: "Groq Free",
+  protocol: "openai-compatible",
+  baseUrl: "https://api.groq.com/openai/v1",
+  auth: { kind: "bearer-token", envVar: "GROQ_API_KEY" },
+  billing: "free",
+  models: {
+    default: "openai/gpt-oss-120b",
+    aliases: { fast: "openai/gpt-oss-20b", qwen: "qwen/qwen3.6-27b" },
+  },
+  capabilities: {
+    thinking: "supported",
+    tools: true,
+    promptCache: "openai-automatic",
+    cliAvailable: false,
+    contextWindowTokens: 131_072,
+    notes: "Groq free-plan inference; Retry-After and x-ratelimit-reset-* are honored by the shared API runner.",
+  },
+  environment: { owns: ["GROQ_API_KEY"] },
+};
+
+/**
+ * OpenRouter's zero-cost router. Deliberately exposes one model id and no
+ * aliases: DataDrivenProviderAdapter rejects every unknown model, so this
+ * provider can never silently resolve to a paid OpenRouter model.
+ */
+export const openRouterFreeManifest: ProviderManifest = {
+  schemaVersion: 1,
+  id: "openrouter-free",
+  displayName: "OpenRouter Free",
+  protocol: "openai-compatible",
+  baseUrl: "https://openrouter.ai/api/v1",
+  auth: { kind: "bearer-token", envVar: "OPENROUTER_API_KEY" },
+  billing: "free",
+  models: { default: "openrouter/free" },
+  capabilities: {
+    thinking: "supported",
+    tools: true,
+    promptCache: "openai-automatic",
+    cliAvailable: false,
+    contextWindowTokens: 200_000,
+    notes: "OpenRouter zero-cost router only. Internal free-model selection is OpenRouter behavior; CONTINUUM failover remains provider-level.",
+  },
+  environment: { owns: ["OPENROUTER_API_KEY"] },
+};
+
 export const claudeManifest: ProviderManifest = {
   schemaVersion: 1,
   id: "claude",
@@ -31,6 +101,7 @@ export const claudeManifest: ProviderManifest = {
   protocol: "anthropic-messages",
   baseUrl: "https://api.anthropic.com",
   auth: { kind: "api-key", envVar: "ANTHROPIC_API_KEY" },
+  billing: "paid",
   models: {
     default: "claude-sonnet-5",
     aliases: { fast: "claude-haiku-4-5-20251001", opus: "claude-opus-5", fable: "claude-fable-5" },
@@ -80,6 +151,7 @@ export const deepseekManifest: ProviderManifest = {
   protocol: "openai-compatible",
   baseUrl: "https://api.deepseek.com",
   auth: { kind: "api-key", envVar: "DEEPSEEK_API_KEY" },
+  billing: "paid",
   models: { default: "deepseek-v4-flash", aliases: { flash: "deepseek-v4-flash", pro: "deepseek-v4-pro" } },
   capabilities: {
     thinking: "supported",
@@ -152,6 +224,7 @@ export const codexManifest: ProviderManifest = {
   protocol: "openai-compatible",
   baseUrl: "https://api.openai.com",
   auth: { kind: "cli-session" },
+  billing: "paid",
   models: {
     default: "gpt-5.6-sol",
     aliases: { terra: "gpt-5.6-terra", luna: "gpt-5.6-luna", mini: "gpt-5.4-mini" },
@@ -208,6 +281,7 @@ export const antigravityManifest: ProviderManifest = {
   protocol: "openai-compatible",
   baseUrl: "https://antigravity.google",
   auth: { kind: "cli-session" },
+  billing: "paid",
   models: {
     default: "gemini-3.7-flash-high",
     aliases: {
@@ -291,6 +365,7 @@ export const oxAlphaManifest: ProviderManifest = {
   protocol: "openai-compatible",
   baseUrl: "https://openrouter.ai/api/v1",
   auth: { kind: "bearer-token", envVar: "OPENROUTER_API_KEY" },
+  billing: "free",
   models: { default: "stealth/ox-alpha" },
   capabilities: {
     cliAvailable: true,
@@ -342,9 +417,25 @@ export const oxAlphaManifest: ProviderManifest = {
  * Automatic provider-preference chain: when a launch carries no explicit
  * provider/model selection, the launcher walks this list (skipping expired
  * promos and unusable providers) and picks the first usable one. Ox Alpha
- * Free is preferred while its promo is active; DeepSeek is the fallback.
+ * Stable free API providers are preferred first, followed by active free
+ * promotions; paid providers remain present only for explicit opt-in.
  * An explicit user/provider/model selection always overrides this chain.
  */
-export const DEFAULT_PROVIDER_PREFERENCE_CHAIN: readonly string[] = ["ox-alpha", "deepseek"];
+export const DEFAULT_PROVIDER_PREFERENCE_CHAIN: readonly string[] = [
+  "gemini-free",
+  "groq-free",
+  "openrouter-free",
+  "ox-alpha",
+  "deepseek",
+];
 
-export const bundledManifests: readonly ProviderManifest[] = [claudeManifest, deepseekManifest, codexManifest, antigravityManifest, oxAlphaManifest];
+export const bundledManifests: readonly ProviderManifest[] = [
+  claudeManifest,
+  deepseekManifest,
+  codexManifest,
+  antigravityManifest,
+  geminiFreeManifest,
+  groqFreeManifest,
+  openRouterFreeManifest,
+  oxAlphaManifest,
+];

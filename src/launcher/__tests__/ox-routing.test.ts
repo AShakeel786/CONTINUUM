@@ -11,7 +11,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { Launcher, type LauncherDeps } from "../launcher.js";
 import { ProjectRegistry } from "../../registry/registry.js";
 import { ProjectRegistryStore } from "../../registry/store.js";
@@ -87,6 +87,8 @@ async function buildDeps(opts: BuildOpts = {}) {
   const sessionManager = new SessionManager(store);
 
   const seedConfigDirFlag = vi.fn(async () => {});
+  const seedConfigDirOnboarding = vi.fn(async () => {});
+  const seedConfigDirProjectTrust = vi.fn(async () => {});
   const deps: LauncherDeps = {
     projects: registry,
     providers,
@@ -97,13 +99,18 @@ async function buildDeps(opts: BuildOpts = {}) {
     sessionManager,
     prompt: createScriptedPrompt({}),
     sessionBaseDir: sessionDir,
-    ...(opts.chain ? { preferredProviderChain: opts.chain } : {}),
+    // Keep these legacy Ox-specific routing tests isolated from additions to
+    // the bundled default pool; Phase 2A covers the production chain in its
+    // own focused launcher tests.
+    preferredProviderChain: opts.chain ?? ["ox-alpha", "deepseek"],
     // Deterministic harness selection: claude present unless overridden.
     ...(opts.findExecutable ? { findExecutable: opts.findExecutable } : { findExecutable: (e: string) => (e === "claude" ? "/fake/claude" : undefined) }),
     // Never write the real home-dir settings.json in tests.
     seedConfigDirFlag,
+    seedConfigDirOnboarding,
+    seedConfigDirProjectTrust,
   };
-  return { deps, registry, seedConfigDirFlag };
+  return { deps, registry, seedConfigDirFlag, seedConfigDirOnboarding, seedConfigDirProjectTrust };
 }
 
 async function projectWithDefault(defaultProvider?: string, defaultModel?: string) {
@@ -154,14 +161,22 @@ describe("automatic provider-preference chain (Ox Alpha Free → DeepSeek)", () 
     expect(prep.modelDecision.reason).toContain("automatic-default-flash");
   });
 
-  it("3. default-less project, ox unusable → deepseek via chain", async () => {
+  it("3. default-less project reaches paid DeepSeek only with explicit opt-in", async () => {
     const { deps, registry } = await buildDeps({ deepseekUsable: true });
     const p = await registry.add({ name: `p-${Math.random().toString(36).slice(2, 8)}`, path: "/work/x" });
     const launcher = new Launcher(deps);
-    const prep = await launcher.prepareLaunch({ projectKey: p.id, taskGoal: "x" }, { permissionMode: "safe" });
+    const prep = await launcher.prepareLaunch({ projectKey: p.id, taskGoal: "x" }, { permissionMode: "safe", allowPaidFallback: true });
     expect(prep.providerRef.providerId).toBe("deepseek");
     expect(prep.autoRoute?.index).toBe(1);
     expect(prep.modelDecision.reason).toContain("automatic-preference: no default provider → deepseek");
+  });
+
+  it("3b. default-less project never auto-selects paid when the free pool is unavailable", async () => {
+    const { deps, registry } = await buildDeps({ deepseekUsable: true });
+    const p = await registry.add({ name: `p-${Math.random().toString(36).slice(2, 8)}`, path: "/work/x" });
+    const prep = await new Launcher(deps).prepareLaunch({ projectKey: p.id, taskGoal: "x" }, { permissionMode: "safe" });
+    expect(prep.providerRef.providerId).toBe("claude");
+    expect(prep.autoRoute).toBeUndefined();
   });
 
   it("4. expired promo → ox skipped by the chain, but still explicitly selectable", async () => {
@@ -169,7 +184,7 @@ describe("automatic provider-preference chain (Ox Alpha Free → DeepSeek)", () 
     const { deps, registry } = await buildDeps({ oxUsable: true, deepseekUsable: true, oxProfile: expired });
     const p = await registry.add({ name: `p-${Math.random().toString(36).slice(2, 8)}`, path: "/work/x" });
     const launcher = new Launcher(deps);
-    const auto = await launcher.prepareLaunch({ projectKey: p.id, taskGoal: "x" }, { permissionMode: "safe" });
+    const auto = await launcher.prepareLaunch({ projectKey: p.id, taskGoal: "x" }, { permissionMode: "safe", allowPaidFallback: true });
     expect(auto.providerRef.providerId).toBe("deepseek");
     const explicit = await launcher.prepareLaunch({ projectKey: p.id, providerId: "ox-alpha", taskGoal: "x" }, { permissionMode: "safe" });
     expect(explicit.providerRef.providerId).toBe("ox-alpha");
@@ -206,7 +221,7 @@ describe("automatic provider-preference chain (Ox Alpha Free → DeepSeek)", () 
   });
 
   it("5d. ox alpha ALWAYS launches with the bypass flag by default (fresh + resume), no explicit opt-in needed", async () => {
-    const { deps, registry, seedConfigDirFlag } = await buildDeps({ oxUsable: true, deepseekUsable: true });
+    const { deps, registry, seedConfigDirFlag, seedConfigDirOnboarding, seedConfigDirProjectTrust } = await buildDeps({ oxUsable: true, deepseekUsable: true });
     const project = await registry.add({ name: `p-${Math.random().toString(36).slice(2, 8)}`, path: "/work/x" });
     const launcher = new Launcher(deps);
     // Fresh launch, no permission options at all → descriptor default = bypass.
@@ -221,6 +236,8 @@ describe("automatic provider-preference chain (Ox Alpha Free → DeepSeek)", () 
     // The one-time bypass confirmation is pre-accepted inside the isolated
     // ox config dir (never the user's global settings).
     expect(seedConfigDirFlag).toHaveBeenCalledWith(expect.stringContaining(".claude-oxalpha"), "skipDangerousModePermissionPrompt", true);
+    expect(seedConfigDirOnboarding).toHaveBeenCalledWith(expect.stringContaining(".claude-oxalpha"));
+    expect(seedConfigDirProjectTrust).toHaveBeenCalledWith(expect.stringContaining(".claude-oxalpha"), resolve("/work/x"));
     // Resume with no permission options → bypass retained, Claude-family resume.
     const resumed = await launcher.prepareLaunch({ sessionId: fresh.session!.sessionId }, {});
     expect(resumed.providerRef.providerId).toBe("ox-alpha");
@@ -233,7 +250,7 @@ describe("automatic provider-preference chain (Ox Alpha Free → DeepSeek)", () 
   });
 
   it("5e. the direct API fallback harness never emits CLI permission flags", async () => {
-    const { deps, registry, seedConfigDirFlag } = await buildDeps({ oxUsable: true, findExecutable: () => undefined });
+    const { deps, registry, seedConfigDirFlag, seedConfigDirOnboarding, seedConfigDirProjectTrust } = await buildDeps({ oxUsable: true, findExecutable: () => undefined });
     const p = await registry.add({ name: `p-${Math.random().toString(36).slice(2, 8)}`, path: "/work/x" });
     const launcher = new Launcher(deps);
     const prep = await launcher.prepareLaunch({ projectKey: p.id, providerId: "ox-alpha", taskGoal: "x" }, {});
@@ -241,6 +258,8 @@ describe("automatic provider-preference chain (Ox Alpha Free → DeepSeek)", () 
     expect(prep.plan.bypassPermissions).toBe(false);
     expect(prep.plan.args).not.toContain("--dangerously-skip-permissions");
     expect(seedConfigDirFlag).not.toHaveBeenCalled();
+    expect(seedConfigDirProjectTrust).not.toHaveBeenCalled();
+    expect(seedConfigDirOnboarding).not.toHaveBeenCalled();
   });
 
   it("5f. DeepSeek and native Claude ALSO default to the bypass flag (global bypass default)", async () => {
@@ -293,7 +312,7 @@ describe("automatic provider-preference chain (Ox Alpha Free → DeepSeek)", () 
     const { deps, registry } = await buildDeps({ deepseekUsable: true, chain: ["ghost", "deepseek"] });
     const p = await registry.add({ name: `p-${Math.random().toString(36).slice(2, 8)}`, path: "/work/x" });
     const launcher = new Launcher(deps);
-    const prep = await launcher.prepareLaunch({ projectKey: p.id, taskGoal: "x" }, { permissionMode: "safe" });
+    const prep = await launcher.prepareLaunch({ projectKey: p.id, taskGoal: "x" }, { permissionMode: "safe", allowPaidFallback: true });
     expect(prep.providerRef.providerId).toBe("deepseek");
     expect(prep.autoRoute).toEqual({ chain: ["ghost", "deepseek"], index: 1 });
   });

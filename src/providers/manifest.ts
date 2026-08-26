@@ -25,7 +25,7 @@ import type {
   ProxyRoutedCliLaunch,
 } from "./types.js";
 import { secretRef } from "./secrets.js";
-import type { CliAuthCapability, CliAuthCheckEnv, ProviderAuthMetadata } from "../auth/types.js";
+import type { ApiCredentialReference, CliAuthCapability, CliAuthCheckEnv, ProviderAuthMetadata } from "../auth/types.js";
 
 export const MANIFEST_SCHEMA_VERSION = 1;
 
@@ -141,6 +141,8 @@ export interface ProviderManifest {
   readonly modelDiscovery?: import("./types.js").ModelDiscovery;
   /** Optional temporary/promotional state (e.g. limited-time free preview). `until` is optional and only set when an authoritative end timestamp is known. */
   readonly promo?: PromoInfo;
+  /** Billing class for automatic API routing. Omitted is conservatively paid. */
+  readonly billing?: "free" | "paid";
   /**
    * True when BOTH a coding-agent CLI harness and a direct-API harness are
    * declared: the CLI harness is preferred, and the generic API agent is
@@ -218,6 +220,10 @@ export function validateManifest(input: unknown): readonly string[] {
       errors.push("promo.until, when present, must be a parseable date (omit it when the exact end date is not authoritatively known)");
     }
     if (typeof m.promo.note !== "string" || m.promo.note.trim().length === 0) errors.push("promo.note is required");
+  }
+
+  if (m.billing !== undefined && m.billing !== "free" && m.billing !== "paid") {
+    errors.push('billing must be "free" or "paid"');
   }
 
   if (m.apiFallback !== undefined && typeof m.apiFallback !== "boolean") errors.push("apiFallback must be a boolean");
@@ -364,6 +370,7 @@ export function manifestToProfile(m: ProviderManifest): ProviderProfile {
     ...(m.modelDiscovery ? { modelDiscovery: m.modelDiscovery } : {}),
     ...(proxyCliLaunch ? { proxyCliLaunch } : {}),
     ...(m.promo ? { promo: m.promo } : {}),
+    ...(m.billing ? { billing: m.billing } : {}),
     ...(m.apiFallback ? { apiFallback: true } : {}),
   };
 }
@@ -395,10 +402,14 @@ function toCliAuthCheckEnv(m: ProviderManifest): CliAuthCheckEnv | undefined {
 }
 
 /** Convert a validated manifest into `ProviderAuthMetadata`. */
-export function manifestToAuthMetadata(m: ProviderManifest): ProviderAuthMetadata {
+export function manifestToAuthMetadata(m: ProviderManifest, credentialRef?: ApiCredentialReference): ProviderAuthMetadata {
   const api =
     m.auth.kind === "api-key" || m.auth.kind === "bearer-token"
-      ? { supported: true as const, envVar: m.auth.envVar! }
+      ? {
+          supported: true as const,
+          envVar: m.auth.envVar!,
+          credentialRef: credentialRef ?? { providerId: m.id, name: "api-key" },
+        }
       : { supported: false as const };
 
   const authEnv = toCliAuthCheckEnv(m);

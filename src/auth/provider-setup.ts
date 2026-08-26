@@ -16,7 +16,7 @@
  * command surfaces.
  */
 
-import type { CredentialManager } from "./credential-manager.js";
+import { credentialUriFor, type CredentialManager } from "./credential-manager.js";
 import type { CliAuthManager } from "./cli-auth-manager.js";
 import type { ContinuumConfig } from "../config/types.js";
 import type { Prompt } from "./prompt.js";
@@ -43,8 +43,6 @@ export interface ProviderSetupResult {
   /** The stored credential reference (only for `method: "api"`); `cli` returns undefined. */
   readonly credentialUri?: string;
 }
-
-const API_KEY_CREDENTIAL_NAME = "api-key";
 
 /**
  * Literal example/placeholder values that don't contain an obvious
@@ -90,14 +88,20 @@ export class ProviderSetup {
       throw new Error(`provider "${metadata.providerId}" does not support API-key auth`);
     }
     const { credentialManager, prompt } = this.deps;
-    const label = `API key for ${metadata.providerId} (env var ${metadata.api.envVar})`;
+    const ref = metadata.api.credentialRef;
+    // A consumer of a trusted shared credential reuses the canonical entry
+    // without prompting, reading, copying, or writing its value.
+    if (ref.providerId !== metadata.providerId && await credentialManager.hasCredential(ref.providerId, ref.name)) {
+      return { providerId: metadata.providerId, method: "api", credentialUri: credentialUriFor(ref.providerId, ref.name) };
+    }
+    const label = `${ref.label ?? metadata.providerId} API key (env var ${metadata.api.envVar})`;
     const value = await prompt.askSecret(label);
     const trimmed = value.trim();
     if (!trimmed) return { providerId: metadata.providerId, method: "api", credentialUri: undefined };
     if (looksLikeObviousPlaceholder(trimmed)) {
       throw new InvalidCredentialError(metadata.providerId, "that looks like a placeholder/example value, not a real API key — paste your actual key");
     }
-    const uri = await credentialManager.setCredential(metadata.providerId, API_KEY_CREDENTIAL_NAME, trimmed);
+    const uri = await credentialManager.setCredential(ref.providerId, ref.name, trimmed);
     return { providerId: metadata.providerId, method: "api", credentialUri: uri };
   }
 
@@ -142,7 +146,8 @@ export class ProviderSetup {
    */
   async remove(metadata: ProviderAuthMetadata): Promise<void> {
     if (metadata.api.supported) {
-      await this.deps.credentialManager.deleteCredential(metadata.providerId, API_KEY_CREDENTIAL_NAME);
+      const ref = metadata.api.credentialRef;
+      await this.deps.credentialManager.deleteCredential(ref.providerId, ref.name);
     }
     if (metadata.proxyUserKey?.supported) {
       await this.deps.credentialManager.deleteCredential(metadata.providerId, metadata.proxyUserKey.credentialName);

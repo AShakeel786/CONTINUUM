@@ -62,6 +62,15 @@ describe("ProviderRegistry", () => {
 
   it("createDefaultProviderRegistry registers exactly the bundled providers today", () => {
     const registry = createDefaultProviderRegistry();
-    expect([...registry.listIds()].sort()).toEqual(["antigravity", "claude", "codex", "deepseek", "ox-alpha"]);
+    expect([...registry.listIds()].sort()).toEqual([
+      "antigravity",
+      "claude",
+      "codex",
+      "deepseek",
+      "gemini-free",
+      "groq-free",
+      "openrouter-free",
+      "ox-alpha",
+    ]);
   });
 });

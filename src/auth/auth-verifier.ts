@@ -42,20 +42,26 @@ export interface AuthVerifierOptions {
 export class AuthVerifier {
   constructor(private readonly options: AuthVerifierOptions) {}
 
-  async verifyApi(metadata: ProviderAuthMetadata, credentialName = "api-key"): Promise<AuthVerifyResult> {
+  async verifyApi(metadata: ProviderAuthMetadata): Promise<AuthVerifyResult> {
     if (!metadata.api.supported) {
       return { providerId: metadata.providerId, outcome: "not-supported", detail: "no API-key auth is declared for this provider" };
     }
     const { credentialManager } = this.options;
-    const has = await credentialManager.hasCredential(metadata.providerId, credentialName);
+    const ref = metadata.api.credentialRef;
+    const label = ref.label ?? `${metadata.providerId} API`;
+    const has = await credentialManager.hasCredential(ref.providerId, ref.name);
     if (!has) {
-      return { providerId: metadata.providerId, outcome: "missing", detail: `no stored credential for ${credentialName}` };
+      return {
+        providerId: metadata.providerId,
+        outcome: "missing",
+        detail: `no stored ${label} credential. ${ref.setupHint ?? `Run "continuum auth ${metadata.providerId}" to configure it.`}`,
+      };
     }
-    const value = await credentialManager.getCredential(metadata.providerId, credentialName);
+    const value = await credentialManager.getCredential(ref.providerId, ref.name);
     if (!value || value.trim().length === 0) {
-      return { providerId: metadata.providerId, outcome: "invalid", detail: `stored credential for ${credentialName} is empty` };
+      return { providerId: metadata.providerId, outcome: "invalid", detail: `stored ${label} credential is empty` };
     }
-    return { providerId: metadata.providerId, outcome: "ok", detail: `credential present (${credentialName}); resolves via ${metadata.api.envVar} at activation` };
+    return { providerId: metadata.providerId, outcome: "ok", detail: `${label} credential present; resolves via ${metadata.api.envVar} at activation` };
   }
 
   /** Verifies a proxy-routed provider's proxy user key is stored and non-empty. */

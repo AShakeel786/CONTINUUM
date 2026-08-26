@@ -29,7 +29,7 @@ import { ApiAgentError, type AgentMessage, type AgentTurnResult, type NetworkFai
 export type FetchLike = (
   url: string,
   init: { method: string; headers: Record<string, string>; body: string; signal?: AbortSignal },
-) => Promise<{ ok: boolean; status: number; body: string; retryAfterMs?: number }>;
+) => Promise<{ ok: boolean; status: number; body: string; retryAfterMs?: number; resetAtMs?: number }>;
 
 export interface ApiRunner {
   call(messages: readonly AgentMessage[], tools: readonly ToolDefinition[]): Promise<AgentTurnResult>;
@@ -73,11 +73,52 @@ function defaultFetch(timeoutMs: number): FetchLike {
     try {
       const res = await fetch(url, { method: init.method, headers: init.headers, body: init.body, signal: controller.signal });
       const retryAfterMs = parseRetryAfterMs(res.headers.get("retry-after"));
-      return { ok: res.ok, status: res.status, body: await res.text(), ...(retryAfterMs !== undefined ? { retryAfterMs } : {}) };
+      const resetAtMs = parseProviderResetAtMs([
+        res.headers.get("x-ratelimit-reset"),
+        res.headers.get("x-ratelimit-reset-requests"),
+        res.headers.get("x-ratelimit-reset-tokens"),
+        res.headers.get("x-quota-reset"),
+      ]);
+      return {
+        ok: res.ok,
+        status: res.status,
+        body: await res.text(),
+        ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
+        ...(resetAtMs !== undefined ? { resetAtMs } : {}),
+      };
     } finally {
       clearTimeout(timer);
     }
   };
+}
+
+export function parseProviderResetAtMs(headers: readonly (string | null)[], now: number = Date.now()): number | undefined {
+  const parsed = headers
+    .filter((value): value is string => !!value)
+    .map((value) => {
+      const n = Number(value);
+      if (Number.isFinite(n)) {
+        // Providers variously send epoch seconds, epoch milliseconds, or a
+        // relative duration in seconds. Normalize all three conservatively.
+        if (n > 10_000_000_000) return n;
+        if (n > 1_000_000_000) return n * 1000;
+        return now + Math.max(0, n) * 1000;
+      }
+      // Compact reset durations may combine hours/minutes/seconds and may be
+      // sub-second (for example `2m59.56s` or `577ms`).
+      const duration = value.trim().match(/^(?:(\d+(?:\.\d+)?)h)?(?:(\d+(?:\.\d+)?)m(?!s))?(?:(\d+(?:\.\d+)?)s)?(?:(\d+(?:\.\d+)?)ms)?$/i);
+      if (duration && duration[0]) {
+        const hours = Number(duration[1] ?? 0);
+        const minutes = Number(duration[2] ?? 0);
+        const seconds = Number(duration[3] ?? 0);
+        const milliseconds = Number(duration[4] ?? 0);
+        return now + (hours * 3600 + minutes * 60 + seconds) * 1000 + milliseconds;
+      }
+      const date = Date.parse(value);
+      return Number.isFinite(date) ? date : undefined;
+    })
+    .filter((value): value is number => value !== undefined && value >= now);
+  return parsed.length ? Math.max(...parsed) : undefined;
 }
 
 function parseRetryAfterMs(header: string | null): number | undefined {
@@ -95,11 +136,6 @@ function hostOf(url: string): string {
   } catch {
     return url;
   }
-}
-
-function firstLine(s: string): string {
-  const idx = s.indexOf("\n");
-  return (idx === -1 ? s : s.slice(0, idx)).trim().slice(0, 300);
 }
 
 interface Classified {
@@ -136,21 +172,39 @@ function classifyException(err: unknown, host: string): Classified {
 }
 
 /** Classifies an HTTP response CONTINUUM actually received (`res.ok === false`). */
-function classifyStatus(status: number, host: string, bodyFirstLine: string): Classified {
+function exhaustionCode(body: string): boolean {
+  try {
+    const parsed = JSON.parse(body) as { error?: { code?: unknown; type?: unknown; message?: unknown }; code?: unknown; type?: unknown };
+    const fields = [parsed.code, parsed.type, parsed.error?.code, parsed.error?.type, parsed.error?.message]
+      .filter((value): value is string => typeof value === "string")
+      .join(" ")
+      .toLowerCase();
+    return /\b(insufficient[_ -]?quota|quota[_ -]?(exceeded|exhausted)|credits?[_ -]?(exhausted|depleted)|billing[_ -]?limit)\b/.test(fields);
+  } catch {
+    return false;
+  }
+}
+
+function classifyStatus(status: number, host: string, body: string): Classified {
+  if ((status === 402 || status === 403 || status === 429) && exhaustionCode(body)) {
+    // Not retryable on this candidate; the composite runner may still route
+    // the unchanged call to another candidate immediately.
+    return { kind: "quota-exhausted", retryable: false, message: `${host} reported provider quota exhaustion (HTTP ${status})` };
+  }
   if (status === 401 || status === 403) {
     // Invalid/expired credentials are never retryable — see providers/errors.ts's
     // ProviderAuthError for the CLI-launch equivalent of this same classification.
-    return { kind: "auth", retryable: false, message: `${host} rejected credentials (HTTP ${status}): ${bodyFirstLine}` };
+    return { kind: "auth", retryable: false, message: `${host} rejected credentials (HTTP ${status})` };
   }
   if (status === 429) {
-    return { kind: "rate-limit", retryable: true, message: `${host} rate-limited the request (HTTP 429): ${bodyFirstLine}` };
+    return { kind: "rate-limit", retryable: true, message: `${host} rate-limited the request (HTTP 429)` };
   }
   if (status >= 500) {
-    return { kind: "server-error", retryable: true, message: `${host} returned a server error (HTTP ${status}): ${bodyFirstLine}` };
+    return { kind: "server-error", retryable: true, message: `${host} returned a server error (HTTP ${status})` };
   }
   // Other 4xx (400 bad request, 404, 422, ...) is a config/payload problem —
   // retrying an identical malformed request only reproduces the same error.
-  return { kind: "http-error", retryable: false, message: `${host} returned HTTP ${status}: ${bodyFirstLine}` };
+  return { kind: "http-error", retryable: false, message: `${host} returned HTTP ${status}` };
 }
 
 function backoffMs(attempt: number, retryAfterMs?: number): number {
@@ -177,6 +231,7 @@ async function callWithRetry(
   for (let attempt = 1; attempt <= retry.maxAttempts; attempt++) {
     let classified: Classified;
     let retryAfterMs: number | undefined;
+    let resetAtMs: number | undefined;
     let ok: { status: number; body: string } | undefined;
     try {
       const res = await fetchImpl(url, init);
@@ -184,8 +239,9 @@ async function callWithRetry(
         ok = { status: res.status, body: res.body };
         classified = { kind: "http-error", retryable: false, message: "" }; // unused on success
       } else {
-        classified = classifyStatus(res.status, host, firstLine(res.body));
+        classified = classifyStatus(res.status, host, res.body);
         retryAfterMs = res.retryAfterMs;
+        resetAtMs = res.resetAtMs;
       }
     } catch (err) {
       classified = classifyException(err, host);
@@ -195,7 +251,14 @@ async function callWithRetry(
 
     const isLastAttempt = attempt === retry.maxAttempts;
     if (!classified.retryable || isLastAttempt) {
-      throw new ApiAgentError(classified.message, { kind: classified.kind, host, retryable: classified.retryable, attempts: attempt });
+      const retryAtMs = resetAtMs ?? (retryAfterMs !== undefined ? Date.now() + retryAfterMs : undefined);
+      throw new ApiAgentError(classified.message, {
+        kind: classified.kind,
+        host,
+        retryable: classified.retryable,
+        attempts: attempt,
+        ...(retryAtMs !== undefined ? { retryAtMs } : {}),
+      });
     }
     const delayMs = backoffMs(attempt, retryAfterMs);
     retry.onRetry?.({ attempt, maxAttempts: retry.maxAttempts, delayMs, kind: classified.kind, host });
@@ -246,7 +309,18 @@ async function openAiCall(
         return {
           role: "assistant",
           ...(m.content !== null ? { content: m.content } : {}),
-          ...(m.toolCalls?.length ? { tool_calls: m.toolCalls.map((tc) => ({ id: tc.id, type: "function", function: { name: tc.name, arguments: tc.arguments } })) } : {}),
+          ...(m.toolCalls?.length
+            ? {
+                tool_calls: m.toolCalls.map((tc) => ({
+                  id: tc.id,
+                  type: "function",
+                  function: { name: tc.name, arguments: tc.arguments },
+                  ...(tc.providerContinuation?.sourceProviderId === adapter.profile.id
+                    ? { extra_content: tc.providerContinuation.openAiExtraContent }
+                    : {}),
+                })),
+              }
+            : {}),
         };
       case "tool":
         return { role: "tool", tool_call_id: m.toolCallId, content: m.content };
@@ -263,11 +337,18 @@ async function openAiCall(
   const res = await callWithRetry(fetchImpl, `${baseUrl}/chat/completions`, { method: "POST", headers, body }, retry);
 
   const parsed = JSON.parse(res.body) as {
-    choices?: { message?: { content?: string | null; tool_calls?: { id: string; function: { name: string; arguments: string } }[] }; finish_reason?: string }[];
+    choices?: { message?: { content?: string | null; tool_calls?: { id: string; function: { name: string; arguments: string }; extra_content?: unknown }[] }; finish_reason?: string }[];
   };
   const choice = parsed.choices?.[0];
   const message = choice?.message;
-  const toolCalls = (message?.tool_calls ?? []).map((tc) => ({ id: tc.id, name: tc.function.name, arguments: tc.function.arguments }));
+  const toolCalls = (message?.tool_calls ?? []).map((tc) => ({
+    id: tc.id,
+    name: tc.function.name,
+    arguments: tc.function.arguments,
+    ...(isRecord(tc.extra_content)
+      ? { providerContinuation: { sourceProviderId: adapter.profile.id, openAiExtraContent: tc.extra_content } }
+      : {}),
+  }));
   return { content: message?.content ?? null, toolCalls, finishReason: choice?.finish_reason ?? "stop" };
 }
 
@@ -335,4 +416,8 @@ function safeJsonParse(s: string): unknown {
   } catch {
     return {};
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

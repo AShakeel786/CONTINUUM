@@ -46,7 +46,7 @@ import { allocateBudget } from "../token/budget.js";
 import { renderContextForProvider, renderedSystemToText } from "../rendering/render.js";
 import { buildResumeInstructionsBlock, buildSessionMaintenanceBlock } from "../handoff/resume-block.js";
 import { findRecentNativeSessionId } from "./native-session.js";
-import { ensureConfigDirSettingsFlag, resolveConfigDir } from "./config-dir.js";
+import { ensureConfigDirOnboardingState, ensureConfigDirProjectTrust, ensureConfigDirSettingsFlag, resolveConfigDir } from "./config-dir.js";
 import { mcpServerCommand } from "../mcp/registration.js";
 import { repoMapBlock } from "../repo-map/repo-map.js";
 import { applyReversiblePruning } from "../context/pruning.js";
@@ -55,7 +55,7 @@ import type { Prompt, PromptOutput } from "../auth/prompt.js";
 import { LocalDependencyUnavailableError, NoAuthenticatedAgentError, NoProjectError, ProviderNotAuthenticatedError } from "./errors.js";
 import type { ProxyReadiness } from "../health/launch-guard.js";
 import { evaluateProvider, type ProviderUsability } from "./usability.js";
-import type { LaunchOptions, LaunchPlan, LaunchPreparation } from "./types.js";
+import type { ApiFailoverLaunchCandidate, LaunchOptions, LaunchPlan, LaunchPreparation } from "./types.js";
 import { DEFAULT_ROLLOVER_POLICY, evaluateRollover } from "../cost/calculator.js";
 import { nativeSessionFile, readClaudeUsage } from "../cost/native-usage.js";
 import { createRolloverHandoff } from "../cost/rollover.js";
@@ -106,7 +106,8 @@ export interface LauncherDeps {
    * Automatic provider-preference chain (overridable in tests). When a launch
    * carries no explicit provider/model selection, the launcher walks this
    * list and picks the first usable member. Defaults to the bundled
-   * `DEFAULT_PROVIDER_PREFERENCE_CHAIN` (Ox Alpha Free → DeepSeek).
+   * `DEFAULT_PROVIDER_PREFERENCE_CHAIN` (Gemini Free → Groq Free →
+   * OpenRouter Free → active free promotions → explicit paid fallback).
    */
   readonly preferredProviderChain?: readonly string[];
   /**
@@ -120,9 +121,13 @@ export interface LauncherDeps {
    * bypass confirmation inside the provider's isolated config dir.
    */
   readonly seedConfigDirFlag?: (configDir: string, key: string, value: unknown) => Promise<void>;
+  /** Optional Ox-only onboarding-state seeding seam (test override). */
+  readonly seedConfigDirOnboarding?: (configDir: string) => Promise<void>;
+  /** Optional Ox-only workspace-trust seeding seam (test override). */
+  readonly seedConfigDirProjectTrust?: (configDir: string, projectPath: string) => Promise<void>;
 }
 
-export type SpawnFn = (plan: LaunchPlan) => Promise<{ exitCode: number | null }>;
+export type SpawnFn = (plan: LaunchPlan) => Promise<{ exitCode: number | null; stderrTail?: string }>;
 
 const DEFAULT_OUTPUT_RESERVE = 8192;
 const REPO_MAP_BUDGET_TOKENS = 1200;
@@ -239,7 +244,8 @@ export class Launcher {
       existingSession?.activeProvider.providerId ??
       project.defaultProvider;
 
-    // Automatic provider-preference chain (Ox Alpha Free → DeepSeek).
+    // Automatic provider-preference chain (stable free APIs → active free
+    // promotions → explicit paid fallback).
     // Consulted ONLY when nothing explicit selected the provider: no
     // `--provider`, no resumed session (its active provider is explicit
     // state), no explicit model selection (`--model` / project defaultModel),
@@ -256,7 +262,10 @@ export class Launcher {
       project.defaultModel === undefined &&
       (providerId === undefined || preferredChain.includes(providerId))
     ) {
-      const picked = await this.pickPreferredProvider();
+      // A saved project default is an explicit prior user choice. A
+      // default-less project may auto-select paid only for this run when the
+      // caller passed the explicit paid-fallback permission.
+      const picked = await this.pickPreferredProvider(opts.allowPaidFallback === true || project.defaultProvider !== undefined);
       if (picked) {
         providerId = picked.providerId;
         autoRoute = { chain: preferredChain, index: picked.index };
@@ -602,6 +611,16 @@ export class Launcher {
     if (bypassPermissions && plan.configDir) {
       const seedFlag = this.deps.seedConfigDirFlag ?? ensureConfigDirSettingsFlag;
       await seedFlag(plan.configDir, "skipDangerousModePermissionPrompt", true);
+      // Ox uses a fresh CLAUDE_CONFIG_DIR. Claude Code otherwise pauses at
+      // its theme/security onboarding before honoring the bypass flag. Keep
+      // this strictly Ox-scoped; DeepSeek and native Claude retain their
+      // existing config and permission behavior.
+      if (providerId === "ox-alpha") {
+        const seedOnboarding = this.deps.seedConfigDirOnboarding ?? ensureConfigDirOnboardingState;
+        await seedOnboarding(plan.configDir);
+        const seedTrust = this.deps.seedConfigDirProjectTrust ?? ensureConfigDirProjectTrust;
+        await seedTrust(plan.configDir, project.path);
+      }
     }
 
     return {
@@ -666,10 +685,10 @@ export class Launcher {
    * mutates process.env; falls back to an explicitly-exported var.
    */
   private async resolveApiHarnessAuthEnv(adapter: ProviderAdapter, metadata: ProviderAuthMetadata): Promise<Record<string, string>> {
-    const envVar = metadata.api.supported ? metadata.api.envVar : undefined;
-    if (!envVar) return {};
+    if (!metadata.api.supported) return {};
+    const { envVar, credentialRef } = metadata.api;
     try {
-      return await resolveProviderAuthEnv(adapter, this.deps.credentialManager);
+      return await resolveProviderAuthEnv(adapter, this.deps.credentialManager, credentialRef);
     } catch {
       return process.env[envVar] ? { [envVar]: process.env[envVar]! } : {};
     }
@@ -678,8 +697,8 @@ export class Launcher {
   private async resolveAuthEnvSafely(adapter: ProviderAdapter, metadata: ProviderAuthMetadata, route: LaunchRoute): Promise<Record<string, string>> {
     // Only API-key/bearer auth has an env var to populate; cli-session providers
     // rely on their own login and inject nothing.
-    const envVar = metadata.api.supported ? metadata.api.envVar : undefined;
-    if (!envVar) return {};
+    if (!metadata.api.supported) return {};
+    const { credentialRef } = metadata.api;
     // Redirected and proxy-routed launches do NOT inject the raw upstream API
     // key as a plain env var: the adapter already carries it as
     // ANTHROPIC_AUTH_TOKEN (redirected) or the proxy holds it server-side
@@ -688,7 +707,7 @@ export class Launcher {
     // needs the raw var.
     if (adapter.resolveCliLaunch(route).kind !== "native") return {};
     try {
-      return await resolveProviderAuthEnv(adapter, this.deps.credentialManager);
+      return await resolveProviderAuthEnv(adapter, this.deps.credentialManager, credentialRef);
     } catch {
       return {};
     }
@@ -710,7 +729,8 @@ export class Launcher {
       // into the descriptor's auth-token env var.
       const envVar = launch.authTokenSecret.envVar;
       if (envVar === undefined) throw new Error("redirected provider profile is missing authTokenSecret.envVar");
-      const stored = await this.deps.credentialManager.getCredential(adapter.profile.id, "api-key").catch(() => undefined);
+      const ref = metadata.api.supported ? metadata.api.credentialRef : { providerId: adapter.profile.id, name: "api-key" };
+      const stored = await this.deps.credentialManager.getCredential(ref.providerId, ref.name).catch(() => undefined);
       if (stored) secrets[envVar] = stored;
       else if (process.env[envVar]) secrets[envVar] = process.env[envVar]!;
     } else if (launch.kind === "proxy-routed") {
@@ -793,7 +813,7 @@ export class Launcher {
    * (test registries keep working), as are providers whose promo has expired
    * (an expired promo is no longer auto-preferred, only explicitly selectable).
    */
-  private async pickPreferredProvider(): Promise<{ providerId: string; index: number } | undefined> {
+  private async pickPreferredProvider(allowPaid: boolean): Promise<{ providerId: string; index: number } | undefined> {
     const chain = this.preferredChain;
     for (let i = 0; i < chain.length; i++) {
       const id = chain[i]!;
@@ -801,6 +821,7 @@ export class Launcher {
       const adapter = this.deps.providers.get(id);
       const promo = adapter.profile.promo;
       if (promo && !isPromoActive(promo)) continue;
+      if ((adapter.profile.billing ?? "paid") === "paid" && !allowPaid) continue;
       const metadata = this.deps.authMetadata.get(id);
       if (!metadata) continue;
       const usable = await this.isProviderUsable(adapter, metadata);
@@ -819,6 +840,40 @@ export class Launcher {
     const metadata = this.deps.authMetadata.get(providerId);
     if (!metadata) return { usable: false, reason: "no auth metadata registered" };
     return this.isProviderUsable(adapter, metadata);
+  }
+
+  /**
+   * Resolve the existing automatic route into direct-API candidates without
+   * preparing another launch, re-rendering context, or mutating the logical
+   * session. Missing API auth remains in the pool as a disabled status entry.
+   */
+  async prepareApiFailoverCandidates(prep: LaunchPreparation): Promise<readonly ApiFailoverLaunchCandidate[]> {
+    if (prep.runtimeKind !== "api") return [];
+    const ids = prep.autoRoute ? prep.autoRoute.chain.slice(prep.autoRoute.index) : [prep.providerRef.providerId];
+    const candidates: ApiFailoverLaunchCandidate[] = [];
+    for (const id of ids) {
+      if (!this.deps.providers.has(id)) continue;
+      const adapter = this.deps.providers.get(id);
+      const billing = adapter.profile.billing ?? "paid";
+      if (id === prep.providerRef.providerId) {
+        candidates.push({ adapter, env: prep.plan.env, billing });
+        continue;
+      }
+      const metadata = this.deps.authMetadata.get(id);
+      if (!metadata?.api.supported || adapter.profile.auth.kind === "cli-session") {
+        candidates.push({ adapter, env: {}, billing, disabledReason: "direct API auth unavailable" });
+        continue;
+      }
+      const env = await this.resolveApiHarnessAuthEnv(adapter, metadata);
+      const envVar = metadata.api.envVar;
+      candidates.push({
+        adapter,
+        env,
+        billing,
+        ...(!envVar || !env[envVar] ? { disabledReason: "API credential unavailable" } : {}),
+      });
+    }
+    return candidates;
   }
 
   /**

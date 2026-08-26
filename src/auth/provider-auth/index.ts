@@ -1,12 +1,31 @@
 import { CliAuthManager } from "../cli-auth-manager.js";
 import { createCliAuthAdapter } from "../cli-auth-adapter.js";
-import type { ProviderAuthMetadata } from "../types.js";
+import type { ApiCredentialReference, ProviderAuthMetadata } from "../types.js";
 import { claudeAuthMetadata, createClaudeCliAuthAdapter } from "./claude.js";
 import { deepseekAuthMetadata } from "./deepseek.js";
 import { codexAuthMetadata, createCodexCliAuthAdapter } from "./codex.js";
 import { antigravityAuthMetadata, createAntigravityCliAuthAdapter } from "./antigravity.js";
 import { manifestToAuthMetadata, manifestToCliAuthCapability, type ProviderManifest } from "../../providers/manifest.js";
 import { bundledManifests } from "../../providers/presets.js";
+
+/**
+ * Trusted bundled credential aliases. User manifests never populate this
+ * table, so they cannot opt into another provider's stored secret.
+ */
+const BUNDLED_API_CREDENTIAL_REFS: Readonly<Record<string, ApiCredentialReference>> = {
+  "openrouter-free": {
+    providerId: "ox-alpha",
+    name: "api-key",
+    label: "OpenRouter",
+    setupHint: 'Configure OpenRouter once with "continuum auth ox-alpha" or "continuum auth openrouter-free".',
+  },
+  "ox-alpha": {
+    providerId: "ox-alpha",
+    name: "api-key",
+    label: "OpenRouter",
+    setupHint: 'Configure OpenRouter once with "continuum auth ox-alpha" or "continuum auth openrouter-free".',
+  },
+};
 
 export { claudeAuthMetadata, createClaudeCliAuthAdapter } from "./claude.js";
 export { deepseekAuthMetadata } from "./deepseek.js";
@@ -16,9 +35,10 @@ export { antigravityAuthMetadata, createAntigravityCliAuthAdapter, detectAntigra
 /** Bundled + user auth metadata, keyed by provider id. */
 export function createProviderAuthMetadata(userManifests: readonly ProviderManifest[] = []): ReadonlyMap<string, ProviderAuthMetadata> {
   const map = new Map<string, ProviderAuthMetadata>();
-  for (const m of [...bundledManifests, ...userManifests]) {
-    map.set(m.id, manifestToAuthMetadata(m));
-  }
+  for (const m of bundledManifests) map.set(m.id, manifestToAuthMetadata(m, BUNDLED_API_CREDENTIAL_REFS[m.id]));
+  // User manifests always retain provider-scoped credentials. Shared aliases
+  // are a trusted bundled-data concern, not a user-controlled manifest field.
+  for (const m of userManifests) map.set(m.id, manifestToAuthMetadata(m));
   return map;
 }
 
