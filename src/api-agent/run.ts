@@ -8,7 +8,7 @@
 import type { ProviderAdapter } from "../providers/types.js";
 import type { RenderedContext } from "../rendering/types.js";
 import type { ToolRegistry } from "../mcp/tools.js";
-import { createApiRunner, type FetchLike } from "./runner.js";
+import { createApiRunner, type ApiRunner, type FetchLike } from "./runner.js";
 import { runAgentLoop } from "./agent.js";
 import { optimizeToolOutput } from "../tool-output/optimizer.js";
 import type { OptimizedToolOutput } from "../tool-output/types.js";
@@ -17,6 +17,8 @@ import type { AgentLoopLimits, AgentMessage, NetworkFailureKind } from "./types.
 
 export interface RunApiAgentDeps {
   readonly adapter: ProviderAdapter;
+  /** Optional composite runner; absent preserves the single-provider path. */
+  readonly runner?: ApiRunner;
   readonly tools: ToolRegistry;
   readonly rendered: RenderedContext;
   readonly query: string;
@@ -86,7 +88,7 @@ export function buildInitialMessages(rendered: RenderedContext, query: string): 
 
 export async function runApiAgent(deps: RunApiAgentDeps): Promise<RunApiAgentResult> {
   const messages = buildInitialMessages(deps.rendered, deps.query);
-  const runner = createApiRunner(deps.adapter, {
+  const runner = deps.runner ?? createApiRunner(deps.adapter, {
     ...(deps.fetch ? { fetch: deps.fetch } : {}),
     ...(deps.sleep ? { sleep: deps.sleep } : {}),
     ...(deps.maxAttempts !== undefined ? { maxAttempts: deps.maxAttempts } : {}),

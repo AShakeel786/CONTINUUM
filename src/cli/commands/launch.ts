@@ -34,7 +34,9 @@ import { claudeProfile } from "../../providers/profiles/claude.js";
 import { codexProfile } from "../../providers/profiles/codex.js";
 import { buildToolRegistry } from "../../mcp/build.js";
 import { runApiAgent } from "../../api-agent/run.js";
-import { ApiAgentError } from "../../api-agent/types.js";
+import { ApiAgentError, type NetworkFailureKind } from "../../api-agent/types.js";
+import { ApiFailoverExhaustedError, createFailoverApiRunner, type FailoverPolicy } from "../../api-agent/failover.js";
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { resolveDataDir } from "../../config/paths.js";
 import { getTerminalColumns, isStdinTty } from "./common.js";
@@ -74,6 +76,22 @@ function opt(args: readonly string[], ...flags: readonly string[]): string | und
     if (flags.includes(args[i]!) && i + 1 < args.length) return args[i + 1];
   }
   return undefined;
+}
+
+function apiFailoverPolicyFromArgs(args: readonly string[]): FailoverPolicy {
+  const allowPaidFallback = args.includes("--allow-paid-fallback");
+  return {
+    mode: args.includes("--free-first") || allowPaidFallback ? "freeFirst" : "freeOnly",
+    allowPaidFallback,
+  };
+}
+
+function failoverReason(kind: NetworkFailureKind): string {
+  if (kind === "quota-exhausted") return "quota exhausted";
+  if (kind === "rate-limit") return "rate limited";
+  if (kind === "server-error") return "provider outage";
+  if (kind === "connection-refused") return "connection refused";
+  return kind;
 }
 
 function printPeakProWarning(out: (s: string) => void, prep: LaunchPreparation, pricing: PricingAwarenessService): void {
@@ -185,20 +203,23 @@ function formatApiAgentFailure(providerLabel: string, err: ApiAgentError): strin
 }
 
 /**
- * Next usable automatic-fallback candidate after a chain-routed provider
- * failed at runtime: the first usable member AFTER the current chain index.
- * Usability is re-checked at fallback time (auth may have changed).
+ * Next usable CLI-runtime fallback after a chain-routed native provider
+ * failed. API-runtime candidates are handled inside createFailoverApiRunner.
  */
 async function nextAutomaticFallback(
-  ctx: { launcher: Launcher; providers: ProviderRegistry },
+  ctx: { launcher: Launcher; providers: ProviderRegistry; apiFailoverPolicy?: FailoverPolicy },
   current: LaunchPreparation,
-): Promise<string | undefined> {
+): Promise<{ providerId: string; index: number } | undefined> {
   const route = current.autoRoute!;
   for (let i = route.index + 1; i < route.chain.length; i++) {
     const id = route.chain[i]!;
     if (!ctx.providers.has(id)) continue;
+    const adapter = ctx.providers.get(id);
+    const paid = (adapter.profile.billing ?? "paid") === "paid";
+    const paidAllowed = ctx.apiFailoverPolicy?.mode === "freeFirst" && ctx.apiFailoverPolicy.allowPaidFallback === true;
+    if (paid && !paidAllowed) continue;
     const usable = await ctx.launcher.providerUsability(id);
-    if (usable.usable) return id;
+    if (usable.usable) return { providerId: id, index: i };
   }
   return undefined;
 }
@@ -211,69 +232,67 @@ const AUTO_ROUTE_STDERR_TAIL_BYTES = 8192;
  * CLI providers spawn their native binary (with native-session capture).
  *
  * Automatic-routing fallback: when the launch was selected by the provider-
- * preference chain (`prep.autoRoute`) and it fails at RUNTIME, the launch
- * falls back to the next usable chain member instead of breaking. On the API
- * harness any typed `ApiAgentError` qualifies (rate-limit/auth/network/server).
+ * preference chain (`prep.autoRoute`) is used by the API harness, one
+ * composite runner owns the full candidate pool underneath one runAgentLoop.
+ * Only quota/rate-limit/outage/network failures (plus configured auth
+ * disablement) switch candidates; malformed/config errors fail immediately.
  * On the CLI harness the child's exit code plus a bounded sanitized stderr
  * tail are classified generically (see launcher/cli-failure.ts): provider-
  * side failures (rate-limit/upstream/network/auth) fall back; user interrupts,
  * ordinary task failures, permission denials and anything unattributable do
  * not. Explicit provider/model selections never fall back — they keep the
- * original fail-fast behavior. Bounded by the finite chain; the re-prepared
- * launch carries no `autoRoute`, so a fallback can itself never cascade.
+ * original fail-fast behavior. Every path is bounded by the finite chain.
  */
-export async function launchPrepared(ctx: { launcher: Launcher; providers: ProviderRegistry; sessionManager: SessionManager; pricing?: PricingAwarenessService; dataDir: string }, prep: LaunchPreparation, out: (s: string) => void, spawnFn: (plan: import("../../launcher/types.js").LaunchPlan) => Promise<{ exitCode: number | null; stderrTail?: string }> = spawnCli): Promise<number> {
+export async function launchPrepared(ctx: { launcher: Launcher; providers: ProviderRegistry; sessionManager: SessionManager; pricing?: PricingAwarenessService; dataDir: string; apiFailoverPolicy?: FailoverPolicy }, prep: LaunchPreparation, out: (s: string) => void, spawnFn: (plan: import("../../launcher/types.js").LaunchPlan) => Promise<{ exitCode: number | null; stderrTail?: string }> = spawnCli): Promise<number> {
   if (prep.runtimeKind === "api") {
-    let current = prep;
-    for (;;) {
-      const adapter = ctx.providers.get(current.providerRef.providerId);
-      const tools = await buildToolRegistry({ dataDir: ctx.dataDir });
-      const cache = new ToolResultCache({}, join(ctx.dataDir, "tool-cache"));
-      const scopeProvider = makeScopeProvider({ projectPath: current.project.path, sessionManager: ctx.sessionManager });
-      const sessionId = current.session?.sessionId;
-      const recordToolActivity = sessionId
-        ? (tool: string, summary: string) => ctx.sessionManager.recordToolActivity(sessionId, tool, summary).then(() => undefined)
-        : undefined;
-      try {
-        // `plan.env` carries the provider's resolved auth env (sourced from
-        // the credential store by prepareLaunch) — hand it to the in-process
-        // runner so its auth headers resolve without touching process.env.
-        const result = await runApiAgent({ adapter, tools, rendered: current.rendered, query: current.session?.taskGoal ?? "", onOutput: out, cache, scopeProvider, recordToolActivity, env: current.plan.env });
-        if (result.finalContent) out(`\n${result.finalContent}\n`);
-        return 0;
-      } catch (err) {
-        if (!(err instanceof ApiAgentError)) {
-          out(`API agent error: ${err instanceof Error ? err.message : String(err)}\n`);
-          return 1;
-        }
-        const fallback = current.autoRoute && current.session ? await nextAutomaticFallback(ctx, current) : undefined;
-        if (!fallback) {
-          out(formatApiAgentFailure(adapter.profile.displayName, err));
-          return 1;
-        }
-        const fallbackAdapter = ctx.providers.get(fallback);
-        out(`ℹ️  ${adapter.profile.displayName} unavailable (${err.kind ?? "API error"}) — falling back to ${fallbackAdapter.profile.displayName} (automatic routing).\n`);
-        let next: LaunchPreparation;
-        try {
-          next = await ctx.launcher.prepareLaunch(
-            { sessionId: current.session!.sessionId, providerId: fallback },
-            { autoFallbackFrom: current.providerRef.providerId },
-          );
-        } catch (prepareErr) {
-          out(`✗ Automatic fallback to ${fallbackAdapter.profile.displayName} failed: ${prepareErr instanceof Error ? prepareErr.message : String(prepareErr)}\n`);
-          return 1;
-        }
-        out(`Model decision: ${next.providerRef.model} — ${next.modelDecision.reason}\n`);
-        if (ctx.pricing) await recordLaunchDecisions(next, ctx.dataDir, ctx.pricing).catch(() => {});
-        if (next.runtimeKind === "api") {
-          current = next; // the fallback itself is an API provider — keep looping
-          continue;
-        }
-        // The fallback provider runs through its native CLI — re-enter the
-        // dispatch so it takes the CLI path below. Bounded: the re-prepared
-        // launch has no `autoRoute`, so it cannot fall back again.
-        return launchPrepared(ctx, next, out, spawnFn);
+    const adapter = ctx.providers.get(prep.providerRef.providerId);
+    const tools = await buildToolRegistry({ dataDir: ctx.dataDir });
+    const cache = new ToolResultCache({}, join(ctx.dataDir, "tool-cache"));
+    const scopeProvider = makeScopeProvider({ projectPath: prep.project.path, sessionManager: ctx.sessionManager });
+    const sessionId = prep.session?.sessionId;
+    const recordToolActivity = sessionId
+      ? (tool: string, summary: string) => ctx.sessionManager.recordToolActivity(sessionId, tool, summary).then(() => undefined)
+      : undefined;
+    const candidates = await ctx.launcher.prepareApiFailoverCandidates(prep);
+    const runner = prep.autoRoute
+      ? createFailoverApiRunner(candidates, {
+          ...ctx.apiFailoverPolicy,
+          onSwitch: async (event) => {
+            out(`${event.fromDisplayName} ${failoverReason(event.reason)} → ${event.toDisplayName}\n`);
+            await ctx.apiFailoverPolicy?.onSwitch?.(event);
+            if (sessionId) {
+              const session = await ctx.sessionManager.loadSession(sessionId).catch(() => undefined);
+              if (session) {
+                const toAdapter = ctx.providers.get(event.toProviderId);
+                const to = { providerId: event.toProviderId, model: toAdapter.resolveModel() };
+                await ctx.sessionManager.recordHandoff(sessionId, {
+                  handoffId: randomUUID(),
+                  fromProvider: session.activeProvider,
+                  toProvider: to,
+                  at: new Date().toISOString(),
+                }).catch(() => {});
+                await ctx.sessionManager.setActiveProvider(sessionId, to).catch(() => {});
+              }
+            }
+          },
+        })
+      : undefined;
+    if (runner) {
+      const pool = runner.status().map((candidate) => `${candidate.displayName}:${candidate.health}`).join(", ");
+      out(`[route] Active ${adapter.profile.displayName}; API pool ${pool}\n`);
+    }
+    try {
+      const result = await runApiAgent({ adapter, ...(runner ? { runner } : {}), tools, rendered: prep.rendered, query: prep.session?.taskGoal ?? "", onOutput: out, cache, scopeProvider, recordToolActivity, env: prep.plan.env });
+      if (result.finalContent) out(`\n${result.finalContent}\n`);
+      return 0;
+    } catch (err) {
+      if (!(err instanceof ApiAgentError)) {
+        out(`API agent error: ${err instanceof Error ? err.message : String(err)}\n`);
+        return 1;
       }
+      if (err instanceof ApiFailoverExhaustedError) out(`✗ ${err.message}\n`);
+      else out(formatApiAgentFailure(adapter.profile.displayName, err));
+      return 1;
     }
   }
   const startedAt = Date.now();
@@ -403,12 +422,12 @@ export async function launchPrepared(ctx: { launcher: Launcher; providers: Provi
       : undefined;
     if (!fallback) return result.exitCode;
     const failedAdapter = ctx.providers.get(prep.providerRef.providerId);
-    const fallbackAdapter = ctx.providers.get(fallback);
+    const fallbackAdapter = ctx.providers.get(fallback.providerId);
     out(`ℹ️  ${failedAdapter.profile.displayName} unavailable (${classification.kind}) — falling back to ${fallbackAdapter.profile.displayName} (automatic routing).\n`);
     let next: LaunchPreparation;
     try {
       next = await ctx.launcher.prepareLaunch(
-        { sessionId: prep.session.sessionId, providerId: fallback },
+        { sessionId: prep.session.sessionId, providerId: fallback.providerId },
         { autoFallbackFrom: prep.providerRef.providerId },
       );
     } catch (prepareErr) {
@@ -417,9 +436,10 @@ export async function launchPrepared(ctx: { launcher: Launcher; providers: Provi
     }
     out(`Model decision: ${next.providerRef.model} — ${next.modelDecision.reason}\n`);
     if (ctx.pricing) await recordLaunchDecisions(next, ctx.dataDir, ctx.pricing).catch(() => {});
-    // Bounded: `next` is prepared from an existing session (resume path), so
-    // it carries no `autoRoute` and this cannot cascade.
-    return launchPrepared(ctx, next, out, spawnFn);
+    // Preserve the remaining route on the re-prepared launch. If this member
+    // uses the API harness, its one runAgentLoop receives the rest of the pool;
+    // if it is another CLI member, runtime fallback can continue to member N.
+    return launchPrepared(ctx, { ...next, autoRoute: { chain: prep.autoRoute.chain, index: fallback.index } }, out, spawnFn);
   }
   return result.exitCode ?? 0;
 }
@@ -459,6 +479,7 @@ export async function runLaunchCommand(args: readonly string[], io: CliIo): Prom
   const general = args.includes("--general");
   const currentDir = args.includes("--current-dir") || args.includes("--here");
   const mode: "general" | "current-directory" | undefined = general ? "general" : currentDir ? "current-directory" : undefined;
+  const apiFailoverPolicy = apiFailoverPolicyFromArgs(args);
 
   try {
     // Preflight: surface stack problems BEFORE the interactive session starts.
@@ -467,7 +488,7 @@ export async function runLaunchCommand(args: readonly string[], io: CliIo): Prom
 
     const prep = await launcher.prepareLaunch(
       { ...(mode ? {} : projectKey ? { projectKey } : {}), ...(mode ? { mode } : {}), providerId, modelAlias, taskGoal },
-      { permissionMode },
+      { permissionMode, allowPaidFallback: apiFailoverPolicy.allowPaidFallback },
     );
 
     if (prep.stale) {
@@ -493,7 +514,7 @@ export async function runLaunchCommand(args: readonly string[], io: CliIo): Prom
     }
 
     await ensureMcpRegistration();
-    return launchPrepared({ launcher, providers, sessionManager, pricing, dataDir }, prep, out);
+    return launchPrepared({ launcher, providers, sessionManager, pricing, dataDir, apiFailoverPolicy }, prep, out);
   } catch (err) {
     if (err instanceof NoProjectError || err instanceof ProviderNotAuthenticatedError || err instanceof NoAuthenticatedAgentError || err instanceof LocalDependencyUnavailableError) {
       out(`${err.message}\n`);
@@ -549,7 +570,7 @@ export async function runResumeCommand(args: readonly string[], io: CliIo): Prom
     if (prep.session) for (const line of await checkPricing(prep.session.sessionId, pricing, handoffManager)) out(line);
     printPeakProWarning(out, prep, pricing);
     await ensureMcpRegistration();
-    return launchPrepared({ launcher, providers, sessionManager, pricing, dataDir }, prep, out);
+    return launchPrepared({ launcher, providers, sessionManager, pricing, dataDir, apiFailoverPolicy: apiFailoverPolicyFromArgs(args) }, prep, out);
   } catch (err) {
     if (err instanceof NoAuthenticatedAgentError || err instanceof ProviderNotAuthenticatedError || err instanceof LocalDependencyUnavailableError) {
       out(`${err.message}\n`);

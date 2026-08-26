@@ -17,6 +17,7 @@
 import type { ProviderAdapter } from "../providers/types.js";
 import { CredentialManager } from "./credential-manager.js";
 import { InvalidCredentialError } from "./errors.js";
+import type { ApiCredentialReference } from "./types.js";
 
 /**
  * Resolves the env var CONTINUUM's stored credential should populate for a
@@ -38,12 +39,17 @@ export function envVarForProviderAuth(adapter: ProviderAdapter): string | undefi
 export async function resolveProviderAuthEnv(
   adapter: ProviderAdapter,
   credentialManager: CredentialManager,
-  credentialName = "api-key",
+  credential: ApiCredentialReference | string = { providerId: adapter.profile.id, name: "api-key" },
 ): Promise<Readonly<Record<string, string>>> {
   const envVar = envVarForProviderAuth(adapter);
   if (!envVar) {
     throw new InvalidCredentialError(adapter.profile.id, "this provider's auth strategy is not credential-store-backed (cli-session or unsupported)");
   }
-  const value = await credentialManager.getCredential(adapter.profile.id, credentialName);
+  // Preserve the original public third-argument form (`credentialName`) while
+  // allowing trusted metadata to point at a shared provider/name pair.
+  const credentialRef = typeof credential === "string"
+    ? { providerId: adapter.profile.id, name: credential }
+    : credential;
+  const value = await credentialManager.getCredential(credentialRef.providerId, credentialRef.name);
   return { [envVar]: value };
 }

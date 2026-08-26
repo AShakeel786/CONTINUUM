@@ -223,8 +223,17 @@ async function checkCredentials(
 
   // Direct route (default): only the provider's own API key is required.
   if (metadata.api.supported) {
-    const has = await deps.credentialManager.hasCredential(id, "api-key");
-    if (!has) return { ok: false, reason: `${id} has no stored API key` };
+    const ref = metadata.api.credentialRef;
+    const has = await deps.credentialManager.hasCredential(ref.providerId, ref.name);
+    if (!has) {
+      const label = ref.label ?? `${id} API`;
+      return {
+        ok: false,
+        reason: ref.setupHint
+          ? `${id} has no shared ${label} credential. ${ref.setupHint}`
+          : `${id} has no stored API key. Run "continuum auth ${id}" to configure it.`,
+      };
+    }
   }
   if (!metadata.api.supported && !metadata.proxyUserKey?.supported) {
     return { ok: false, reason: `${id} declares no usable auth` };

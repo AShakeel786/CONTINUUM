@@ -83,7 +83,11 @@ describe("oxAlphaManifest (OpenRouter — Ox Alpha Free)", () => {
   it("exposes API auth metadata (bearer env var), and no CLI auth", () => {
     const metadata = manifestToAuthMetadata(oxAlphaManifest);
     expect(metadata.providerId).toBe("ox-alpha");
-    expect(metadata.api).toEqual({ supported: true, envVar: "OPENROUTER_API_KEY" });
+    expect(metadata.api).toEqual({
+      supported: true,
+      envVar: "OPENROUTER_API_KEY",
+      credentialRef: { providerId: "ox-alpha", name: "api-key" },
+    });
     expect(metadata.cli.supported).toBe(false);
   });
 
@@ -107,12 +111,12 @@ describe("oxAlphaManifest (OpenRouter — Ox Alpha Free)", () => {
     expect(process.env.OPENROUTER_API_KEY).toBeUndefined();
   });
 
-  it("is registered by the default registry (bundled last, after Antigravity)", () => {
+  it("is registered by the default registry after the stable free API providers", () => {
     const registry = createProviderRegistry();
     expect(registry.has("ox-alpha")).toBe(true);
     const ids = registry.listIds();
     expect(ids[ids.length - 1]).toBe("ox-alpha");
-    expect(bundledManifests[4]!.id).toBe("ox-alpha");
+    expect(bundledManifests[7]!.id).toBe("ox-alpha");
   });
 
   it("is a dual-harness provider: Claude Code CLI preferred, direct API when claude is missing", async () => {
@@ -184,8 +188,14 @@ describe("oxAlphaManifest (OpenRouter — Ox Alpha Free)", () => {
     ).toThrow(/cannot launch redirected session/);
   });
 
-  it("declares the automatic preference chain as Ox Alpha first, DeepSeek second", () => {
-    expect(DEFAULT_PROVIDER_PREFERENCE_CHAIN).toEqual(["ox-alpha", "deepseek"]);
+  it("keeps Ox Alpha after stable free APIs and before paid DeepSeek", () => {
+    expect(DEFAULT_PROVIDER_PREFERENCE_CHAIN).toEqual([
+      "gemini-free",
+      "groq-free",
+      "openrouter-free",
+      "ox-alpha",
+      "deepseek",
+    ]);
   });
 });
 

@@ -489,6 +489,13 @@ export interface ProviderProfile {
   /** Optional temporary/promotional state (e.g. limited-time free). See `PromoInfo`. */
   readonly promo?: PromoInfo;
   /**
+   * Billing class used by automatic API failover. Unknown/omitted providers
+   * are treated as paid, so adding a manifest can never silently enable
+   * automatic spend. A temporary free offer should still be declared
+   * `free`; `promo.until` determines when it stops being eligible as free.
+   */
+  readonly billing?: "free" | "paid";
+  /**
    * True when the provider declares BOTH a coding-agent CLI harness and a
    * direct-API harness: the CLI harness is preferred, and the generic API
    * agent is selected instead when the CLI executable is unavailable. Never

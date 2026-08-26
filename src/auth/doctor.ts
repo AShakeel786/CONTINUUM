@@ -69,6 +69,24 @@ export class Doctor {
       });
     }
 
+    // Surface unconfigured bundled consumers of an already-present shared
+    // credential. Missing aliases stay silent here so one canonical missing
+    // finding remains actionable instead of producing duplicate warnings.
+    const configuredIds = new Set(config.providers.map((entry) => entry.providerId));
+    for (const metadata of this.deps.providerMetadata.values()) {
+      if (configuredIds.has(metadata.providerId) || !metadata.api.supported) continue;
+      const ref = metadata.api.credentialRef;
+      if (ref.providerId === metadata.providerId) continue;
+      const result = await verifier.verifyApi(metadata);
+      if (result.outcome !== "ok") continue;
+      findings.push({
+        providerId: metadata.providerId,
+        method: "shared-api",
+        healthy: true,
+        detail: result.detail,
+      });
+    }
+
     const overall: DoctorOverall = findings.every((f) => f.healthy) ? "healthy" : "unhealthy";
     return {
       overall,

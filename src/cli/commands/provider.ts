@@ -74,9 +74,10 @@ async function addProvider(args: readonly string[], out: (s: string) => void): P
   const envVar = opt(args, "--env")?.trim();
   const model = opt(args, "--model")?.trim();
   const cliExecutable = opt(args, "--cli")?.trim();
+  const billing = opt(args, "--billing") as "free" | "paid" | undefined;
 
   if (!id || !protocol || !baseUrl || !auth || !model) {
-    out("Usage: continuum provider add --id <id> --protocol <openai-compatible|anthropic-messages> --base-url <url> --auth <api-key|bearer-token|cli-session> [--env <VAR>] --model <model> [--cli <exe>]\n");
+    out("Usage: continuum provider add --id <id> --protocol <openai-compatible|anthropic-messages> --base-url <url> --auth <api-key|bearer-token|cli-session> [--env <VAR>] --model <model> [--billing <free|paid>] [--cli <exe>]\n");
     return 2;
   }
   if (BUNDLED_IDS.has(id)) {
@@ -85,6 +86,10 @@ async function addProvider(args: readonly string[], out: (s: string) => void): P
   }
   if ((auth === "api-key" || auth === "bearer-token") && !envVar) {
     out(`--env <VAR> is required for auth ${auth} (the env-var NAME, never a key).\n`);
+    return 2;
+  }
+  if (billing !== undefined && billing !== "free" && billing !== "paid") {
+    out("--billing must be free or paid. Omitted providers are treated as paid for automatic fallback.\n");
     return 2;
   }
 
@@ -101,6 +106,7 @@ async function addProvider(args: readonly string[], out: (s: string) => void): P
           ? { kind: "bearer-token", envVar: envVar! }
           : { kind: "cli-session" },
     models: { default: model! },
+    ...(billing ? { billing } : {}),
     ...(cliExecutable
       ? {
           cli: {
@@ -136,7 +142,7 @@ async function listProviders(out: (s: string) => void): Promise<number> {
 
 function formatProviderLine(m: ProviderManifest): string {
   const notes = m.capabilities?.notes;
-  return `  ${m.id} [${m.protocol}] ${m.displayName} — Runtime: ${runtimeLabel(m)}${notes ? `\n      ${notes}` : ""}\n`;
+  return `  ${m.id} [${m.protocol}] ${m.displayName} — Runtime: ${runtimeLabel(m)} · Billing: ${m.billing ?? "paid (default)"}${notes ? `\n      ${notes}` : ""}\n`;
 }
 
 async function showProvider(args: readonly string[], out: (s: string) => void): Promise<number> {

@@ -13,7 +13,18 @@ export { discoverModelsFor, parseCliModelsOutput, parseCodexModelsCache, type Di
 export * from "./manifest.js";
 export * from "./manifest-store.js";
 export * from "./promo.js";
-export { bundledManifests, claudeManifest, deepseekManifest, codexManifest, antigravityManifest, oxAlphaManifest, DEFAULT_PROVIDER_PREFERENCE_CHAIN } from "./presets.js";
+export {
+  bundledManifests,
+  claudeManifest,
+  deepseekManifest,
+  codexManifest,
+  antigravityManifest,
+  geminiFreeManifest,
+  groqFreeManifest,
+  openRouterFreeManifest,
+  oxAlphaManifest,
+  DEFAULT_PROVIDER_PREFERENCE_CHAIN,
+} from "./presets.js";
 
 import { createProviderAdapter } from "./adapter.js";
 import { ProviderRegistry } from "./registry.js";

@@ -63,7 +63,16 @@ describe("HandoffManager — provider selection", () => {
   it("listAvailableReceivingProviders lists every registered provider, does not pick one", async () => {
     const manager = new HandoffManager(await makeSessionManager(), createDefaultProviderRegistry());
     const choices = manager.listAvailableReceivingProviders();
-    expect(choices.map((c) => c.providerId).sort()).toEqual(["antigravity", "claude", "codex", "deepseek", "ox-alpha"]);
+    expect(choices.map((c) => c.providerId).sort()).toEqual([
+      "antigravity",
+      "claude",
+      "codex",
+      "deepseek",
+      "gemini-free",
+      "groq-free",
+      "openrouter-free",
+      "ox-alpha",
+    ]);
   });
 
   it("prepareHandoff returns the session plus available choices together", async () => {

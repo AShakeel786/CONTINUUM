@@ -26,6 +26,15 @@ export async function runProvidersCommand(args: readonly string[], io: CliIo): P
     // Not wired into CONTINUUM yet: distinguish "native CLI is usable" from
     // "not installed", rather than a flat (and misleading) "not configured".
     if (!entry) {
+      if (metadata.api.supported && metadata.api.credentialRef.providerId !== metadata.providerId) {
+        const shared = await verifier.verifyApi(metadata);
+        if (shared.outcome === "ok") {
+          out(`${metadata.providerId}: authenticated (shared ${metadata.api.credentialRef.label ?? "API"} credential)\n`);
+        } else {
+          out(`${metadata.providerId}: unavailable (${shared.detail})\n`);
+        }
+        continue;
+      }
       if (metadata.cli.supported) {
         const installed = await ctx.cliAuthManager.checkInstalled(metadata.providerId);
         if (installed === "not-installed") {

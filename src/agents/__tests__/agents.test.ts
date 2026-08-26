@@ -71,13 +71,29 @@ describe("AgentManager — list", () => {
     });
     const descriptors = await manager.listDescriptors();
     const ids = descriptors.map((d) => d.providerId).sort();
-    expect(ids).toEqual(["antigravity", "claude", "codex", "deepseek", "ox-alpha"]);
+    expect(ids).toEqual([
+      "antigravity",
+      "claude",
+      "codex",
+      "deepseek",
+      "gemini-free",
+      "groq-free",
+      "openrouter-free",
+      "ox-alpha",
+    ]);
     const claude = descriptors.find((d) => d.providerId === "claude")!;
     expect(claude.source).toBe("builtin");
     expect(claude.auth.cli).toBe(true);
     expect(claude.auth.api).toBe(true);
     expect(claude.configured).toBe(false);
     expect(claude.usable).toBe(true); // fake CLI reports installed + authenticated
+    for (const id of ["gemini-free", "groq-free", "openrouter-free"]) {
+      const provider = descriptors.find((d) => d.providerId === id)!;
+      expect(provider.source).toBe("builtin");
+      expect(provider.auth).toEqual({ api: true, cli: false, proxyUserKey: false });
+      expect(provider.configured).toBe(false);
+      expect(provider.usable).toBe(false);
+    }
   });
 
   it("carries the active promo label on Ox Alpha Free and nowhere else", async () => {

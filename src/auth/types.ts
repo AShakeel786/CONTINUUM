@@ -31,6 +31,20 @@
 export type CredentialBackendSecurityLevel = "os-native" | "encrypted-fallback";
 
 /**
+ * Non-secret pointer to one backend entry. Multiple trusted bundled provider
+ * identities may share this pointer while retaining independent manifests,
+ * model allowlists, billing, and routing state.
+ */
+export interface ApiCredentialReference {
+  readonly providerId: string;
+  readonly name: string;
+  /** Human label used in safe diagnostics; never contains the credential. */
+  readonly label?: string;
+  /** Actionable, secret-free setup guidance for a missing shared credential. */
+  readonly setupHint?: string;
+}
+
+/**
  * One storage mechanism. Implementations never know what a "provider" or
  * "API key" is — just opaque key/value pairs, where the key is always a
  * `CredentialManager`-constructed namespaced string
@@ -55,6 +69,8 @@ export interface ApiAuthCapability {
   readonly supported: true;
   /** The exact env var name Phase 3's provider profile already expects (`profile.auth.secret.envVar`) — CredentialManager populates this var at activation time, it never invents a new naming scheme. */
   readonly envVar: string;
+  /** CredentialManager entry to resolve. Defaults to this provider's api-key. */
+  readonly credentialRef: ApiCredentialReference;
 }
 export interface ApiAuthUnsupported {
   readonly supported: false;

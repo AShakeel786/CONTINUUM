@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createApiRunner, type FetchLike } from "../runner.js";
+import { createApiRunner, parseProviderResetAtMs, type FetchLike } from "../runner.js";
 import { createProviderAdapter } from "../../providers/adapter.js";
 import { manifestToProfile } from "../../providers/manifest.js";
 import { ApiAgentError, type AgentMessage } from "../types.js";
@@ -43,6 +43,49 @@ describe("OpenAI-compatible runner", () => {
     expect(result.toolCalls).toEqual([{ id: "t1", name: "memory_search", arguments: "{\"query\":\"x\"}" }]);
   });
 
+  it("preserves opaque tool continuation metadata only for the provider that issued it", async () => {
+    const source = createProviderAdapter(manifestToProfile(grokManifest));
+    const extra = { google: { thought_signature: "opaque-fixture-signature" } };
+    const bodies: Record<string, unknown>[] = [];
+    let calls = 0;
+    const sourceRunner = createApiRunner(source, {
+      env: { XAI_API_KEY: "fixture" },
+      fetch: fakeFetch((_url, body) => {
+        bodies.push(JSON.parse(body) as Record<string, unknown>);
+        calls += 1;
+        return calls === 1
+          ? { status: 200, body: JSON.stringify({ choices: [{ message: { tool_calls: [{ id: "t1", type: "function", function: { name: "probe", arguments: "{}" }, extra_content: extra }] }, finish_reason: "tool_calls" }] }) }
+          : { status: 200, body: JSON.stringify({ choices: [{ message: { content: "done" }, finish_reason: "stop" }] }) };
+      }),
+    });
+    const first = await sourceRunner.call(msgs, []);
+    expect(first.toolCalls[0]?.providerContinuation).toEqual({ sourceProviderId: "grok", openAiExtraContent: extra });
+    await sourceRunner.call([
+      ...msgs,
+      { role: "assistant", content: null, toolCalls: first.toolCalls },
+      { role: "tool", toolCallId: "t1", content: "ok" },
+    ], []);
+    const replayed = (bodies[1]?.messages as { tool_calls?: { extra_content?: unknown }[] }[])[1]?.tool_calls?.[0];
+    expect(replayed?.extra_content).toEqual(extra);
+
+    let replacementBody: Record<string, unknown> = {};
+    const replacementManifest = { ...grokManifest, id: "replacement", baseUrl: "https://replacement.example/v1" };
+    const replacement = createApiRunner(createProviderAdapter(manifestToProfile(replacementManifest)), {
+      env: { XAI_API_KEY: "fixture" },
+      fetch: fakeFetch((_url, body) => {
+        replacementBody = JSON.parse(body) as Record<string, unknown>;
+        return { status: 200, body: JSON.stringify({ choices: [{ message: { content: "done" }, finish_reason: "stop" }] }) };
+      }),
+    });
+    await replacement.call([
+      ...msgs,
+      { role: "assistant", content: null, toolCalls: first.toolCalls },
+      { role: "tool", toolCallId: "t1", content: "ok" },
+    ], []);
+    const stripped = (replacementBody.messages as { tool_calls?: { extra_content?: unknown }[] }[])[1]?.tool_calls?.[0];
+    expect(stripped?.extra_content).toBeUndefined();
+  });
+
   it("throws a clear error on a non-2xx (bad key/endpoint)", async () => {
     const adapter = createProviderAdapter(manifestToProfile(grokManifest));
     process.env.XAI_API_KEY = "sk-fixture";
@@ -54,6 +97,13 @@ describe("OpenAI-compatible runner", () => {
 });
 
 describe("network failure classification + bounded retry", () => {
+  it("normalizes provider reset headers including compact duration values", () => {
+    expect(parseProviderResetAtMs(["2m59.56s"], 1_000)).toBe(180_560);
+    expect(parseProviderResetAtMs(["577ms"], 1_000)).toBe(1_577);
+    expect(parseProviderResetAtMs(["1s250ms"], 1_000)).toBe(2_250);
+    expect(parseProviderResetAtMs(["2000000000"], 1_000)).toBe(2_000_000_000_000);
+  });
+
   it("classifies a connection-refused exception, retries with backoff, and recovers", async () => {
     const adapter = createProviderAdapter(manifestToProfile(grokManifest));
     process.env.XAI_API_KEY = "sk-fixture";
@@ -224,6 +274,30 @@ describe("network failure classification + bounded retry", () => {
     expect(calls).toBe(2);
   });
 
+  it("carries Retry-After into the terminal error so the pool can cool the candidate down", async () => {
+    const adapter = createProviderAdapter(manifestToProfile(grokManifest));
+    const before = Date.now();
+    const runner = createApiRunner(adapter, {
+      env: { XAI_API_KEY: "fixture" },
+      maxAttempts: 1,
+      fetch: async () => ({ ok: false, status: 429, body: "slow down", retryAfterMs: 7000 }),
+    });
+    const err = await runner.call(msgs, []).catch((caught: unknown) => caught) as ApiAgentError;
+    expect(err.kind).toBe("rate-limit");
+    expect(err.retryAtMs).toBeGreaterThanOrEqual(before + 7000);
+  });
+
+  it("detects structured provider quota exhaustion without treating arbitrary 4xx as failover-safe", async () => {
+    const adapter = createProviderAdapter(manifestToProfile(grokManifest));
+    const runner = createApiRunner(adapter, {
+      env: { XAI_API_KEY: "fixture" },
+      maxAttempts: 1,
+      fetch: async () => ({ ok: false, status: 402, body: JSON.stringify({ error: { code: "insufficient_quota", message: "credits depleted" } }) }),
+    });
+    const err = await runner.call(msgs, []).catch((caught: unknown) => caught) as ApiAgentError;
+    expect(err.kind).toBe("quota-exhausted");
+  });
+
   it("retries a 5xx server error and eventually gives up with a classified error", async () => {
     const adapter = createProviderAdapter(manifestToProfile(grokManifest));
     process.env.XAI_API_KEY = "sk-fixture";
@@ -254,6 +328,18 @@ describe("network failure classification + bounded retry", () => {
     delete process.env.XAI_API_KEY;
     expect(err.message).not.toContain("sk-super-secret-value");
     expect(err.host).not.toContain("sk-super-secret-value");
+  });
+
+  it("never emits a raw provider response body", async () => {
+    const adapter = createProviderAdapter(manifestToProfile(grokManifest));
+    const runner = createApiRunner(adapter, {
+      env: { XAI_API_KEY: "fixture" },
+      maxAttempts: 1,
+      fetch: async () => ({ ok: false, status: 503, body: "upstream debug dump secret-marker" }),
+    });
+    const err = await runner.call(msgs, []).catch((caught: unknown) => caught) as ApiAgentError;
+    expect(err.message).not.toContain("secret-marker");
+    expect(err.message).not.toContain("debug dump");
   });
 
   it("reports host:port, not the full request URL/path", async () => {

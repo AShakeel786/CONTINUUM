@@ -138,7 +138,7 @@ async function buildFallbackDeps(opts: FallbackDepsOpts = {}) {
     sessionManager,
     prompt: createScriptedPrompt({}),
     sessionBaseDir: sessionDir,
-    ...(opts.chain ? { preferredProviderChain: opts.chain } : {}),
+    preferredProviderChain: opts.chain ?? ["ox-alpha", "deepseek"],
     ...(opts.findExecutable
       ? { findExecutable: opts.findExecutable }
       : { findExecutable: (e: string) => (e === "claude" ? "/fake/claude" : undefined) }),
@@ -240,7 +240,7 @@ describe("launchPrepared automatic-routing fallback", () => {
     expect(lines.join("\n")).not.toContain("falling back");
   });
 
-  it("loops through an API fallback provider and stops after its failure (no cascade)", async () => {
+  it("constructs one composite API runner instead of restarting runApiAgent", async () => {
     const apiBManifest: ProviderManifest = {
       schemaVersion: 1,
       id: "api-b",
@@ -269,9 +269,9 @@ describe("launchPrepared automatic-routing fallback", () => {
     const exit = await launchPrepared({ launcher, providers: deps.providers, sessionManager, dataDir }, launchPrep, out);
 
     expect(exit).toBe(1);
-    expect(mockedRun).toHaveBeenCalledTimes(2);
+    expect(mockedRun).toHaveBeenCalledTimes(1);
     expect(mockedRun.mock.calls[0]![0].adapter.profile.id).toBe("ox-alpha");
-    expect(mockedRun.mock.calls[1]![0].adapter.profile.id).toBe("api-b");
+    expect(mockedRun.mock.calls[0]![0].runner).toBeDefined();
   });
 });
 
@@ -310,7 +310,7 @@ describe("launchPrepared CLI-harness automatic-routing fallback", () => {
 
     const { plans, spawnFn } = spawnScripted([{ exitCode: 1, stderrTail: OX_429_TAIL }]);
     const { out, lines } = collectOut();
-    const exit = await launchPrepared({ launcher, providers: deps.providers, sessionManager, dataDir }, launchPrep, out, spawnFn);
+    const exit = await launchPrepared({ launcher, providers: deps.providers, sessionManager, dataDir, apiFailoverPolicy: { mode: "freeFirst", allowPaidFallback: true } }, launchPrep, out, spawnFn);
 
     expect(exit).toBe(0);
     expect(plans.length).toBe(2);
@@ -336,7 +336,7 @@ describe("launchPrepared CLI-harness automatic-routing fallback", () => {
 
     const { plans, spawnFn } = spawnScripted([{ exitCode: 1, stderrTail: "API Error: 502 Bad Gateway" }]);
     const { out, lines } = collectOut();
-    const exit = await launchPrepared({ launcher, providers: deps.providers, sessionManager, dataDir }, launchPrep, out, spawnFn);
+    const exit = await launchPrepared({ launcher, providers: deps.providers, sessionManager, dataDir, apiFailoverPolicy: { mode: "freeFirst", allowPaidFallback: true } }, launchPrep, out, spawnFn);
 
     expect(exit).toBe(0);
     expect(plans.length).toBe(2);
@@ -403,7 +403,7 @@ describe("launchPrepared CLI-harness automatic-routing fallback", () => {
       { exitCode: 1, stderrTail: OX_429_TAIL },
     ]);
     const lines: string[] = [];
-    const exit = await launchPrepared({ launcher, providers: deps.providers, sessionManager, dataDir }, launchPrep, (s) => lines.push(s), spawnFn);
+    const exit = await launchPrepared({ launcher, providers: deps.providers, sessionManager, dataDir, apiFailoverPolicy: { mode: "freeFirst", allowPaidFallback: true } }, launchPrep, (s) => lines.push(s), spawnFn);
 
     expect(exit).toBe(1);
     expect(plans.length).toBe(2); // ox once, deepseek once — no third attempt
@@ -467,7 +467,7 @@ describe("launchPrepared CLI-harness automatic-routing fallback", () => {
     mockedRun.mockResolvedValueOnce({ finalContent: "fallback ok" } as never);
     const { plans, spawnFn } = spawnScripted([{ exitCode: 1, stderrTail: OX_429_TAIL }]);
     const lines: string[] = [];
-    const exit = await launchPrepared({ launcher, providers: deps.providers, sessionManager, dataDir }, launchPrep, (s) => lines.push(s), spawnFn);
+    const exit = await launchPrepared({ launcher, providers: deps.providers, sessionManager, dataDir, apiFailoverPolicy: { mode: "freeFirst", allowPaidFallback: true } }, launchPrep, (s) => lines.push(s), spawnFn);
 
     expect(exit).toBe(0);
     expect(plans.length).toBe(1);

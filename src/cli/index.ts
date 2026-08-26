@@ -165,6 +165,7 @@ const VALUE_FLAGS = new Set([
   "--auth",
   "--env",
   "--cli",
+  "--billing",
   "--older-than",
   "--limit",
 ]);
@@ -191,9 +192,9 @@ const COMMAND_USAGE: Readonly<Record<string, string>> = {
   project: "Usage: continuum project <add|remove|list|show|set-default>\n\n  add          continuum project add <name> <path> [--alias <a>] [--provider <id>] [--model <m>]\n               continuum project add .   (register the current directory)\n  remove       continuum project remove <name|alias|id>\n  list         list registered projects\n  show         show a project (defaults to the current directory)\n  set-default  continuum project set-default <project> <provider> [--model <m>]",
   provider: "Usage: continuum provider <add|list|show|remove|validate>\n\n  Manage user provider manifests — the manifest registry (secret-free JSON).\n  For runtime availability use `continuum providers` instead.",
   launch:
-    "Usage: continuum launch [<project>|--general|--current-dir] [--provider <id>] [--task <goal>] [--bypass-permissions]\n\n  Resolve project → provider → session, then run the agent.\n  --general      no-project session (no fixed directory anchor)\n  --current-dir  session anchored to the launch directory, not registered as a project",
+    "Usage: continuum launch [<project>|--general|--current-dir] [--provider <id>] [--task <goal>] [--bypass-permissions] [--free-only|--free-first --allow-paid-fallback]\n\n  Resolve project → provider → session, then run the agent.\n  --general                no-project session (no fixed directory anchor)\n  --current-dir            session anchored to the launch directory, not registered as a project\n  --free-only              automatic API fallback may use free providers only (default)\n  --free-first             prefer free providers; paid still requires --allow-paid-fallback\n  --allow-paid-fallback    explicit opt-in to paid automatic fallback",
   run: "Usage: continuum launch [<project>] [--provider <id>] [--task <goal>]\n\n  Alias for `continuum launch`.",
-  resume: "Usage: continuum resume <sessionId> [--provider <id>] | --recent N\n\n  Resume an existing session (stale-worktree safe).",
+  resume: "Usage: continuum resume <sessionId> [--provider <id>] | --recent N [--allow-paid-fallback]\n\n  Resume an existing session (stale-worktree safe).",
   handoff: "Usage: continuum handoff <sessionId>\n\n  Hand off to an authenticated agent (never auto-selects).",
   sessions: "Usage: continuum sessions [list] [--limit N] [--status active|archived|all]\n       continuum sessions close <id>\n       continuum sessions archive <id>\n       continuum sessions clean [--dry-run]\n       continuum sessions purge [--older-than ISO]\n\n  List (active by default), close, archive, clean smoke/test noise, or purge finished sessions.",
   mcp: "Usage: continuum mcp\n\n  Run the MCP server (JSON-RPC over stdio).",

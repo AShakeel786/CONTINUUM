@@ -9,6 +9,7 @@ import type { ProjectRecord } from "../registry/types.js";
 import type { ProviderRef, TaskSession } from "../session/types.js";
 import type { RenderedContext } from "../rendering/types.js";
 import type { LaunchRoute } from "../providers/types.js";
+import type { ProviderAdapter } from "../providers/types.js";
 
 /** A concrete plan for spawning a provider CLI. */
 export interface LaunchPlan {
@@ -37,6 +38,14 @@ export interface LaunchPlan {
 /** Which runtime carries a launch: the provider's native CLI, or CONTINUUM's generic API agent. */
 export type LaunchRuntimeKind = "cli" | "api";
 
+/** Secret-bearing only in-memory input for the composite API runner. */
+export interface ApiFailoverLaunchCandidate {
+  readonly adapter: ProviderAdapter;
+  readonly env: Readonly<Record<string, string | undefined>>;
+  readonly billing: "free" | "paid";
+  readonly disabledReason?: string;
+}
+
 export interface ResolvedLaunchTarget {
   readonly project: ProjectRecord;
   readonly providerRef: ProviderRef;
@@ -53,6 +62,8 @@ export interface LaunchOptions {
    * overridden and an explicit choice always wins.
    */
   readonly permissionMode?: "safe" | "bypass";
+  /** Explicit permission for automatic routing to select a paid provider. */
+  readonly allowPaidFallback?: boolean;
   /**
    * INTERNAL — set by `launchPrepared` when re-preparing a launch after an
    * automatic-routing fallback. Records which provider just failed so the
