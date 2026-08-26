@@ -115,7 +115,7 @@ describe("oxAlphaManifest (OpenRouter — Ox Alpha Free)", () => {
     const registry = createProviderRegistry();
     expect(registry.has("ox-alpha")).toBe(true);
     const ids = registry.listIds();
-    expect(ids[ids.length - 1]).toBe("ox-alpha");
+    expect(ids.indexOf("ox-alpha")).toBeGreaterThan(ids.indexOf("openrouter-free"));
     expect(bundledManifests[7]!.id).toBe("ox-alpha");
   });
 
@@ -188,14 +188,23 @@ describe("oxAlphaManifest (OpenRouter — Ox Alpha Free)", () => {
     ).toThrow(/cannot launch redirected session/);
   });
 
-  it("keeps Ox Alpha after stable free APIs and before paid DeepSeek", () => {
-    expect(DEFAULT_PROVIDER_PREFERENCE_CHAIN).toEqual([
+  it("keeps Ox Alpha after stable free APIs and before the trial/non-pool-eligible additions and paid DeepSeek", () => {
+    const chain = DEFAULT_PROVIDER_PREFERENCE_CHAIN;
+    expect(chain).toEqual([
       "gemini-free",
       "groq-free",
       "openrouter-free",
       "ox-alpha",
+      "cerebras-trial",
+      "nvidia-free",
+      "huggingface-free",
+      "cloudflare-workers-ai-free",
       "deepseek",
     ]);
+    // Ox Alpha remains in the pool-free prefix; the additions require
+    // paid-fallback and DeepSeek is paid.
+    expect(chain.indexOf("ox-alpha")).toBe(3);
+    expect(chain.indexOf("deepseek")).toBe(8);
   });
 });
 

@@ -27,6 +27,14 @@ import type { SecretRef } from "./secrets.js";
 // Those are two different concerns and must not be collapsed into one field.
 export type Protocol = "anthropic-messages" | "openai-compatible";
 
+/**
+ * Billing class used for automatic API routing and provider status. `free`
+ * must mean a hard-stop free allocation (exhaustion stops the account from
+ * spending); `trial` is limited credits or promotional usage that may convert
+ * to paid; `paid` is metered spend.
+ */
+export type ProviderBillingClass = "free" | "trial" | "paid";
+
 // ── Auth ────────────────────────────────────────────────────────────────
 
 /** Sent as `x-api-key` (Anthropic-style) using a resolved SecretRef. */
@@ -491,10 +499,34 @@ export interface ProviderProfile {
   /**
    * Billing class used by automatic API failover. Unknown/omitted providers
    * are treated as paid, so adding a manifest can never silently enable
-   * automatic spend. A temporary free offer should still be declared
-   * `free`; `promo.until` determines when it stops being eligible as free.
+   * automatic spend. `free` = hard-stop free tier; `trial` = limited credits /
+   * promotional free usage that may convert to paid; `paid` = metered spend.
+   * A temporary free offer should still be declared `free`;
+   * `promo.until` determines when it stops being eligible as free.
    */
-  readonly billing?: "free" | "paid";
+  readonly billing?: ProviderBillingClass;
+  /**
+   * Whether this provider may join the automatic free-only pool. Defaults to
+   * `true` when `billing` is `free`. A provider whose free tier cannot be
+   * proven to hard-stop for the configured credential (e.g. an account that
+   * might be on a billed plan, or a credit system that can convert to paid)
+   * declares `false` so it is only reached under explicit paid-fallback
+   * policy — never silently auto-picked as free.
+   */
+  readonly freeOnlyEligible?: boolean;
+  /**
+   * Secret-free static headers sent on every direct API request (e.g. a
+   * version/contract header like `x-github-api-version`). Values are literal
+   * manifest data, never credentials.
+   */
+  readonly staticHeaders?: Readonly<Record<string, string>>;
+  /**
+   * Non-secret endpoint path parameters: `{ paramName: envVarName }`. `baseUrl`
+   * may reference `{paramName}` placeholders, resolved from the environment at
+   * request time (never a stored secret). A missing required param makes the
+   * provider unusable, surfaced as a config error, never a guessed value.
+   */
+  readonly endpointParams?: Readonly<Record<string, string>>;
   /**
    * True when the provider declares BOTH a coding-agent CLI harness and a
    * direct-API harness: the CLI harness is preferred, and the generic API

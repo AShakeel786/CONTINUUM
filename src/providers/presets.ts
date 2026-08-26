@@ -407,18 +407,136 @@ export const oxAlphaManifest: ProviderManifest = {
 // Code behavior, identical for native Claude and DeepSeek launches.
 
 /**
+ * Cloudflare Workers AI — OpenAI-compatible inference under a Cloudflare
+ * account. `account_id` is a NON-SECRET endpoint path param supplied via the
+ * `CLOUDFLARE_ACCOUNT_ID` env var (never a stored secret); the API token is a
+ * stored credential (`continuum auth cloudflare-workers-ai-free`).
+ *
+ * Declared `free` but deliberately NOT pool-eligible: the Free plan hard-stops
+ * at the daily 10k-neuron allocation, but a Paid-plan account silently bills
+ * above it — CONTINUUM cannot prove hard-stop for the configured account, so
+ * it is only reached under explicit paid-fallback policy, never auto-picked.
+ */
+export const cloudflareWorkersAiFreeManifest: ProviderManifest = {
+  schemaVersion: 1,
+  id: "cloudflare-workers-ai-free",
+  displayName: "Cloudflare Workers AI",
+  protocol: "openai-compatible",
+  baseUrl: "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1",
+  auth: { kind: "bearer-token", envVar: "CLOUDFLARE_API_TOKEN" },
+  billing: "free",
+  freeOnlyEligible: false,
+  endpointParams: { account_id: "CLOUDFLARE_ACCOUNT_ID" },
+  models: { default: "@cf/meta/llama-3.1-8b-instruct" },
+  capabilities: {
+    thinking: "supported",
+    tools: true,
+    promptCache: "none",
+    cliAvailable: false,
+    contextWindowTokens: 131_072,
+    notes: "Workers AI free daily allocation (10k neurons/day, resets 00:00 UTC) hard-stops on the Free plan; a Paid-plan account bills above the allocation. Requires a non-secret CLOUDFLARE_ACCOUNT_ID in the shell environment plus a stored CLOUDFLARE_API_TOKEN. Default model is the historical free llama-3.1-8b — verify the current free catalog before real use.",
+  },
+  environment: { owns: ["CLOUDFLARE_API_TOKEN"] },
+};
+
+/**
+ * Cerebras — free trial tier, explicitly classified trial/promotional (never
+ * a permanent free provider): per-model rate limits (5 RPM / 30K TPM / 1M TPD)
+ * return a hard 429 and billing only starts when credits are purchased. May
+ * participate ahead of paid providers under explicit paid-fallback policy.
+ */
+export const cerebrasTrialManifest: ProviderManifest = {
+  schemaVersion: 1,
+  id: "cerebras-trial",
+  displayName: "Cerebras Trial",
+  protocol: "openai-compatible",
+  baseUrl: "https://api.cerebras.ai/v1",
+  auth: { kind: "bearer-token", envVar: "CEREBRAS_API_KEY" },
+  billing: "trial",
+  models: { default: "gpt-oss-120b" },
+  capabilities: {
+    thinking: "supported",
+    tools: true,
+    promptCache: "none",
+    cliAvailable: false,
+    contextWindowTokens: 131_072,
+    notes: "Cerebras free trial tier (gpt-oss-120b, gemma-4-31b). Rate-limited hard stop → 429; paid requires a separate credit purchase. Classified trial/promotional, excluded from the automatic free pool.",
+  },
+  environment: { owns: ["CEREBRAS_API_KEY"] },
+};
+
+/**
+ * NVIDIA — NIM hosted API on build.nvidia.com. Free developer access is
+ * reported (~40 RPM, no credit card on file) but the billing guarantee is NOT
+ * verified from official docs, so per the freeOnly rule it is classified
+ * trial/promotional and excluded from the automatic free pool.
+ */
+export const nvidiaFreeManifest: ProviderManifest = {
+  schemaVersion: 1,
+  id: "nvidia-free",
+  displayName: "NVIDIA Free",
+  protocol: "openai-compatible",
+  baseUrl: "https://integrate.api.nvidia.com/v1",
+  auth: { kind: "bearer-token", envVar: "NVIDIA_API_KEY" },
+  billing: "trial",
+  models: { default: "meta/llama-3.3-70b-instruct" },
+  capabilities: {
+    thinking: "supported",
+    tools: true,
+    promptCache: "none",
+    cliAvailable: false,
+    contextWindowTokens: 131_072,
+    notes: "NVIDIA NIM hosted API. Free tier reported ~40 RPM with no card on file (no silent auto-bill), but not confirmed from official docs — classified trial and excluded from the automatic free pool. Verify the current free model catalog before real use.",
+  },
+  environment: { owns: ["NVIDIA_API_KEY"] },
+};
+
+/**
+ * HuggingFace Inference Providers — OpenAI-compatible router. Free users get
+ * monthly credits ($0.10) and must purchase credits to continue; a
+ * credit-purchasing account deducts automatically, so a hard free-credit-only
+ * stop is not enforceable. Classified trial and excluded from the free pool.
+ */
+export const huggingFaceFreeManifest: ProviderManifest = {
+  schemaVersion: 1,
+  id: "huggingface-free",
+  displayName: "HuggingFace Free",
+  protocol: "openai-compatible",
+  baseUrl: "https://router.huggingface.co/v1",
+  auth: { kind: "bearer-token", envVar: "HF_TOKEN" },
+  billing: "trial",
+  models: { default: "openai/gpt-oss-120b" },
+  capabilities: {
+    thinking: "supported",
+    tools: true,
+    promptCache: "none",
+    cliAvailable: false,
+    contextWindowTokens: 131_072,
+    notes: "HuggingFace Inference Providers router (openai/gpt-oss-120b recommended free-tier model). Free monthly credits hard-stop only for accounts that never purchased credits — not enforceable, so classified trial and excluded from the automatic free pool.",
+  },
+  environment: { owns: ["HF_TOKEN"] },
+};
+
+/**
  * Automatic provider-preference chain: when a launch carries no explicit
  * provider/model selection, the launcher walks this list (skipping expired
- * promos and unusable providers) and picks the first usable one. Ox Alpha
- * Stable free API providers are preferred first, followed by active free
- * promotions; paid providers remain present only for explicit opt-in.
- * An explicit user/provider/model selection always overrides this chain.
+ * promos and unusable providers) and picks the first usable one. The stable
+ * free pool (Gemini → Groq → OpenRouter → Ox Alpha) is preferred first. The
+ * trial/non-pool-eligible additions (Cerebras, NVIDIA, HuggingFace,
+ * Cloudflare) are skipped under default free-only policy — they are reached
+ * only with explicit paid-fallback permission, where they participate ahead
+ * of the paid DeepSeek provider. An explicit user/provider/model selection
+ * always overrides this chain.
  */
 export const DEFAULT_PROVIDER_PREFERENCE_CHAIN: readonly string[] = [
   "gemini-free",
   "groq-free",
   "openrouter-free",
   "ox-alpha",
+  "cerebras-trial",
+  "nvidia-free",
+  "huggingface-free",
+  "cloudflare-workers-ai-free",
   "deepseek",
 ];
 
@@ -431,4 +549,8 @@ export const bundledManifests: readonly ProviderManifest[] = [
   groqFreeManifest,
   openRouterFreeManifest,
   oxAlphaManifest,
+  cerebrasTrialManifest,
+  nvidiaFreeManifest,
+  huggingFaceFreeManifest,
+  cloudflareWorkersAiFreeManifest,
 ];

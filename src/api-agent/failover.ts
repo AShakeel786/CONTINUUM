@@ -1,11 +1,11 @@
 import type { ToolDefinition } from "../mcp/tools.js";
-import type { ProviderAdapter } from "../providers/types.js";
-import { isPromoActive } from "../providers/promo.js";
+import type { ProviderAdapter, ProviderBillingClass } from "../providers/types.js";
+import { effectiveBillingClass, poolBlockedReason } from "../providers/billing.js";
 import { createApiRunner, type ApiRunner, type RunnerDeps } from "./runner.js";
 import { ApiAgentError, type AgentMessage, type AgentTurnResult, type NetworkFailureKind } from "./types.js";
 
 export type CandidateHealth = "healthy" | "cooling-down" | "exhausted" | "disabled";
-export type FailoverBilling = "free" | "paid";
+export type FailoverBilling = ProviderBillingClass;
 
 export interface FailoverCandidate {
   readonly adapter: ProviderAdapter;
@@ -13,6 +13,8 @@ export interface FailoverCandidate {
   readonly env: Readonly<Record<string, string | undefined>>;
   /** Explicit override for tests/dynamic manifests; profile billing otherwise applies. */
   readonly billing?: FailoverBilling;
+  /** Explicit pool-eligibility override; defaults to `billing === "free"`. */
+  readonly freeOnlyEligible?: boolean;
   /** A preflight/auth failure can place a candidate in the pool as disabled for deterministic reporting. */
   readonly disabledReason?: string;
   /** Test seam. Production candidates use the unchanged single-provider createApiRunner. */
@@ -42,6 +44,7 @@ export interface CandidateStatus {
   readonly providerId: string;
   readonly displayName: string;
   readonly billing: FailoverBilling;
+  readonly freeOnlyEligible: boolean;
   readonly health: CandidateHealth;
   readonly failureReason?: string;
   readonly retryAtMs?: number;
@@ -51,6 +54,7 @@ interface CandidateRuntime {
   readonly adapter: ProviderAdapter;
   readonly runner: ApiRunner;
   readonly billing: FailoverBilling;
+  readonly freeOnlyEligible: boolean;
   health: CandidateHealth;
   failureReason?: string;
   retryAtMs?: number;
@@ -66,11 +70,14 @@ const FAILOVER_KINDS: ReadonlySet<NetworkFailureKind> = new Set([
 ]);
 
 function billingOf(candidate: FailoverCandidate, now: number): FailoverBilling {
-  const declared = candidate.billing ?? candidate.adapter.profile.billing ?? "paid";
-  // A declared free promotional provider becomes paid when its authoritative
-  // promo end passes. Unknown promo ends remain free, matching promo routing.
-  if (declared === "free" && candidate.adapter.profile.promo && !isPromoActive(candidate.adapter.profile.promo, now)) return "paid";
-  return declared;
+  // An explicit override (tests/dynamic manifests) wins; otherwise the profile
+  // resolves promo-adjusted (a declared free promo past its end becomes paid).
+  return candidate.billing ?? effectiveBillingClass(candidate.adapter.profile, now);
+}
+
+/** Free-only-pool eligibility: `free` class AND declared pool-eligible. */
+function isPoolFree(billing: FailoverBilling, freeOnlyEligible: boolean): boolean {
+  return billing === "free" && freeOnlyEligible;
 }
 
 function safeReason(kind: NetworkFailureKind | undefined): string {
@@ -117,13 +124,19 @@ export function createFailoverApiRunner(candidates: readonly FailoverCandidate[]
   const mode = policy.mode ?? "freeOnly";
   const allowPaid = mode === "freeFirst" && policy.allowPaidFallback === true;
   const authFailure = policy.authFailure ?? "disable-and-failover";
-  const runtimes: CandidateRuntime[] = candidates.map((candidate) => ({
-    adapter: candidate.adapter,
-    runner: candidate.runner ?? createApiRunner(candidate.adapter, { ...candidate.runnerDeps, env: candidate.env }),
-    billing: billingOf(candidate, now()),
-    health: candidate.disabledReason ? "disabled" : "healthy",
-    ...(candidate.disabledReason ? { failureReason: candidate.disabledReason } : {}),
-  }));
+  const runtimes: CandidateRuntime[] = candidates.map((candidate) => {
+    const billing = billingOf(candidate, now());
+    return {
+      adapter: candidate.adapter,
+      runner: candidate.runner ?? createApiRunner(candidate.adapter, { ...candidate.runnerDeps, env: candidate.env }),
+      billing,
+      // Explicit candidate override wins; otherwise free class AND the profile
+      // does not declare the free tier pool-ineligible (`freeOnlyEligible: false`).
+      freeOnlyEligible: candidate.freeOnlyEligible ?? (billing === "free" && candidate.adapter.profile.freeOnlyEligible !== false),
+      health: candidate.disabledReason ? "disabled" : "healthy",
+      ...(candidate.disabledReason ? { failureReason: candidate.disabledReason } : {}),
+    };
+  });
   let activeIndex: number | undefined;
 
   function refresh(runtime: CandidateRuntime): void {
@@ -137,14 +150,17 @@ export function createFailoverApiRunner(candidates: readonly FailoverCandidate[]
   function status(): readonly CandidateStatus[] {
     return runtimes.map((runtime) => {
       refresh(runtime);
-      const paidBlocked = runtime.billing === "paid" && !allowPaid;
+      // A healthy candidate that is not pool-free is disabled by POLICY when
+      // paid fallback is not enabled — reported, not silently hidden.
+      const poolBlocked = !isPoolFree(runtime.billing, runtime.freeOnlyEligible) && !allowPaid;
       return {
         providerId: runtime.adapter.profile.id,
         displayName: runtime.adapter.profile.displayName,
         billing: runtime.billing,
-        health: paidBlocked && runtime.health === "healthy" ? "disabled" : runtime.health,
-        ...(paidBlocked && runtime.health === "healthy"
-          ? { failureReason: "paid fallback not enabled" }
+        freeOnlyEligible: runtime.freeOnlyEligible,
+        health: poolBlocked && runtime.health === "healthy" ? "disabled" : runtime.health,
+        ...(poolBlocked && runtime.health === "healthy"
+          ? { failureReason: poolBlockedReason(runtime.billing, runtime.freeOnlyEligible) }
           : runtime.failureReason
             ? { failureReason: runtime.failureReason }
             : {}),
@@ -157,7 +173,9 @@ export function createFailoverApiRunner(candidates: readonly FailoverCandidate[]
     const runtime = runtimes[index]!;
     refresh(runtime);
     if (runtime.health !== "healthy") return false;
-    if (runtime.billing === "paid" && !allowPaid) return false;
+    // free-only pool = free class AND pool-eligible; trial/paid/free-not-
+    // eligible candidates require explicit paid-fallback permission.
+    if (!isPoolFree(runtime.billing, runtime.freeOnlyEligible) && !allowPaid) return false;
     if (tools.length > 0 && !runtime.adapter.getCapabilities().tools) return false;
     return true;
   }

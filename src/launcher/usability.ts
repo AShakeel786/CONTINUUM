@@ -21,6 +21,7 @@ import type { CliAuthManager } from "../auth/cli-auth-manager.js";
 import type { CredentialManager } from "../auth/credential-manager.js";
 import type { ProviderAuthMetadata } from "../auth/types.js";
 import type { LaunchRoute, ProviderAdapter } from "../providers/types.js";
+import { missingEndpointParams } from "../providers/endpoint.js";
 
 /** Per-provider usability, including a human-readable display name and (when unusable) a reason. */
 export interface ProviderUsability {
@@ -192,6 +193,10 @@ async function evaluateDirectApi(
   }
   const cred = await checkCredentials(id, metadata, deps, route);
   if (!cred.ok) return { usable: false, reason: cred.reason, launchKind: "direct-api", route };
+  const missingParams = missingEndpointParams(adapter.profile, process.env);
+  if (missingParams.length > 0) {
+    return { usable: false, reason: `${id} missing ${missingParams.join(", ")}`, launchKind: "direct-api", route };
+  }
   return { usable: true, launchKind: "direct-api", route };
 }
 

@@ -73,11 +73,15 @@ describe("AgentManager — list", () => {
     const ids = descriptors.map((d) => d.providerId).sort();
     expect(ids).toEqual([
       "antigravity",
+      "cerebras-trial",
       "claude",
+      "cloudflare-workers-ai-free",
       "codex",
       "deepseek",
       "gemini-free",
       "groq-free",
+      "huggingface-free",
+      "nvidia-free",
       "openrouter-free",
       "ox-alpha",
     ]);

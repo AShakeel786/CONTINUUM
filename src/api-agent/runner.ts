@@ -22,6 +22,7 @@
  */
 
 import type { ProviderAdapter } from "../providers/types.js";
+import { EndpointParamError, resolveEndpointUrl } from "../providers/endpoint.js";
 import type { ToolDefinition } from "../mcp/tools.js";
 import { toAnthropicTools, toOpenAiTools } from "./format.js";
 import { ApiAgentError, type AgentMessage, type AgentTurnResult, type NetworkFailureKind } from "./types.js";
@@ -274,11 +275,26 @@ export function createApiRunner(adapter: ProviderAdapter, deps: RunnerDeps = {})
   const maxAttempts = deps.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
   const retry = { sleep, maxAttempts, onRetry: deps.onRetry };
   const env = deps.env ?? process.env;
+  // Non-secret endpoint params (e.g. a Cloudflare account id) may live in the
+  // shell even when the auth credential came from the store; auth resolution
+  // below still uses `env` alone, keeping the strict credential path unchanged.
+  const paramEnv = { ...process.env, ...env };
   const protocol = adapter.getCapabilities().protocol;
-  const baseUrl = adapter.profile.baseUrl.replace(/\/+$/, "");
   const model = adapter.resolveModel();
 
   async function call(messages: readonly AgentMessage[], tools: readonly ToolDefinition[]): Promise<AgentTurnResult> {
+    let baseUrl: string;
+    try {
+      baseUrl = resolveEndpointUrl(adapter.profile.baseUrl, adapter.profile, paramEnv).replace(/\/+$/, "");
+    } catch (err) {
+      if (err instanceof EndpointParamError) {
+        // A config error (missing non-secret param), never a network failure —
+        // retryable false so the failover pool does not cycle it to another
+        // candidate as if the call had transiently failed.
+        throw new ApiAgentError(err.message, { retryable: false });
+      }
+      throw err;
+    }
     if (protocol === "openai-compatible") return openAiCall(fetchImpl, retry, adapter, baseUrl, model, messages, tools, env);
     if (protocol === "anthropic-messages") return anthropicCall(fetchImpl, retry, adapter, baseUrl, model, messages, tools, env);
     throw new ApiAgentError(`unsupported protocol: ${protocol}`);
@@ -333,7 +349,7 @@ async function openAiCall(
     ...(tools.length ? { tools: toOpenAiTools(tools), tool_choice: "auto" } : {}),
   });
 
-  const headers = { "content-type": "application/json", ...adapter.buildAuthHeaders(env) };
+  const headers = { "content-type": "application/json", ...adapter.profile.staticHeaders, ...adapter.buildAuthHeaders(env) };
   const res = await callWithRetry(fetchImpl, `${baseUrl}/chat/completions`, { method: "POST", headers, body }, retry);
 
   const parsed = JSON.parse(res.body) as {
@@ -392,7 +408,7 @@ async function anthropicCall(
     ...(tools.length ? { tools: toAnthropicTools(tools) } : {}),
   });
 
-  const headers = { "content-type": "application/json", "anthropic-version": "2023-06-01", ...adapter.buildAuthHeaders(env) };
+  const headers = { "content-type": "application/json", "anthropic-version": "2023-06-01", ...adapter.profile.staticHeaders, ...adapter.buildAuthHeaders(env) };
   const res = await callWithRetry(fetchImpl, `${baseUrl}/v1/messages`, { method: "POST", headers, body }, retry);
 
   const parsed = JSON.parse(res.body) as {

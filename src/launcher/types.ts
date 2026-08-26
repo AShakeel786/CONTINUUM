@@ -8,8 +8,7 @@
 import type { ProjectRecord } from "../registry/types.js";
 import type { ProviderRef, TaskSession } from "../session/types.js";
 import type { RenderedContext } from "../rendering/types.js";
-import type { LaunchRoute } from "../providers/types.js";
-import type { ProviderAdapter } from "../providers/types.js";
+import type { LaunchRoute, ProviderAdapter, ProviderBillingClass } from "../providers/types.js";
 
 /** A concrete plan for spawning a provider CLI. */
 export interface LaunchPlan {
@@ -42,7 +41,7 @@ export type LaunchRuntimeKind = "cli" | "api";
 export interface ApiFailoverLaunchCandidate {
   readonly adapter: ProviderAdapter;
   readonly env: Readonly<Record<string, string | undefined>>;
-  readonly billing: "free" | "paid";
+  readonly billing: ProviderBillingClass;
   readonly disabledReason?: string;
 }
 

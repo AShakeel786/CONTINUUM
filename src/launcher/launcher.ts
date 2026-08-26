@@ -31,6 +31,8 @@ import type { LaunchRoute, ProviderAdapter, ProviderProfile } from "../providers
 import type { DiscoveredModel } from "../providers/model-discovery.js";
 import { discoverModelsFor } from "../providers/model-discovery.js";
 import { isPromoActive } from "../providers/promo.js";
+import { isPoolFreeEligible } from "../providers/billing.js";
+import { missingEndpointParams } from "../providers/endpoint.js";
 import { DEFAULT_PROVIDER_PREFERENCE_CHAIN } from "../providers/presets.js";
 import type { CredentialManager } from "../auth/credential-manager.js";
 import type { CliAuthManager } from "../auth/cli-auth-manager.js";
@@ -817,7 +819,10 @@ export class Launcher {
       const adapter = this.deps.providers.get(id);
       const promo = adapter.profile.promo;
       if (promo && !isPromoActive(promo)) continue;
-      if ((adapter.profile.billing ?? "paid") === "paid" && !allowPaid) continue;
+      // Free-only pool eligibility: `free` class AND pool-eligible. trial/paid
+      // and free providers whose hard-stop free tier is not proven require
+      // explicit paid-fallback permission before being auto-preferred.
+      if (!isPoolFreeEligible(adapter.profile) && !allowPaid) continue;
       const metadata = this.deps.authMetadata.get(id);
       if (!metadata) continue;
       const usable = await this.isProviderUsable(adapter, metadata);
@@ -862,11 +867,16 @@ export class Launcher {
       }
       const env = await this.resolveApiHarnessAuthEnv(adapter, metadata);
       const envVar = metadata.api.envVar;
+      const missingParams = missingEndpointParams(adapter.profile, process.env);
       candidates.push({
         adapter,
         env,
         billing,
-        ...(!envVar || !env[envVar] ? { disabledReason: "API credential unavailable" } : {}),
+        ...(!envVar || !env[envVar]
+          ? { disabledReason: "API credential unavailable" }
+          : missingParams.length > 0
+            ? { disabledReason: `missing ${missingParams.join(", ")}` }
+            : {}),
       });
     }
     return candidates;

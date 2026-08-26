@@ -41,6 +41,15 @@ function opt(args: readonly string[], ...flags: readonly string[]): string | und
   return undefined;
 }
 
+/** `--free-only-eligible true|false` or the bare flag (true). Absent → undefined. */
+function freeOnlyFlag(args: readonly string[]): boolean | undefined {
+  const value = opt(args, "--free-only-eligible");
+  if (value === "true") return true;
+  if (value === "false") return false;
+  if (args.includes("--free-only-eligible")) return true;
+  return undefined;
+}
+
 const BUNDLED_IDS = new Set(bundledManifests.map((m) => m.id));
 
 export async function runProviderCommand(args: readonly string[], io: CliIo): Promise<number> {
@@ -74,10 +83,11 @@ async function addProvider(args: readonly string[], out: (s: string) => void): P
   const envVar = opt(args, "--env")?.trim();
   const model = opt(args, "--model")?.trim();
   const cliExecutable = opt(args, "--cli")?.trim();
-  const billing = opt(args, "--billing") as "free" | "paid" | undefined;
+  const billing = opt(args, "--billing") as "free" | "trial" | "paid" | undefined;
+  const freeOnlyEligible = freeOnlyFlag(args);
 
   if (!id || !protocol || !baseUrl || !auth || !model) {
-    out("Usage: continuum provider add --id <id> --protocol <openai-compatible|anthropic-messages> --base-url <url> --auth <api-key|bearer-token|cli-session> [--env <VAR>] --model <model> [--billing <free|paid>] [--cli <exe>]\n");
+    out("Usage: continuum provider add --id <id> --protocol <openai-compatible|anthropic-messages> --base-url <url> --auth <api-key|bearer-token|cli-session> [--env <VAR>] --model <model> [--billing <free|trial|paid>] [--free-only-eligible true|false] [--cli <exe>]\n");
     return 2;
   }
   if (BUNDLED_IDS.has(id)) {
@@ -88,8 +98,12 @@ async function addProvider(args: readonly string[], out: (s: string) => void): P
     out(`--env <VAR> is required for auth ${auth} (the env-var NAME, never a key).\n`);
     return 2;
   }
-  if (billing !== undefined && billing !== "free" && billing !== "paid") {
-    out("--billing must be free or paid. Omitted providers are treated as paid for automatic fallback.\n");
+  if (billing !== undefined && billing !== "free" && billing !== "trial" && billing !== "paid") {
+    out("--billing must be free, trial, or paid. Omitted providers are treated as paid for automatic fallback.\n");
+    return 2;
+  }
+  if (freeOnlyEligible === true && billing !== "free") {
+    out("--free-only-eligible true only applies to --billing free (a trial/paid provider is never free-only pool eligible).\n");
     return 2;
   }
 
@@ -107,6 +121,7 @@ async function addProvider(args: readonly string[], out: (s: string) => void): P
           : { kind: "cli-session" },
     models: { default: model! },
     ...(billing ? { billing } : {}),
+    ...(freeOnlyEligible !== undefined ? { freeOnlyEligible } : {}),
     ...(cliExecutable
       ? {
           cli: {
@@ -142,7 +157,8 @@ async function listProviders(out: (s: string) => void): Promise<number> {
 
 function formatProviderLine(m: ProviderManifest): string {
   const notes = m.capabilities?.notes;
-  return `  ${m.id} [${m.protocol}] ${m.displayName} — Runtime: ${runtimeLabel(m)} · Billing: ${m.billing ?? "paid (default)"}${notes ? `\n      ${notes}` : ""}\n`;
+  const freeOnly = m.billing === "free" ? ` · Free-only pool: ${m.freeOnlyEligible === false ? "no" : "yes"}` : "";
+  return `  ${m.id} [${m.protocol}] ${m.displayName} — Runtime: ${runtimeLabel(m)} · Billing: ${m.billing ?? "paid (default)"}${freeOnly}${notes ? `\n      ${notes}` : ""}\n`;
 }
 
 async function showProvider(args: readonly string[], out: (s: string) => void): Promise<number> {

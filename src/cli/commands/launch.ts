@@ -36,6 +36,7 @@ import { buildToolRegistry } from "../../mcp/build.js";
 import { runApiAgent } from "../../api-agent/run.js";
 import { ApiAgentError, type NetworkFailureKind } from "../../api-agent/types.js";
 import { ApiFailoverExhaustedError, createFailoverApiRunner, type FailoverPolicy } from "../../api-agent/failover.js";
+import { isPoolFreeEligible } from "../../providers/billing.js";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { resolveDataDir } from "../../config/paths.js";
@@ -215,9 +216,13 @@ async function nextAutomaticFallback(
     const id = route.chain[i]!;
     if (!ctx.providers.has(id)) continue;
     const adapter = ctx.providers.get(id);
-    const paid = (adapter.profile.billing ?? "paid") === "paid";
+    // Same free-only-pool gate as the failover runner and the launcher picker:
+    // only `free` class AND pool-eligible providers auto-fallback; trial/paid
+    // and free providers whose hard-stop free tier is not proven require the
+    // explicit paid-fallback permission.
+    const freeEligible = isPoolFreeEligible(adapter.profile);
     const paidAllowed = ctx.apiFailoverPolicy?.mode === "freeFirst" && ctx.apiFailoverPolicy.allowPaidFallback === true;
-    if (paid && !paidAllowed) continue;
+    if (!freeEligible && !paidAllowed) continue;
     const usable = await ctx.launcher.providerUsability(id);
     if (usable.usable) return { providerId: id, index: i };
   }

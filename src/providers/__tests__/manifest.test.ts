@@ -83,6 +83,32 @@ describe("validateManifest", () => {
   it("rejects a promo whose note carries a secret-shaped string", () => {
     expect(hasError({ ...grokManifest, promo: { until: "2026-08-27T23:59:59Z", note: "FREE sk-abcdefgh12345678" } }, "secret value")).toBe(true);
   });
+
+  it("accepts the trial billing class and rejects unknown classes", () => {
+    expect(validateManifest({ ...grokManifest, billing: "trial" })).toEqual([]);
+    expect(hasError({ ...grokManifest, billing: "metered" }, "billing")).toBe(true);
+    expect(manifestToProfile({ ...grokManifest, billing: "trial" }).billing).toBe("trial");
+  });
+
+  it("accepts freeOnlyEligible and rejects non-boolean values", () => {
+    expect(validateManifest({ ...grokManifest, billing: "free", freeOnlyEligible: false })).toEqual([]);
+    expect(hasError({ ...grokManifest, billing: "free", freeOnlyEligible: "yes" }, "freeOnlyEligible")).toBe(true);
+    expect(manifestToProfile({ ...grokManifest, billing: "free", freeOnlyEligible: false }).freeOnlyEligible).toBe(false);
+  });
+
+  it("validates staticHeaders: safe header names, no CR/LF, no secret-shaped values", () => {
+    expect(validateManifest({ ...grokManifest, staticHeaders: { "x-github-api-version": "2025-05-15" } })).toEqual([]);
+    expect(hasError({ ...grokManifest, staticHeaders: { "bad header": "v" } }, "staticHeaders")).toBe(true);
+    expect(hasError({ ...grokManifest, staticHeaders: { "x-a": "line\nbreak" } }, "staticHeaders")).toBe(true);
+    expect(hasError({ ...grokManifest, staticHeaders: { "x-a": "sk-abcdefgh12345678" } }, "secret value")).toBe(true);
+  });
+
+  it("validates endpointParams: valid param/env names and rejects secrets in values", () => {
+    expect(validateManifest({ ...grokManifest, endpointParams: { accountId: "CF_ACCOUNT_ID" } })).toEqual([]);
+    expect(hasError({ ...grokManifest, endpointParams: { "bad name": "CF_ACCOUNT_ID" } }, "endpointParams")).toBe(true);
+    expect(hasError({ ...grokManifest, endpointParams: { accountId: "CF_ACCOUNT-ID" } }, "endpointParams")).toBe(true);
+    expect(hasError({ ...grokManifest, endpointParams: { accountId: "sk-abcdefgh12345678" } }, "secret value")).toBe(true);
+  });
 });
 
 describe("manifestToProfile + manifestToAuthMetadata (Grok/GLM proof)", () => {

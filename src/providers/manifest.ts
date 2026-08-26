@@ -20,6 +20,7 @@ import type {
   NativeResumeDescriptor,
   PromoInfo,
   Protocol,
+  ProviderBillingClass,
   ProviderCapabilities,
   ProviderProfile,
   ProxyRoutedCliLaunch,
@@ -138,8 +139,19 @@ export interface ProviderManifest {
   readonly modelDiscovery?: import("./types.js").ModelDiscovery;
   /** Optional temporary/promotional state (e.g. limited-time free preview). `until` is optional and only set when an authoritative end timestamp is known. */
   readonly promo?: PromoInfo;
-  /** Billing class for automatic API routing. Omitted is conservatively paid. */
-  readonly billing?: "free" | "paid";
+  /** Billing class for automatic API routing. Omitted is conservatively paid. `free` requires a hard-stop free tier; `trial` is limited credits/promotional usage that may convert to paid. */
+  readonly billing?: ProviderBillingClass;
+  /**
+   * Whether this provider may join the automatic free-only pool. Defaults to
+   * `true` when `billing` is `free`. Set false when the configured account's
+   * free tier cannot be proven to hard-stop, so the provider is only reached
+   * under explicit paid-fallback policy.
+   */
+  readonly freeOnlyEligible?: boolean;
+  /** Secret-free static headers sent on every direct API request (e.g. `x-github-api-version`). Values are literal, never credentials. */
+  readonly staticHeaders?: Readonly<Record<string, string>>;
+  /** Non-secret endpoint path params: `{ paramName: envVarName }`; `baseUrl` may reference `{paramName}` placeholders resolved from the environment. */
+  readonly endpointParams?: Readonly<Record<string, string>>;
   /**
    * True when BOTH a coding-agent CLI harness and a direct-API harness are
    * declared: the CLI harness is preferred, and the generic API agent is
@@ -223,8 +235,31 @@ export function validateManifest(input: unknown): readonly string[] {
     if (typeof m.promo.note !== "string" || m.promo.note.trim().length === 0) errors.push("promo.note is required");
   }
 
-  if (m.billing !== undefined && m.billing !== "free" && m.billing !== "paid") {
-    errors.push('billing must be "free" or "paid"');
+  if (m.billing !== undefined && m.billing !== "free" && m.billing !== "trial" && m.billing !== "paid") {
+    errors.push('billing must be "free", "trial", or "paid"');
+  }
+  if (m.freeOnlyEligible !== undefined && typeof m.freeOnlyEligible !== "boolean") {
+    errors.push("freeOnlyEligible must be a boolean");
+  }
+  if (m.staticHeaders !== undefined) {
+    if (typeof m.staticHeaders !== "object" || m.staticHeaders === null || Array.isArray(m.staticHeaders)) {
+      errors.push("staticHeaders must be an object of header name to literal value");
+    } else {
+      for (const [name, value] of Object.entries(m.staticHeaders)) {
+        if (!/^[A-Za-z0-9-]+$/.test(name) || /[\r\n]/.test(name)) errors.push(`staticHeaders key "${name}" is not a valid header name`);
+        if (typeof value !== "string" || /[\r\n]/.test(value)) errors.push(`staticHeaders value for "${name}" must be a single-line string`);
+      }
+    }
+  }
+  if (m.endpointParams !== undefined) {
+    if (typeof m.endpointParams !== "object" || m.endpointParams === null || Array.isArray(m.endpointParams)) {
+      errors.push("endpointParams must be an object of param name to env var name");
+    } else {
+      for (const [name, envVar] of Object.entries(m.endpointParams)) {
+        if (!/^[a-zA-Z0-9_-]+$/.test(name)) errors.push(`endpointParams key "${name}" is not a valid param name`);
+        if (typeof envVar !== "string" || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(envVar)) errors.push(`endpointParams value for "${name}" must be a valid env var name`);
+      }
+    }
   }
 
   if (m.apiFallback !== undefined && typeof m.apiFallback !== "boolean") errors.push("apiFallback must be a boolean");
@@ -371,6 +406,9 @@ export function manifestToProfile(m: ProviderManifest): ProviderProfile {
     ...(proxyCliLaunch ? { proxyCliLaunch } : {}),
     ...(m.promo ? { promo: m.promo } : {}),
     ...(m.billing ? { billing: m.billing } : {}),
+    ...(m.freeOnlyEligible !== undefined ? { freeOnlyEligible: m.freeOnlyEligible } : {}),
+    ...(m.staticHeaders ? { staticHeaders: m.staticHeaders } : {}),
+    ...(m.endpointParams ? { endpointParams: m.endpointParams } : {}),
     ...(m.apiFallback ? { apiFallback: true } : {}),
   };
 }

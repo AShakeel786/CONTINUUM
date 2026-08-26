@@ -5,11 +5,16 @@ import { UnknownModelAliasError } from "../errors.js";
 import { manifestToAuthMetadata, manifestToProfile, validateManifest } from "../manifest.js";
 import {
   DEFAULT_PROVIDER_PREFERENCE_CHAIN,
+  cerebrasTrialManifest,
+  cloudflareWorkersAiFreeManifest,
   geminiFreeManifest,
   groqFreeManifest,
+  huggingFaceFreeManifest,
+  nvidiaFreeManifest,
   openRouterFreeManifest,
 } from "../presets.js";
 import { createDefaultProviderRegistry } from "../index.js";
+import { resolveEndpointUrl } from "../endpoint.js";
 
 const FIXTURE_TOKEN = "fixture-token";
 const manifests = [geminiFreeManifest, groqFreeManifest, openRouterFreeManifest] as const;
@@ -97,18 +102,95 @@ describe("bundled free API provider manifests", () => {
     expect(() => adapter.resolveModel("anthropic/claude-sonnet-4")).toThrow(UnknownModelAliasError);
   });
 
-  it("registers all three provider IDs and uses the requested default pool order", () => {
+  it("registers the pool providers and keeps the stable free pool first in the chain", () => {
     const registry = createDefaultProviderRegistry();
-    for (const id of ["gemini-free", "groq-free", "openrouter-free"]) {
+    for (const id of ["gemini-free", "groq-free", "openrouter-free", "ox-alpha"]) {
       expect(registry.has(id)).toBe(true);
       expect(registry.get(id).profile.billing).toBe("free");
     }
+    // Stable free pool is preferred first, unchanged. The trial/non-pool-
+    // eligible additions slot in BEFORE paid DeepSeek so they participate
+    // ahead of paid under explicit paid-fallback — never in default freeOnly.
     expect(DEFAULT_PROVIDER_PREFERENCE_CHAIN).toEqual([
       "gemini-free",
       "groq-free",
       "openrouter-free",
       "ox-alpha",
+      "cerebras-trial",
+      "nvidia-free",
+      "huggingface-free",
+      "cloudflare-workers-ai-free",
       "deepseek",
     ]);
+  });
+});
+
+describe("Phase 2B bundled providers (trial / free-not-pool-eligible)", () => {
+  it.each([
+    ["cerebras-trial", "trial", undefined],
+    ["nvidia-free", "trial", undefined],
+    ["huggingface-free", "trial", undefined],
+    ["cloudflare-workers-ai-free", "free", false],
+  ] as const)("registers %s with the safe billing classification", (id, billing, freeOnlyEligible) => {
+    const registry = createDefaultProviderRegistry();
+    expect(registry.has(id)).toBe(true);
+    const profile = registry.get(id).profile;
+    expect(profile.billing).toBe(billing);
+    if (freeOnlyEligible === undefined) {
+      expect(profile.freeOnlyEligible).toBeUndefined();
+    } else {
+      expect(profile.freeOnlyEligible).toBe(false);
+    }
+    // None of the new providers joins the automatic free-only pool by default.
+    expect(profile.billing === "free" && profile.freeOnlyEligible !== false).toBe(false);
+  });
+
+  it("validates all four new bundled manifests", () => {
+    for (const m of [cerebrasTrialManifest, nvidiaFreeManifest, huggingFaceFreeManifest, cloudflareWorkersAiFreeManifest]) {
+      expect(validateManifest(m)).toEqual([]);
+    }
+  });
+
+  it("Cerebras uses the confirmed free-trial model and endpoint", () => {
+    expect(cerebrasTrialManifest).toMatchObject({
+      baseUrl: "https://api.cerebras.ai/v1",
+      auth: { kind: "bearer-token", envVar: "CEREBRAS_API_KEY" },
+      billing: "trial",
+      models: { default: "gpt-oss-120b" },
+    });
+  });
+
+  it("NVIDIA and HuggingFace use their OpenAI-compatible routers with token auth", () => {
+    expect(nvidiaFreeManifest).toMatchObject({
+      baseUrl: "https://integrate.api.nvidia.com/v1",
+      auth: { kind: "bearer-token", envVar: "NVIDIA_API_KEY" },
+      billing: "trial",
+    });
+    expect(huggingFaceFreeManifest).toMatchObject({
+      baseUrl: "https://router.huggingface.co/v1",
+      auth: { kind: "bearer-token", envVar: "HF_TOKEN" },
+      billing: "trial",
+    });
+  });
+
+  it("Cloudflare requires a non-secret account_id endpoint param", () => {
+    const manifest = cloudflareWorkersAiFreeManifest;
+    expect(manifest.endpointParams).toEqual({ account_id: "CLOUDFLARE_ACCOUNT_ID" });
+    expect(manifest.billing).toBe("free");
+    expect(manifest.freeOnlyEligible).toBe(false);
+
+    const profile = manifestToProfile(manifest);
+    const url = resolveEndpointUrl(profile.baseUrl, profile, { CLOUDFLARE_ACCOUNT_ID: "acct-abc" });
+    expect(url).toBe("https://api.cloudflare.com/client/v4/accounts/acct-abc/ai/v1");
+    expect(() => resolveEndpointUrl(profile.baseUrl, profile, {})).toThrow(/CLOUDFLARE_ACCOUNT_ID/);
+  });
+
+  it("auth metadata is provider-scoped (never a shared/OpenRouter alias) for the new providers", () => {
+    for (const m of [cerebrasTrialManifest, nvidiaFreeManifest, huggingFaceFreeManifest, cloudflareWorkersAiFreeManifest]) {
+      const auth = manifestToAuthMetadata(m);
+      if (!auth.api.supported) throw new Error("new bundled provider must declare api auth");
+      expect(auth.api.credentialRef).toEqual({ providerId: m.id, name: "api-key" });
+      expect(auth.cli.supported).toBe(false);
+    }
   });
 });
