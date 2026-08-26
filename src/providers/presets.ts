@@ -120,6 +120,10 @@ export const claudeManifest: ProviderManifest = {
     configDirName: ".claude-anthropic",
     clearEnvVars: [...MODEL_IDENTITY_ENV_VARS, "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"],
     statusLineCommand: "continuum-statusline",
+    // Full access by default: the central launcher defaults every CLI-backed
+    // launch to bypass, honoring this verified Claude Code flag. Explicit
+    // `--safe` still selects normal approval mode.
+    permissionBypassFlag: "--dangerously-skip-permissions",
     nativeResume: {
       supported: true,
       resume: { kind: "flag", flag: "--resume" },
@@ -164,6 +168,10 @@ export const deepseekManifest: ProviderManifest = {
     authTokenEnvVar: "DEEPSEEK_API_KEY",
     clearEnvVars: [...MODEL_IDENTITY_ENV_VARS, "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"],
     statusLineCommand: "continuum-statusline",
+    // Full access by default: this route still spawns Claude Code (redirected
+    // to DeepSeek's Anthropic-compatible endpoint), so the same verified
+    // Claude Code bypass flag applies. Explicit `--safe` opts back out.
+    permissionBypassFlag: "--dangerously-skip-permissions",
     nativeResume: {
       supported: true,
       resume: { kind: "flag", flag: "--resume" },
@@ -190,6 +198,10 @@ export const deepseekManifest: ProviderManifest = {
     proxyUserKeyEnvVar: "CONTINUUM_TENCENT_PROXY_USER_KEY",
     clearEnvVars: [...MODEL_IDENTITY_ENV_VARS, "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"],
     statusLineCommand: "continuum-statusline",
+    // Full access by default: same verified Claude Code flag as the direct
+    // route — the proxy-routed launch also spawns Claude Code (pointed at the
+    // Tencent MemoryProxy). Explicit `--safe` opts back out.
+    permissionBypassFlag: "--dangerously-skip-permissions",
     nativeResume: {
       supported: true,
       resume: { kind: "flag", flag: "--resume" },
@@ -219,10 +231,9 @@ export const codexManifest: ProviderManifest = {
   },
   capabilities: { thinking: "extended", tools: true, promptCache: "openai-automatic", cliAvailable: true, notes: "Native Codex CLI (OpenAI). Uses the `codex` CLI's own ChatGPT login." },
   environment: { owns: ["OPENAI_API_KEY", "CODEX_HOME", "CODEX_ACCESS_TOKEN"] },
-  // Full access by default: this workflow launches Codex with tool approvals
-  // skipped via the CLI's own verified `--dangerously-bypass-approvals-and-
-  // sandbox` flag. Explicit `--safe` still selects normal approval mode.
-  defaultPermissionMode: "bypass",
+  // Full access by default: the central launcher defaults every CLI-backed
+  // launch to bypass, honoring this verified native Codex flag. Explicit
+  // `--safe` still selects normal approval mode.
   // Live model discovery from the CLI's own model cache (~/.codex/models_cache.json),
   // falling back to the manifest list when the cache is absent/unreadable.
   modelDiscovery: { kind: "json-cache", path: "~/.codex/models_cache.json" },
@@ -290,10 +301,9 @@ export const antigravityManifest: ProviderManifest = {
     notes: "Native Antigravity CLI (Google). Uses the `agy` CLI's own Google OAuth login; CONTINUUM holds no credential and injects no key.",
   },
   environment: { owns: [] },
-  // Full access by default: this workflow launches `agy` with tool approvals
-  // skipped via the CLI's own verified `--dangerously-skip-permissions` flag.
-  // Explicit `--safe` still selects normal approval mode.
-  defaultPermissionMode: "bypass",
+  // Full access by default: the central launcher defaults every CLI-backed
+  // launch to bypass, honoring this verified native agy flag. Explicit
+  // `--safe` still selects normal approval mode.
   // Live model discovery from the installed `agy` CLI's own `models` subcommand
   // (verified locally), falling back to the manifest list when it fails.
   modelDiscovery: { kind: "cli-command", command: ["models"] },
@@ -364,12 +374,9 @@ export const oxAlphaManifest: ProviderManifest = {
   },
   environment: { owns: ["OPENROUTER_API_KEY"] },
   apiFallback: true,
-  // Full access by default: every CONTINUUM-launched Ox Alpha Claude Code
-  // session (fresh or resume) runs with the descriptor's verified bypass
-  // flag so tool approvals never prompt. Explicit `--safe` still selects
-  // normal approval mode. Scoped to this descriptor only — DeepSeek and
-  // native Claude keep their safe default.
-  defaultPermissionMode: "bypass",
+  // Full access by default: the central launcher defaults every CLI-backed
+  // launch to bypass, honoring this descriptor's verified Claude Code flag.
+  // Explicit `--safe` still selects normal approval mode.
   cliLaunch: {
     kind: "redirected",
     // A dedicated config dir so ox sessions never touch the user's global
@@ -379,8 +386,8 @@ export const oxAlphaManifest: ProviderManifest = {
     authTokenEnvVar: "OPENROUTER_API_KEY",
     clearEnvVars: [...MODEL_IDENTITY_ENV_VARS, "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"],
     statusLineCommand: "continuum-statusline",
-    // Full access is opt-in (`--bypass-permissions`), same verified flag the
-    // native Claude profile uses; the default stays safe approval mode.
+    // Full access by default: same verified Claude Code flag the native
+    // Claude and DeepSeek routes use. Explicit `--safe` opts back out.
     permissionBypassFlag: "--dangerously-skip-permissions",
     nativeResume: {
       supported: true,

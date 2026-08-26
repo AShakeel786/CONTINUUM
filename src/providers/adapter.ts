@@ -202,16 +202,16 @@ class DataDrivenProviderAdapter implements ProviderAdapter {
   }
 
   /**
-   * Full-access flag for native/redirected CLIs that declare a
-   * `permissionBypassFlag` (the same verified Claude Code flag both harness
-   * kinds use). Emitted only when the caller requests `permissionMode:
-   * "bypass"`; safe mode (and providers with no declared flag) add nothing.
-   * Never emulated.
+   * Full-access flag for CLIs that declare a `permissionBypassFlag`. Every
+   * launch kind carries the same descriptor field (native agy/Codex flags,
+   * and the verified Claude Code flag on redirected/proxy-routed launches,
+   * which still spawn Claude Code). Emitted only when the caller requests
+   * `permissionMode: "bypass"`; safe mode (and providers with no declared
+   * flag) add nothing. Never emulated.
    */
   private permissionArgs(launch: CliLaunchDescriptor, ctx: CliLaunchContext): readonly string[] {
-    const flag = launch.kind === "native" || launch.kind === "redirected" ? launch.permissionBypassFlag : undefined;
-    if (ctx.permissionMode !== "bypass" || !flag) return [];
-    return [flag];
+    if (ctx.permissionMode !== "bypass" || !launch.permissionBypassFlag) return [];
+    return [launch.permissionBypassFlag];
   }
 
   /**

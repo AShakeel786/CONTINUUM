@@ -59,24 +59,24 @@ export async function verifyCliContract(shell: CliShell, adapter: ProviderAdapte
     missing.push(`mcp-supply flag "${mcpSupply.flag}"`);
   }
 
-  // Model-selection + full-access contracts apply only to native launches
-  // (the redirect/proxy variants carry no CLI flags of their own).
+  // Model-selection contract applies only to native launches (Antigravity/
+  // Codex); the redirect/proxy variants select their model via env, not flags.
   if (adapter.profile.cliLaunch.kind === "native") {
-    // Model-selection contract: a declared `--model`/`-m` flag (Antigravity/
-    // Codex) must exist in the CLI's help — never a guessed flag. A renamed
-    // flag fails loudly instead of silently launching with the wrong model.
     const modelFlag = adapter.profile.cliLaunch.modelFlag;
     if (modelFlag && !helpText.includes(modelFlag)) {
       missing.push(`model flag "${modelFlag}"`);
     }
+  }
 
-    // Full-access contract: a declared bypass flag (Antigravity/Codex) must
-    // exist in the CLI's help — a renamed/removed flag fails loudly rather than
-    // silently running a launch that skipped no approvals.
-    const bypassFlag = adapter.profile.cliLaunch.permissionBypassFlag;
-    if (bypassFlag && !helpText.includes(bypassFlag)) {
-      missing.push(`permission-bypass flag "${bypassFlag}"`);
-    }
+  // Full-access contract: a declared bypass flag (native agy/Codex flags, or
+  // the verified Claude Code flag on redirected/proxy-routed launches — which
+  // still spawn Claude Code) must exist in the CLI's help — a renamed/removed
+  // flag fails loudly rather than silently running a launch that skipped no
+  // approvals. Checked for the primary descriptor and, when present, the
+  // optional proxy-routed descriptor.
+  const bypassFlag = adapter.profile.cliLaunch.permissionBypassFlag ?? adapter.profile.proxyCliLaunch?.permissionBypassFlag;
+  if (bypassFlag && !helpText.includes(bypassFlag)) {
+    missing.push(`permission-bypass flag "${bypassFlag}"`);
   }
 
   if (missing.length > 0) {

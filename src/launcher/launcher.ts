@@ -211,7 +211,9 @@ export class Launcher {
   /**
    * Prepares (but does NOT execute) a launch: resolves project/provider,
    * verifies usability, builds the launch plan + context, and returns
-   * everything for the caller to inspect and/or spawn. Safe-by-default.
+   * everything for the caller to inspect and/or spawn. Bypass-by-default:
+   * every CLI-backed launch carries its declared native full-access flag
+   * unless the caller passes an explicit `permissionMode: "safe"`.
    */
   async prepareLaunch(
     target: { projectKey?: string; cwd?: string; providerId?: string; modelAlias?: string; taskGoal?: string; sessionId?: string; mode?: "general" | "current-directory" },
@@ -314,19 +316,21 @@ export class Launcher {
       }
     }
 
-    // Permission mode: explicit caller choice wins; otherwise the provider's
-    // declared default applies (Codex/Antigravity default to full access,
-    // Claude/DeepSeek default to safe). Full access is honored ONLY when the
-    // launch descriptor declares a real native bypass flag — a requested
-    // bypass with no flag is surfaced as a visible note, never silently run.
-    const requestedPermission = opts.permissionMode ?? adapter.profile.defaultPermissionMode ?? "safe";
-    const canBypass = (effectiveLaunch.kind === "native" || effectiveLaunch.kind === "redirected") && !!effectiveLaunch.permissionBypassFlag;
+    // Permission mode: bypass (full access) is the GLOBAL default for every
+    // CLI-backed launch — the caller's explicit choice is the only thing that
+    // can change it (`--safe` restores normal approval mode). Full access is
+    // honored ONLY when the resolved launch descriptor actually declares a
+    // real, verified bypass flag; a bypass that can't be honored is surfaced
+    // as a visible note, never silently run. Descriptor/capability driven:
+    // the launcher never special-cases a provider id.
+    const requestedPermission = opts.permissionMode ?? "bypass";
+    const canBypass = !!effectiveLaunch.permissionBypassFlag;
     // Bypass applies to CLI-harness runs only: the direct API-agent has no
-    // approval prompts, so an apiFallback run must neither emit a CLI
-    // permission flag nor claim FULL ACCESS.
+    // approval prompts, so an API run must neither emit a CLI permission flag
+    // nor claim FULL ACCESS.
     const bypassPermissions = requestedPermission === "bypass" && canBypass && runtimeKind === "cli";
     const permissionNote =
-      requestedPermission === "bypass" && !canBypass
+      requestedPermission === "bypass" && !canBypass && runtimeKind === "cli"
         ? `${providerId} declares no native full-access flag — launching in normal approval mode.`
         : undefined;
 

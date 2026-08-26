@@ -52,6 +52,15 @@ export interface ManifestCliLaunchCommon {
   readonly contextDelivery?: ManifestContextDelivery;
   readonly mcpLaunch?: ManifestMcpLaunch;
   readonly statusLineCommand?: string;
+  /**
+   * Verified CLI flag that skips all permission approvals at launch. Shared by
+   * every launch kind — native (agy `--dangerously-skip-permissions`, Codex
+   * `--dangerously-bypass-approvals-and-sandbox`), redirected, and
+   * proxy-routed (both Claude Code `--dangerously-skip-permissions`) — so a
+   * descriptor/capability-driven launcher emits the flag identically for all
+   * of them. Absent = full access unsupported for this provider/route.
+   */
+  readonly permissionBypassFlag?: string;
 }
 
 export type ManifestCliLaunch =
@@ -59,8 +68,6 @@ export type ManifestCliLaunch =
       readonly kind: "native";
       /** Verified native flag that selects the model at launch (Codex `-m`, agy `--model`). */
       readonly modelFlag?: string;
-      /** Verified native flag that skips all permission approvals (agy `--dangerously-skip-permissions`, Codex `--dangerously-bypass-approvals-and-sandbox`). */
-      readonly permissionBypassFlag?: string;
     })
   | (ManifestCliLaunchCommon & {
       readonly kind: "redirected";
@@ -68,8 +75,6 @@ export type ManifestCliLaunch =
       readonly authTokenEnvVar: string;
       /** Maps Claude Code's internal model tiers to this provider's own models (see `ModelTierMap`). */
       readonly modelTierMap?: ModelTierMap;
-      /** Verified native flag that skips all permission approvals (Claude Code `--dangerously-skip-permissions`). */
-      readonly permissionBypassFlag?: string;
     })
   | (ManifestCliLaunchCommon & {
       readonly kind: "proxy-routed";
@@ -133,8 +138,6 @@ export interface ProviderManifest {
   readonly proxyCliLaunch?: ManifestProxyCliLaunch;
   readonly cli?: ManifestCli;
   readonly proxyUserKey?: ManifestProxyUserKey;
-  /** Default launch permission mode when the caller specifies none ("safe" = approvals, "bypass" = full access). */
-  readonly defaultPermissionMode?: "safe" | "bypass";
   /** Live model-list discovery from the installed CLI (see types.ts `ModelDiscovery`). */
   readonly modelDiscovery?: import("./types.js").ModelDiscovery;
   /** Optional temporary/promotional state (e.g. limited-time free preview). `until` is optional and only set when an authoritative end timestamp is known. */
@@ -198,10 +201,6 @@ export function validateManifest(input: unknown): readonly string[] {
     if (caps.thinking !== undefined && !["none", "supported", "extended"].includes(caps.thinking)) errors.push("capabilities.thinking invalid");
     if (caps.promptCache !== undefined && !["none", "anthropic-explicit", "openai-automatic"].includes(caps.promptCache)) errors.push("capabilities.promptCache invalid");
     if (caps.contextWindowTokens !== undefined && (typeof caps.contextWindowTokens !== "number" || caps.contextWindowTokens <= 0)) errors.push("capabilities.contextWindowTokens must be positive");
-  }
-
-  if (m.defaultPermissionMode !== undefined && m.defaultPermissionMode !== "safe" && m.defaultPermissionMode !== "bypass") {
-    errors.push("defaultPermissionMode must be \"safe\" or \"bypass\"");
   }
 
   const modelDiscovery = m.modelDiscovery;
@@ -350,6 +349,7 @@ function toCliLaunch(m: ProviderManifest): CliLaunchDescriptor {
     proxyPathSuffix: l.proxyPathSuffix,
     proxyUserKeySecret: secretRef(l.proxyUserKeyEnvVar),
     clearEnvVars: l.clearEnvVars ?? [],
+    ...(l.permissionBypassFlag ? { permissionBypassFlag: l.permissionBypassFlag } : {}),
     ...(l.nativeResume ? { nativeResume: l.nativeResume } : {}),
     ...(l.mcp ? { mcp: l.mcp } : {}),
     ...(l.contextDelivery ? { contextDelivery: l.contextDelivery } : {}),
@@ -371,6 +371,7 @@ function toProxyCliLaunch(m: ProviderManifest): ProxyRoutedCliLaunch | undefined
     proxyPathSuffix: l.proxyPathSuffix,
     proxyUserKeySecret: secretRef(l.proxyUserKeyEnvVar),
     clearEnvVars: l.clearEnvVars ?? [],
+    ...(l.permissionBypassFlag ? { permissionBypassFlag: l.permissionBypassFlag } : {}),
     ...(l.nativeResume ? { nativeResume: l.nativeResume } : {}),
     ...(l.mcp ? { mcp: l.mcp } : {}),
     ...(l.contextDelivery ? { contextDelivery: l.contextDelivery } : {}),
@@ -401,7 +402,6 @@ export function manifestToProfile(m: ProviderManifest): ProviderProfile {
     capabilities: toCapabilities(m),
     environment: m.environment ?? { owns: envOwns(m) },
     cliLaunch: toCliLaunch(m),
-    ...(m.defaultPermissionMode ? { defaultPermissionMode: m.defaultPermissionMode } : {}),
     ...(m.modelDiscovery ? { modelDiscovery: m.modelDiscovery } : {}),
     ...(proxyCliLaunch ? { proxyCliLaunch } : {}),
     ...(m.promo ? { promo: m.promo } : {}),
