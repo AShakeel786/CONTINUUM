@@ -171,7 +171,21 @@ export interface PromptOnlyDelivery {
   readonly kind: "prompt-only";
 }
 
-export type ContextDelivery = AppendSystemPromptDelivery | PromptOnlyDelivery;
+/**
+ * Antigravity (agy): the CLI rejects positional prompts outright
+ * (`Error: unexpected argument`) and has no system-prompt flag, but it accepts
+ * an initial prompt via `-i/--prompt-interactive` ("Execute the provided
+ * prompt and continue in interactive mode"). Everything — compact context
+ * followed by the task goal — is folded into that single flag value, and stdin
+ * stays inherited so the TUI continues the session after the seed prompt.
+ */
+export interface InteractiveFlagDelivery {
+  readonly kind: "interactive-flag";
+  /** Verified CLI flag that seeds an interactive session with a prompt value (e.g. `--prompt-interactive`). */
+  readonly flag: string;
+}
+
+export type ContextDelivery = AppendSystemPromptDelivery | PromptOnlyDelivery | InteractiveFlagDelivery;
 
 // ── CLI launch descriptor (data, not behavior) ──────────────────────────
 //

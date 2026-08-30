@@ -42,24 +42,81 @@ describe("antigravity sqlite session discovery", () => {
 });
 
 describe("antigravity native launch plan", () => {
-  it("fresh launch = default `--model` + the task prompt folded in (prompt-only)", () => {
+  // agy rejects positional prompts (`unexpected argument`) — the prompt must
+  // arrive as a `--prompt-interactive` flag VALUE, never as a bare arg.
+  const promptFlag = "--prompt-interactive";
+
+  it("fresh launch = default `--model` + the prompt as a --prompt-interactive value (never positional)", () => {
     const plan = createProviderAdapter(antigravityProfile).buildCliLaunchPlan({
       workingDir: "/work",
       taskPrompt: "ship it",
       contextSystem: "compact context",
     });
     expect(plan.executable).toBe("agy");
-    expect(plan.args).toEqual(["--model", "gemini-3.7-flash-high", "compact context\n\nship it"]);
+    expect(plan.args).toEqual(["--model", "gemini-3.7-flash-high", promptFlag, "compact context\n\nship it"]);
     expect(plan.env).toEqual({});
+    // The prompt value is a flag VALUE: it is immediately preceded by the flag
+    // and nothing follows it — exactly what a positional arg could not be.
+    expect(plan.args[plan.args.length - 2]).toBe(promptFlag);
   });
 
-  it("resume launch = `--model` then `--conversation <id>` followed by the prompt", () => {
+  it("multiline handoff prompt is delivered intact as the flag value", () => {
+    const handoff = [
+      "<handoff-resume>",
+      "This is an EXISTING task, already in progress.",
+      "* Do not re-audit the project from scratch.",
+      "## Remaining",
+      "line one\nline two\nline three",
+      "</handoff-resume>",
+    ].join("\n");
+    const plan = createProviderAdapter(antigravityProfile).buildCliLaunchPlan({
+      workingDir: "/work",
+      taskPrompt: "continue the work",
+      contextSystem: handoff,
+    });
+    const flagIdx = plan.args.indexOf(promptFlag);
+    expect(flagIdx).toBeGreaterThan(0);
+    const value = plan.args[flagIdx + 1]!;
+    expect(value).toContain("<handoff-resume>");
+    expect(value).toContain("Do not re-audit");
+    expect(value).toContain("line one\nline two\nline three");
+    expect(value).toContain("continue the work");
+    expect(value).toMatch(/\n\ncontinue the work$/);
+  });
+
+  it("resume launch = `--model` then `--conversation <id>` then the prompt via --prompt-interactive", () => {
     const plan = createProviderAdapter(antigravityProfile).buildCliLaunchPlan({
       workingDir: "/work",
       resumeNativeSessionId: "conv-123",
       taskPrompt: "continue",
     });
-    expect(plan.args.slice(2, 4)).toEqual(["--conversation", "conv-123"]);
-    expect(plan.args[4]).toBe("continue");
+    expect(plan.args.slice(0, 4)).toEqual(["--model", "gemini-3.7-flash-high", "--conversation", "conv-123"]);
+    expect(plan.args.slice(4)).toEqual([promptFlag, "continue"]);
+  });
+
+  it("blank optional task goal → no prompt flag at all, bare interactive launch", () => {
+    const plan = createProviderAdapter(antigravityProfile).buildCliLaunchPlan({
+      workingDir: "/work",
+      taskPrompt: "",
+      contextSystem: "ignored when there is no task goal",
+    });
+    expect(plan.args).toEqual(["--model", "gemini-3.7-flash-high"]);
+    expect(plan.args).not.toContain(promptFlag);
+  });
+
+  it("explicit model + bypass are preserved ahead of the prompt flag", () => {
+    const plan = createProviderAdapter(antigravityProfile).buildCliLaunchPlan({
+      workingDir: "/work",
+      taskPrompt: "ship it",
+      modelAlias: "pro",
+      permissionMode: "bypass",
+    });
+    expect(plan.args).toEqual([
+      "--model",
+      "gemini-3.1-pro-high",
+      "--dangerously-skip-permissions",
+      promptFlag,
+      "ship it",
+    ]);
   });
 });

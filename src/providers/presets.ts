@@ -324,7 +324,10 @@ export const antigravityManifest: ProviderManifest = {
       },
     },
     mcp: { supported: false },
-    contextDelivery: { kind: "prompt-only" },
+    // agy rejects positional prompts (`unexpected argument`); the initial
+    // prompt seeds the interactive session via --prompt-interactive (verified
+    // against `agy --help`), which continues interactively after the seed.
+    contextDelivery: { kind: "interactive-flag", flag: "--prompt-interactive" },
   },
   cli: {
     supported: true,

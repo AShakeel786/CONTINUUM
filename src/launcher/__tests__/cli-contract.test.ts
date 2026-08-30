@@ -76,19 +76,29 @@ describe("verifyCliContract", () => {
     expect(check.detail).toContain("not installed");
   });
 
-  it("passes Antigravity when `--conversation` + model/bypass flags appear in `agy --help`", async () => {
+  it("passes Antigravity when `--conversation` + `--prompt-interactive` + model/bypass flags appear in `agy --help`", async () => {
     const help =
-      "Usage of agy:\n  --conversation  Resume a previous conversation by ID\n  --model  Model for the current CLI session\n  --dangerously-skip-permissions  Run without approval prompts\n";
+      "Usage of agy:\n  --conversation  Resume a previous conversation by ID\n  --prompt-interactive  Run an initial prompt interactively and continue the session\n  --model  Model for the current CLI session\n  --dangerously-skip-permissions  Run without approval prompts\n";
     const check = await verifyCliContract(new FakeShell(help), createProviderAdapter(antigravityProfile));
     expect(check.ok).toBe(true);
     expect(check.detail).toContain("--conversation");
   });
 
   it("fails clearly when the declared Antigravity resume flag drifts (--conversation missing)", async () => {
-    const help = "Usage of agy:\n  --continue  Continue the most recent conversation\n  --model  Model for the current CLI session\n  --dangerously-skip-permissions  Run without approval prompts\n";
+    const help =
+      "Usage of agy:\n  --continue  Continue the most recent conversation\n  --prompt-interactive  Run an initial prompt interactively and continue the session\n  --model  Model for the current CLI session\n  --dangerously-skip-permissions  Run without approval prompts\n";
     const check = await verifyCliContract(new FakeShell(help), createProviderAdapter(antigravityProfile));
     expect(check.ok).toBe(false);
     expect(check.detail).toContain("CLI drift");
     expect(check.detail).toContain("--conversation");
+  });
+
+  it("fails clearly when the declared Antigravity context-delivery flag drifts (--prompt-interactive missing)", async () => {
+    const help =
+      "Usage of agy:\n  --conversation  Resume a previous conversation by ID\n  --model  Model for the current CLI session\n  --dangerously-skip-permissions  Run without approval prompts\n";
+    const check = await verifyCliContract(new FakeShell(help), createProviderAdapter(antigravityProfile));
+    expect(check.ok).toBe(false);
+    expect(check.detail).toContain("CLI drift");
+    expect(check.detail).toContain("--prompt-interactive");
   });
 });

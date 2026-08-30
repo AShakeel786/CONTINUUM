@@ -300,6 +300,12 @@ class DataDrivenProviderAdapter implements ProviderAdapter {
         // the task goal in the single positional prompt.
         return [system.length > 0 ? `${system}\n\n${task}` : task];
       }
+      case "interactive-flag": {
+        // agy has no positional prompt and no system-prompt flag: the initial
+        // prompt must seed the interactive session as the flag's value. Stdin
+        // stays inherited so the TUI continues after the seed prompt.
+        return [delivery.flag, system.length > 0 ? `${system}\n\n${task}` : task];
+      }
     }
   }
 

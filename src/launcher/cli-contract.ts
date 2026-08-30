@@ -43,12 +43,15 @@ export async function verifyCliContract(shell: CliShell, adapter: ProviderAdapte
   if (!helpText.includes(resumeToken)) missing.push(`resume token "${resumeToken}"`);
   if (nr.sessionIdFlag && !helpText.includes(nr.sessionIdFlag)) missing.push(`session-id flag "${nr.sessionIdFlag}"`);
 
-  // Context-delivery contract: a declared system-prompt flag (Claude-family
-  // `--append-system-prompt`) must actually exist in the CLI's help — never a
+  // Context-delivery contract: a declared prompt flag (Claude-family
+  // `--append-system-prompt`, or agy's `--prompt-interactive` that seeds the
+  // interactive session) must actually exist in the CLI's help — never a
   // guessed flag. `prompt-only` (Codex) declares no flag, so nothing to check.
   const delivery = adapter.profile.cliLaunch.contextDelivery;
-  if (delivery && delivery.kind === "append-system-prompt" && !helpText.includes(delivery.systemFlag)) {
-    missing.push(`context-delivery flag "${delivery.systemFlag}"`);
+  const deliveryFlag =
+    delivery?.kind === "append-system-prompt" ? delivery.systemFlag : delivery?.kind === "interactive-flag" ? delivery.flag : undefined;
+  if (deliveryFlag && !helpText.includes(deliveryFlag)) {
+    missing.push(`context-delivery flag "${deliveryFlag}"`);
   }
 
   // MCP-launch-supply contract: a declared MCP config flag (Claude-family

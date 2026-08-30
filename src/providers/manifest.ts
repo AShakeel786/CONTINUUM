@@ -38,7 +38,8 @@ export type ManifestAuth =
 
 export type ManifestContextDelivery =
   | { readonly kind: "append-system-prompt"; readonly systemFlag: string }
-  | { readonly kind: "prompt-only" };
+  | { readonly kind: "prompt-only" }
+  | { readonly kind: "interactive-flag"; readonly flag: string };
 
 export type ManifestMcpLaunch =
   | { readonly kind: "mcp-config-flag"; readonly flag: string }

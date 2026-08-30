@@ -258,7 +258,7 @@ describe("permission + model reach the native CLI on fresh launch", () => {
     expect(prep.plan.args.filter((a) => a === CC_BYPASS)).toHaveLength(1);
   });
 
-  it("Antigravity fresh launch carries --model <id> + bypass before the prompt-only positional", async () => {
+  it("Antigravity fresh launch carries --model <id> + bypass before the prompt delivered via --prompt-interactive", async () => {
     const { deps, registry } = await buildDeps();
     const launcher = new Launcher(deps);
     const prep = await launcher.prepareLaunch(
@@ -266,8 +266,9 @@ describe("permission + model reach the native CLI on fresh launch", () => {
       {},
     );
     expect(prep.plan.args.slice(0, 3)).toEqual(["--model", "gemini-3.1-pro-high", CC_BYPASS]);
-    expect(prep.plan.args).toHaveLength(4);
-    expect(prep.plan.args[3]).toContain("ship it");
+    expect(prep.plan.args).toHaveLength(5);
+    expect(prep.plan.args[3]).toBe("--prompt-interactive");
+    expect(prep.plan.args[4]).toContain("ship it");
   });
 
   it("Codex fresh launch carries -m <id> + bypass before the prompt-only positional", async () => {
@@ -280,6 +281,77 @@ describe("permission + model reach the native CLI on fresh launch", () => {
     expect(prep.plan.args.slice(0, 3)).toEqual(["-m", "gpt-5.6-terra", CODX_BYPASS]);
     expect(prep.plan.args).toHaveLength(4);
     expect(prep.plan.args[3]).toContain("ship it");
+  });
+});
+
+describe("antigravity context delivery — interactive-flag (--prompt-interactive)", () => {
+  it("new-task launch: the goal is a --prompt-interactive VALUE, never a positional arg", async () => {
+    const { deps, registry } = await buildDeps();
+    const launcher = new Launcher(deps);
+    const prep = await launcher.prepareLaunch(
+      { projectKey: (await registry.add({ name: "AG1", path: "/w/AG1", defaultProvider: "antigravity" })).id, taskGoal: "Inspect src/session" },
+      {},
+    );
+    const args = prep.plan.args;
+    expect(prep.plan.executable).toBe("agy");
+    const flagIdx = args.indexOf("--prompt-interactive");
+    expect(flagIdx).toBeGreaterThan(0);
+    // The prompt value is the LAST arg and is preceded by the flag — a bare
+    // positional would sit at the end with no flag ahead of it.
+    expect(flagIdx).toBe(args.length - 2);
+    expect(args[args.length - 1]).toContain("Inspect src/session");
+  });
+
+  it("resume launch: prompt via --prompt-interactive after --conversation <id>", async () => {
+    const { deps, registry } = await buildDeps();
+    const launcher = new Launcher(deps);
+    const first = await launcher.prepareLaunch(
+      { projectKey: (await registry.add({ name: "AG2", path: "/w/AG2", defaultProvider: "antigravity" })).id, taskGoal: "ship" },
+      {},
+    );
+    await launcher.recordNativeSessionId(first.session!.sessionId, "antigravity", "agy-native-1");
+    const resume = await launcher.prepareLaunch({ sessionId: first.session!.sessionId }, {});
+    const args = resume.plan.args;
+    const convIdx = args.indexOf("--conversation");
+    expect(convIdx).toBeGreaterThan(0);
+    expect(args[convIdx + 1]).toBe("agy-native-1");
+    expect(args[args.length - 2]).toBe("--prompt-interactive");
+    expect(args[args.length - 1]).toContain("ship");
+  });
+
+  it("blank optional task goal → bare launch with no prompt flag (agy TUI opens empty)", async () => {
+    const { deps, registry } = await buildDeps();
+    const launcher = new Launcher(deps);
+    const prep = await launcher.prepareLaunch(
+      { projectKey: (await registry.add({ name: "AG3", path: "/w/AG3", defaultProvider: "antigravity" })).id, taskGoal: "" },
+      {},
+    );
+    expect(prep.plan.args).not.toContain("--prompt-interactive");
+    expect(prep.plan.args[0]).toBe("--model");
+  });
+
+  it("multiline handoff prompt reaches the --prompt-interactive value intact through the launcher", async () => {
+    const { deps, registry, sessionManager } = await buildDeps();
+    const launcher = new Launcher(deps);
+    const first = await launcher.prepareLaunch(
+      { projectKey: (await registry.add({ name: "AG4", path: "/w/AG4", defaultProvider: "antigravity" })).id, taskGoal: "ship the thing" },
+      {},
+    );
+    await sessionManager.addCompletedWork(first.session!.sessionId, "built the core");
+    await sessionManager.recordDecision(first.session!.sessionId, "use snapshot testing");
+
+    const handoff = await launcher.prepareLaunch({ sessionId: first.session!.sessionId, providerId: "antigravity" }, {});
+    const args = handoff.plan.args;
+    const flagIdx = args.indexOf("--prompt-interactive");
+    const value = args[flagIdx + 1]!;
+    expect(value).toContain("<handoff-resume>");
+    expect(value).toContain("Do not re-audit");
+    expect(value).toContain("built the core");
+    expect(value).toContain("use snapshot testing");
+    expect(value).toContain("ship the thing");
+    // The whole block is the flag value (nothing follows it) — agy rejects any
+    // positional, so the value must not leak out as a trailing arg.
+    expect(flagIdx).toBe(args.length - 2);
   });
 });
 
@@ -332,7 +404,8 @@ describe("permission survives resume and handoff-receiving launches", () => {
 
     const resume = await launcher.prepareLaunch({ sessionId: first.session!.sessionId }, {});
     expect(resume.plan.args.slice(0, 5)).toEqual(["--model", "gemini-3.7-flash-high", CC_BYPASS, "--conversation", "conv-777"]);
-    expect(resume.plan.args[5]).toContain("ship");
+    expect(resume.plan.args[5]).toBe("--prompt-interactive");
+    expect(resume.plan.args[6]).toContain("ship");
     expect(resume.nativeResume).toEqual({ providerId: "antigravity", nativeSessionId: "conv-777" });
   });
 
