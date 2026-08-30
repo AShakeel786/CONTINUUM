@@ -39,7 +39,7 @@ export function buildMemoryTools(provider: MemoryCoreProvider): RegisteredTool[]
             sceneIndex: stable.sceneIndex.map((s) => ({ path: s.path, summary: s.summary ?? null })),
           });
         } catch (err) {
-          return textResult(`MemoryCore recall failed: ${errMessage(err)}`, true);
+          return textResult(errMessage(err, "MemoryCore recall"), true);
         }
       },
     },
@@ -68,7 +68,7 @@ export function buildMemoryTools(provider: MemoryCoreProvider): RegisteredTool[]
           const dynamic = await fetchDynamicRecallFromMemoryCore(cfg, query, limit);
           return jsonResult(dynamic.items.map((i) => ({ id: i.id, type: i.type ?? null, content: i.content, score: i.score ?? null })));
         } catch (err) {
-          return textResult(`MemoryCore search failed: ${errMessage(err)}`, true);
+          return textResult(errMessage(err, "MemoryCore search"), true);
         }
       },
     },
@@ -107,7 +107,7 @@ export function buildMemoryTools(provider: MemoryCoreProvider): RegisteredTool[]
             scheduler_notified: res.schedulerNotified,
           });
         } catch (err) {
-          return textResult(`MemoryCore capture failed: ${errMessage(err)}`, true);
+          return textResult(errMessage(err, "MemoryCore capture"), true);
         }
       },
     },
@@ -137,13 +137,25 @@ export function buildMemoryTools(provider: MemoryCoreProvider): RegisteredTool[]
           const res = await updateAtomicMemory(cfg, { id, content, background: stringArg(args, "background") });
           return jsonResult({ updated: res.code === 0, code: res.code });
         } catch (err) {
-          return textResult(`MemoryCore store failed: ${errMessage(err)}`, true);
+          return textResult(errMessage(err, "MemoryCore store"), true);
         }
       },
     },
   ];
 }
 
-function errMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
+/**
+ * Error → safe, actionable tool text. A dead gateway is surfaced with the
+ * repair hint, not a bare `fetch failed` (the raw node fetch rejection the
+ * observed `memory_recall → fetch failed` was echoing).
+ */
+function errMessage(err: unknown, operation: string): string {
+  if (err instanceof Error) {
+    const msg = err.message;
+    if (msg === "fetch failed" || /ECONNREFUSED|ENOTFOUND|EAI_AGAIN|network error|timeout|aborted/i.test(msg)) {
+      return `${operation} failed: MemoryCore gateway unreachable (${msg}) — run \`continuum doctor --repair\` to start the Tencent stack`;
+    }
+    return `${operation} failed: ${msg}`;
+  }
+  return `${operation} failed: ${String(err)}`;
 }

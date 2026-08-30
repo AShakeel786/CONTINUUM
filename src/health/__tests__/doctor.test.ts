@@ -284,6 +284,81 @@ describe("docker unavailable", () => {
   });
 });
 
+// ── 5b. Repair cascade — one --repair pass restores the full stack ─────────
+
+describe("repair cascade", () => {
+  it("docker-down → Docker Desktop → containers → healthy in a single repair pass", async () => {
+    // Reproduces the observed launch failure: daemon down, stopped containers,
+    // every gateway probe failing. Docker Desktop launch brings the daemon up;
+    // the containers then exist as stopped and must be started by the SAME pass
+    // (previously a single --repair stopped at Docker because the container
+    // checks were "skipped" while the daemon was down).
+    class CascadeRuntime extends FakeRuntime {
+      dockerUp = false;
+      async fetch(url: string): Promise<{ ok: boolean; status: number; body?: string }> {
+        if (!this.dockerUp) return { ok: false, status: 0 };
+        const healthy: Record<string, { ok: boolean; status: number; body?: string }> = {
+          "http://127.0.0.1:8420/health": { ok: true, status: 200 },
+          "http://127.0.0.1:8420/v3/meta/auth/verify": { ok: true, status: 200, body: JSON.stringify({ code: 0, data: { valid: false } }) },
+          "http://127.0.0.1:8096/health": { ok: true, status: 200 },
+          "http://127.0.0.1:8096/proxy/default/v1/chat/completions": {
+            ok: false,
+            status: 401,
+            body: JSON.stringify({ error: "Authentication failed: invalid user_key" }),
+          },
+        };
+        return healthy[url] ?? { ok: false, status: 0 };
+      }
+    }
+    const runtime = new CascadeRuntime();
+    const started = new Set<string>();
+    runtime.on("open", () => {
+      runtime.dockerUp = true;
+      return { code: 0 };
+    });
+    runtime.on("docker", (args) => {
+      if (args[0] === "info") return runtime.dockerUp ? { code: 0 } : { code: 1, stderr: "daemon down" };
+      if (args[0] === "start") {
+        started.add(args[1] ?? "");
+        return { code: 0 };
+      }
+      if (args[0] === "ps") {
+        if (!runtime.dockerUp) return { code: 1, stderr: "daemon down" };
+        const image = (n: string) => (n === "tdai-memory-core" ? "agentmemory/memory-core:phase13" : n === "tdai-proxy" ? "agentmemory/memory-proxy:latest" : "agentmemory/memory-hub:latest");
+        const line = (n: string) =>
+          started.has(n) ? `${n}\tUp 1 second (healthy)\t${image(n)}` : `${n}\tExited (1) 5 minutes ago\t${image(n)}`;
+        return { code: 0, stdout: ["tdai-memory-core", "tdai-proxy", "tdai-memory-hub"].map(line).join("\n") };
+      }
+      if (args[0] === "inspect") return { code: 0, stdout: "healthy" };
+      return { code: 0 };
+    });
+
+    const { outcomes, after } = await makeDoctor(runtime).repair();
+
+    // Docker restored, then each stopped container started in the SAME pass.
+    expect(outcomes.some((o) => o.target === "docker-desktop" && o.status === "repaired")).toBe(true);
+    expect(outcomes.some((o) => o.target === "container-start" && o.checkName === "container:tdai-memory-core" && o.status === "repaired")).toBe(true);
+    expect(outcomes.some((o) => o.target === "container-start" && o.checkName === "container:tdai-proxy" && o.status === "repaired")).toBe(true);
+    expect(outcomes.some((o) => o.target === "container-start" && o.checkName === "container:tdai-memory-hub" && o.status === "repaired")).toBe(true);
+    // While docker was down the container repairs were deferred, not fired blind.
+    expect(outcomes.some((o) => o.status === "deferred")).toBe(true);
+    expect(after.overall).toBe("healthy");
+    // No redundant memory-core restart: containers were started, not restarted.
+    expect(runtime.calls.some((c) => c.cmd === "docker" && c.args[0] === "restart")).toBe(false);
+  });
+
+  it("deferral: container repairs are never fired while the docker daemon is down", async () => {
+    const runtime = new FakeRuntime();
+    runtime.on("docker", () => ({ code: 1, stderr: "Cannot connect to the Docker daemon" }));
+    runtime.on("open", () => ({ code: 0 })); // Docker Desktop launches, but the daemon stays down
+
+    const { outcomes } = await makeDoctor(runtime).repair();
+    expect(outcomes.some((o) => o.status === "deferred")).toBe(true);
+    // No `docker start` was ever attempted against a dead daemon.
+    expect(runtime.calls.some((c) => c.cmd === "docker" && c.args[0] === "start")).toBe(false);
+  });
+});
+
 // ── 6. Provider CLI missing / auth expired → directive only ────────────────
 
 describe("provider problems", () => {

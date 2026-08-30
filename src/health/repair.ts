@@ -283,8 +283,18 @@ async function repairTarget(deps: RepairDeps, check: HealthCheckResult): Promise
  */
 export async function runRepairs(deps: RepairDeps, checks: readonly HealthCheckResult[]): Promise<readonly RepairOutcome[]> {
   const outcomes: RepairOutcome[] = [];
+  // While the docker daemon itself is down, any container repair would fail
+  // before it can even reach the engine. Defer them so a single `--repair`
+  // pass cascades: docker restored first, containers next, gateways last.
+  // Without this, gateway-level checks fire `docker start` against a dead
+  // daemon, record failures, and the stack stays down until a second run.
+  const dockerDown = checks.some((c) => c.name === "docker" && c.status === "down");
   for (const check of checks) {
     if (check.status === "ok" || check.status === "skipped" || !check.repair) continue;
+    if (dockerDown && (check.repair === "container-start" || check.repair === "container-restart" || check.repair === "container-recreate")) {
+      outcomes.push({ target: check.repair, checkName: check.name, status: "deferred", detail: "docker daemon down — deferring until Docker is restored" });
+      continue;
+    }
     const outcome = await repairTarget(deps, check);
     outcomes.push(outcome);
     await deps.state.persist();

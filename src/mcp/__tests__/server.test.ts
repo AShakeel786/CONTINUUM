@@ -102,6 +102,33 @@ describe("MCP server dispatch", () => {
     );
     expect(JSON.stringify(res)).not.toContain("SECRET_VAR");
   });
+
+  it("memory_recall surfaces an actionable repair hint when the gateway is unreachable (no bare fetch failed)", async () => {
+    // A configured gateway whose endpoint is closed — the observed
+    // "memory_recall → fetch failed" failure. The tool must point at the
+    // recovery path instead of echoing the raw node fetch rejection.
+    const provider: MemoryCoreProvider = async () => ({
+      baseUrl: "http://127.0.0.1:59999", // nothing listens here
+      serviceToken: { envVar: "CONTINUUM_MEMORY_CORE_SERVICE_TOKEN" }, // resolved via resolveToken below
+      serviceId: "s",
+      teamId: "t",
+      userId: "u",
+      agentId: "a",
+      resolveToken: async () => "probe-token",
+      timeoutMs: 500,
+    });
+    const registry = await registryWithMemoryCoreProvider(provider);
+    const res = await handleRequest(
+      { jsonrpc: "2.0", id: 8, method: "tools/call", params: { name: "memory_recall", arguments: {} } },
+      { name: "continuum", version: "1", registry },
+    );
+    const result = res.result as { content: Array<{ text: string }>; isError?: boolean };
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain("doctor --repair");
+    expect(result.content[0]!.text).toContain("unreachable");
+    // The probe token never leaks into the failure text.
+    expect(result.content[0]!.text).not.toContain("probe-token");
+  });
 });
 
 describe("MCP session/project tools", () => {

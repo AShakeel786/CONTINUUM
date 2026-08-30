@@ -555,7 +555,7 @@ export class Launcher {
       } catch {
         // MemoryCore unavailable — degrade to caller-only context, clearly.
         envelope = buildContextEnvelope({ sessionKey: session.sessionId, query: session.taskGoal, callerBlocks });
-        memoryCoreNote = "MemoryCore unavailable — launched with local session context only (no Tencent memory).";
+        memoryCoreNote = "MemoryCore unavailable — launched with local session context only (no Tencent memory). Run `continuum doctor --repair` to recover the Tencent stack.";
       }
     } else {
       envelope = buildContextEnvelope({ sessionKey: session.sessionId, query: session.taskGoal, callerBlocks });

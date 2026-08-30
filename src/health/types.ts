@@ -40,7 +40,7 @@ export type RepairTarget =
   | "credential-directive"
   | "stale-process-kill";
 
-export type RepairOutcomeStatus = "repaired" | "skipped-cooldown" | "skipped-breaker" | "failed" | "aborted";
+export type RepairOutcomeStatus = "repaired" | "deferred" | "skipped-cooldown" | "skipped-breaker" | "failed" | "aborted";
 
 export interface RepairOutcome {
   readonly target: RepairTarget;

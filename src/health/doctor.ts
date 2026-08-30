@@ -14,6 +14,9 @@ import { overallOf, runHealthChecks, type CheckDeps } from "./checks.js";
 import { runRepairs } from "./repair.js";
 import { RecoveryState } from "./state.js";
 
+/** How many diagnose→repair→re-diagnose rounds a single `repair()` runs before giving up. */
+const MAX_REPAIR_ROUNDS = 3;
+
 export interface HealthDoctorDeps {
   readonly runtime: HealthRuntime;
   readonly options: HealthOptions;
@@ -52,11 +55,27 @@ export class HealthDoctor {
     const before = await this.diagnose();
     const state = this.state();
     await state.load();
-    const outcomes = await runRepairs(
-      { runtime: this.deps.runtime, options: this.deps.options, state, readPinnedEnv: this.deps.readPinnedEnv },
-      before.checks,
-    );
-    // Re-diagnose so the caller sees post-repair reality, not the stale report.
+    const outcomes: RepairOutcome[] = [];
+    let checks = before.checks;
+    // Cascade in rounds so one `--repair` pass restores the full stack: a
+    // docker-desktop repair in round N makes containers visible to round N+1
+    // (they were "skipped"/unreachable while the daemon was down), and a
+    // container repair makes the gateway probes pass in the round after.
+    // Each round is still bounded by the same per-target cooldown/breaker.
+    for (let round = 0; round < MAX_REPAIR_ROUNDS; round += 1) {
+      const roundOutcomes = await runRepairs(
+        { runtime: this.deps.runtime, options: this.deps.options, state, readPinnedEnv: this.deps.readPinnedEnv },
+        checks,
+      );
+      outcomes.push(...roundOutcomes);
+      // Re-diagnose so the caller sees post-repair reality, not the stale report.
+      const after = await this.diagnose();
+      if (after.overall === "healthy") return { outcomes, after };
+      // Cascade only when this round actually repaired something. A round of
+      // only failed/deferred/skipped/aborted outcomes is a dead end.
+      if (!roundOutcomes.some((o) => o.status === "repaired")) return { outcomes, after };
+      checks = after.checks;
+    }
     const after = await this.diagnose();
     return { outcomes, after };
   }
