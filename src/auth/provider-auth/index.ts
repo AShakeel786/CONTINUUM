@@ -14,16 +14,16 @@ import { bundledManifests } from "../../providers/presets.js";
  */
 const BUNDLED_API_CREDENTIAL_REFS: Readonly<Record<string, ApiCredentialReference>> = {
   "openrouter-free": {
-    providerId: "ox-alpha",
+    providerId: "glm-5-2-free",
     name: "api-key",
     label: "OpenRouter",
-    setupHint: 'Configure OpenRouter once with "continuum auth ox-alpha" or "continuum auth openrouter-free".',
+    setupHint: 'Configure OpenRouter once with "continuum auth glm-5-2-free" or "continuum auth openrouter-free".',
   },
-  "ox-alpha": {
-    providerId: "ox-alpha",
+  "glm-5-2-free": {
+    providerId: "glm-5-2-free",
     name: "api-key",
     label: "OpenRouter",
-    setupHint: 'Configure OpenRouter once with "continuum auth ox-alpha" or "continuum auth openrouter-free".',
+    setupHint: 'Configure OpenRouter once with "continuum auth glm-5-2-free" or "continuum auth openrouter-free".',
   },
 };
 

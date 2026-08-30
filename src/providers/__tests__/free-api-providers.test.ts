@@ -104,7 +104,7 @@ describe("bundled free API provider manifests", () => {
 
   it("registers the pool providers and keeps the stable free pool first in the chain", () => {
     const registry = createDefaultProviderRegistry();
-    for (const id of ["gemini-free", "groq-free", "openrouter-free", "ox-alpha"]) {
+    for (const id of ["gemini-free", "groq-free", "openrouter-free", "glm-5-2-free"]) {
       expect(registry.has(id)).toBe(true);
       expect(registry.get(id).profile.billing).toBe("free");
     }
@@ -115,7 +115,7 @@ describe("bundled free API provider manifests", () => {
       "gemini-free",
       "groq-free",
       "openrouter-free",
-      "ox-alpha",
+      "glm-5-2-free",
       "cerebras-trial",
       "nvidia-free",
       "huggingface-free",

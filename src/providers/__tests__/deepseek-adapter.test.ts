@@ -35,8 +35,11 @@ describe("DeepSeek adapter", () => {
     expect(plan.env.ANTHROPIC_MODEL).toBe("sonnet");
     expect(plan.env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe("claude-sonnet-5");
     expect(plan.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("claude-opus-5");
-    expect(plan.env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("claude-haiku-4-5");
-    expect(plan.env.CLAUDE_CODE_SUBAGENT_MODEL).toBe("claude-sonnet-5");
+    expect(plan.env.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe("claude-fable-5");
+    // haiku + subagent are not override-able by Claude Code — env carries the
+    // provider model directly so no claude-* id leaks upstream.
+    expect(plan.env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("deepseek-v4-flash");
+    expect(plan.env.CLAUDE_CODE_SUBAGENT_MODEL).toBe("deepseek-v4-flash");
   });
 
   it("allows Pro only as an explicit primary model and never via implicit tier mapping", () => {
@@ -46,8 +49,9 @@ describe("DeepSeek adapter", () => {
     expect(plan.env.ANTHROPIC_MODEL).toBe("sonnet");
     expect(plan.env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe("claude-sonnet-5");
     expect(plan.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("claude-opus-5");
-    expect(plan.env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("claude-haiku-4-5");
-    expect(plan.env.CLAUDE_CODE_SUBAGENT_MODEL).toBe("claude-sonnet-5");
+    expect(plan.env.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe("claude-fable-5");
+    expect(plan.env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("deepseek-v4-flash");
+    expect(plan.env.CLAUDE_CODE_SUBAGENT_MODEL).toBe("deepseek-v4-flash");
   });
 
   it("throws UnknownModelAliasError for an unmapped alias", () => {

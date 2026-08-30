@@ -243,6 +243,8 @@ export interface NativeCliLaunch {
   readonly contextDelivery?: ContextDelivery;
   /** How the CLI receives the CONTINUUM MCP server config at launch (declared as data). */
   readonly mcpLaunch?: McpLaunchSupply;
+  /** Optional pre-launch wire-model verification (see `ModelVerifyDescriptor`). */
+  readonly modelVerify?: ModelVerifyDescriptor;
 }
 
 /**
@@ -282,6 +284,8 @@ export interface ProxyRoutedCliLaunch {
   readonly mcpLaunch?: McpLaunchSupply;
   /** Maps Claude Code's internal model tiers to this provider's own models (see `ModelTierMap` below). */
   readonly modelTierMap?: ModelTierMap;
+  /** Optional pre-launch wire-model verification (see `ModelVerifyDescriptor`). */
+  readonly modelVerify?: ModelVerifyDescriptor;
 }
 
 /**
@@ -321,6 +325,12 @@ export interface RedirectedCliLaunch {
   readonly mcpLaunch?: McpLaunchSupply;
   /** Maps Claude Code's internal model tiers to this provider's own models (see `ModelTierMap` below). */
   readonly modelTierMap?: ModelTierMap;
+  /**
+   * Optional pre-launch check that the wire model still exists upstream
+   * (see `ModelVerifyDescriptor`). Declared on the launch so the fail-loudly
+   * preflight is data, exactly like every other launch behavior.
+   */
+  readonly modelVerify?: ModelVerifyDescriptor;
 }
 
 // ── Model tier identity (data, not behavior) ────────────────────────────
@@ -344,8 +354,34 @@ export interface ModelTierMap {
   readonly sonnet?: string;
   /** Alias resolved for `ANTHROPIC_DEFAULT_HAIKU_MODEL`. */
   readonly haiku?: string;
+  /** Alias resolved for `ANTHROPIC_DEFAULT_FABLE_MODEL` (Claude Code's newest tier, from v2.1.251). */
+  readonly fable?: string;
   /** Alias resolved for `CLAUDE_CODE_SUBAGENT_MODEL`. */
   readonly subagent?: string;
+}
+
+/**
+ * Pre-launch verification that a provider's wire model still exists upstream
+ * (declared as data, not behavior). Catches a retired/renamed model — like a
+ * free-preview endpoint whose catalog entry vanished — BEFORE a session opens
+ * and every prompt fails with "There's an issue with the selected model".
+ *
+ * `catalogUrl` is fetched as JSON; the model is looked up under `listPath`
+ * (a dotted path into the response) at `idField` (default "id"), and the
+ * launch proceeds only if found. `bestEffort` controls failure semantics:
+ * - `false` (default) — a confirmed absence HARD-fails the launch with
+ *   `ModelUnavailableError`; transient failures (network, 429, bad parse)
+ *   degrade to proceed, never block.
+ * - `true` — even a confirmed absence only warns; used by providers whose
+ *   catalog is known to be incomplete, where a hard failure would be worse.
+ */
+export interface ModelVerifyDescriptor {
+  readonly catalogUrl: string;
+  /** Dotted path into the catalog JSON to the model-id list (e.g. "data"). */
+  readonly listPath: string;
+  /** Field name holding the model id within each list entry (default "id"). */
+  readonly idField?: string;
+  readonly bestEffort?: boolean;
 }
 
 export type CliLaunchDescriptor = NativeCliLaunch | ProxyRoutedCliLaunch | RedirectedCliLaunch;
@@ -491,6 +527,13 @@ export type McpLaunchSupply = McpLaunchFlagSupply | McpLaunchGlobalSupply;
 
 export interface ProviderProfile {
   readonly id: string;
+  /**
+   * Historical ids this provider was previously registered under. Registry
+   * lookups for an alias resolve to this profile (so old persisted provider /
+   * session ids keep working after a rename), while `listIds()` reports
+   * canonical ids only.
+   */
+  readonly idAliases?: readonly string[];
   readonly displayName: string;
   readonly protocol: Protocol;
   readonly baseUrl: string;

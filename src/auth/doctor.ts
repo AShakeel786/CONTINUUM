@@ -36,6 +36,13 @@ export interface DoctorDeps {
   readonly credentialManager: CredentialManager;
   readonly cliAuthManager: CliAuthManager;
   readonly providerMetadata: ReadonlyMap<string, ProviderAuthMetadata>;
+  /**
+   * Resolve a persisted provider id to its current canonical id. A config
+   * entry written before a bundled rename (ox-alpha → glm-5-2-free) keeps its
+   * legacy id; without this, doctor would report "no provider metadata" for a
+   * setup that is actually still healthy. Defaults to identity.
+   */
+  readonly resolveProviderId?: (id: string) => string;
 }
 
 export class Doctor {
@@ -49,7 +56,11 @@ export class Doctor {
 
     const findings: DoctorFinding[] = [];
     for (const entry of config.providers) {
-      const metadata = this.deps.providerMetadata.get(entry.providerId);
+      // The finding keeps the config's own id so the report matches what the
+      // user sees in their config; the metadata lookup resolves through any
+      // legacy id alias the config was persisted under.
+      const canonical = this.deps.resolveProviderId ? this.deps.resolveProviderId(entry.providerId) : entry.providerId;
+      const metadata = this.deps.providerMetadata.get(canonical);
       if (!metadata) {
         findings.push({
           providerId: entry.providerId,

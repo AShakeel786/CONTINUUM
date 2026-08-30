@@ -132,11 +132,11 @@ describe("suggestHandoffOnPeakEvent — user-selectable handoff, never automatic
       "codex",
       "deepseek",
       "gemini-free",
+      "glm-5-2-free",
       "groq-free",
       "huggingface-free",
       "nvidia-free",
       "openrouter-free",
-      "ox-alpha",
     ]);
 
     // Provider was NOT changed -- suggesting is not the same as switching.

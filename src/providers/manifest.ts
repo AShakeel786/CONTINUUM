@@ -17,6 +17,7 @@ import type {
   CliLaunchDescriptor,
   EnvironmentOwnership,
   ModelTierMap,
+  ModelVerifyDescriptor,
   NativeResumeDescriptor,
   PromoInfo,
   Protocol,
@@ -62,6 +63,12 @@ export interface ManifestCliLaunchCommon {
    * of them. Absent = full access unsupported for this provider/route.
    */
   readonly permissionBypassFlag?: string;
+  /**
+   * Optional pre-launch check that the wire model still exists upstream
+   * (see `ModelVerifyDescriptor`). Declared on the launch so the fail-loudly
+   * preflight is data, exactly like every other launch behavior.
+   */
+  readonly modelVerify?: ModelVerifyDescriptor;
 }
 
 export type ManifestCliLaunch =
@@ -127,6 +134,13 @@ export interface ManifestCapabilities {
 export interface ProviderManifest {
   readonly schemaVersion: typeof MANIFEST_SCHEMA_VERSION;
   readonly id: string;
+  /**
+   * Historical provider ids this manifest was previously registered under.
+   * Lookups for an alias resolve to this provider (old persisted provider /
+   * session ids keep working after a rename); the registry lists canonical
+   * ids only.
+   */
+  readonly idAliases?: readonly string[];
   readonly displayName: string;
   readonly protocol: Protocol;
   readonly baseUrl: string;
@@ -175,6 +189,9 @@ export function validateManifest(input: unknown): readonly string[] {
   if (m.schemaVersion !== MANIFEST_SCHEMA_VERSION) errors.push(`schemaVersion must be ${MANIFEST_SCHEMA_VERSION}`);
   if (typeof m.id !== "string" || !ID_RE.test(m.id)) errors.push("id must match /^[a-z0-9][a-z0-9-]{0,63}$/");
   if (typeof m.displayName !== "string" || m.displayName.trim().length === 0) errors.push("displayName is required");
+  if (m.idAliases !== undefined && (!Array.isArray(m.idAliases) || m.idAliases.some((a) => typeof a !== "string" || !ID_RE.test(a)))) {
+    errors.push("idAliases must be an array of ids matching /^[a-z0-9][a-z0-9-]{0,63}$/");
+  }
   if (m.protocol !== "openai-compatible" && m.protocol !== "anthropic-messages") errors.push("protocol must be openai-compatible or anthropic-messages");
 
   // baseUrl must be a valid http(s) URL.
@@ -323,6 +340,7 @@ function toCliLaunch(m: ProviderManifest): CliLaunchDescriptor {
       ...(l.contextDelivery ? { contextDelivery: l.contextDelivery } : {}),
       ...(l.mcpLaunch ? { mcpLaunch: l.mcpLaunch } : {}),
       ...(l.statusLineCommand ? { statusLineCommand: l.statusLineCommand } : {}),
+      ...(l.modelVerify ? { modelVerify: l.modelVerify } : {}),
     };
   }
   if (l.kind === "redirected") {
@@ -340,6 +358,7 @@ function toCliLaunch(m: ProviderManifest): CliLaunchDescriptor {
       ...(l.mcpLaunch ? { mcpLaunch: l.mcpLaunch } : {}),
       ...(l.statusLineCommand ? { statusLineCommand: l.statusLineCommand } : {}),
       ...(l.modelTierMap ? { modelTierMap: l.modelTierMap } : {}),
+    ...(l.modelVerify ? { modelVerify: l.modelVerify } : {}),
     };
   }
   return {
@@ -357,6 +376,7 @@ function toCliLaunch(m: ProviderManifest): CliLaunchDescriptor {
     ...(l.mcpLaunch ? { mcpLaunch: l.mcpLaunch } : {}),
     ...(l.statusLineCommand ? { statusLineCommand: l.statusLineCommand } : {}),
     ...(l.modelTierMap ? { modelTierMap: l.modelTierMap } : {}),
+    ...(l.modelVerify ? { modelVerify: l.modelVerify } : {}),
   };
 }
 
@@ -379,6 +399,7 @@ function toProxyCliLaunch(m: ProviderManifest): ProxyRoutedCliLaunch | undefined
     ...(l.mcpLaunch ? { mcpLaunch: l.mcpLaunch } : {}),
     ...(l.statusLineCommand ? { statusLineCommand: l.statusLineCommand } : {}),
     ...(l.modelTierMap ? { modelTierMap: l.modelTierMap } : {}),
+    ...(l.modelVerify ? { modelVerify: l.modelVerify } : {}),
   };
 }
 
@@ -388,6 +409,7 @@ export function manifestToProfile(m: ProviderManifest): ProviderProfile {
   const proxyCliLaunch = toProxyCliLaunch(m);
   return {
     id: m.id,
+    ...(m.idAliases ? { idAliases: m.idAliases } : {}),
     displayName: m.displayName,
     protocol: m.protocol,
     baseUrl: m.baseUrl,

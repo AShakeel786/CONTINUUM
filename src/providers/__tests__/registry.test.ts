@@ -70,11 +70,11 @@ describe("ProviderRegistry", () => {
       "codex",
       "deepseek",
       "gemini-free",
+      "glm-5-2-free",
       "groq-free",
       "huggingface-free",
       "nvidia-free",
       "openrouter-free",
-      "ox-alpha",
     ]);
   });
 });

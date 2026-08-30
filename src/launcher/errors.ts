@@ -42,6 +42,29 @@ export class StaleStateError extends LaunchError {
   }
 }
 
+/**
+ * The provider's declared wire model is no longer available upstream (the
+ * `modelVerify` preflight confirmed its absence from the provider catalog).
+ * Thrown BEFORE any session is created or mutated (see Launcher.prepareLaunch),
+ * so the launch never opens a session where every prompt would fail with
+ * "There's an issue with the selected model". `detail` is built from catalog
+ * text only — never secrets.
+ */
+export class ModelUnavailableError extends LaunchError {
+  readonly providerId: string;
+  readonly model: string;
+  constructor(providerId: string, model: string, detail: string) {
+    super(
+      "model-unavailable",
+      `Provider "${providerId}" routes wire model "${model}", which is no longer available upstream: ${detail}\n` +
+        `Check the provider's current model catalog (\`continuum doctor\`), then retry the launch.`,
+    );
+    this.name = "ModelUnavailableError";
+    this.providerId = providerId;
+    this.model = model;
+  }
+}
+
 export class NoProjectError extends LaunchError {
   constructor() {
     super(

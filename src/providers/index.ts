@@ -8,7 +8,7 @@ export { claudeProfile } from "./profiles/claude.js";
 export { deepseekProfile } from "./profiles/deepseek.js";
 export { codexProfile } from "./profiles/codex.js";
 export { antigravityProfile } from "./profiles/antigravity.js";
-export { oxalphaProfile } from "./profiles/ox-alpha.js";
+export { glm52FreeProfile } from "./profiles/glm-5-2-free.js";
 export { discoverModelsFor, parseCliModelsOutput, parseCodexModelsCache, type DiscoveredModel, type ModelDiscoveryOptions } from "./model-discovery.js";
 export * from "./manifest.js";
 export * from "./manifest-store.js";
@@ -22,7 +22,7 @@ export {
   geminiFreeManifest,
   groqFreeManifest,
   openRouterFreeManifest,
-  oxAlphaManifest,
+  glm52FreeManifest,
   DEFAULT_PROVIDER_PREFERENCE_CHAIN,
 } from "./presets.js";
 

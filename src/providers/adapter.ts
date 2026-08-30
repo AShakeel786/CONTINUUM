@@ -172,20 +172,25 @@ class DataDrivenProviderAdapter implements ProviderAdapter {
    * correct there).
    */
   private modelIdentityEnv(tierMap: ModelTierMap | undefined, ctx: CliLaunchContext): Record<string, string> {
-    const resolvedPrimary = this.resolveModel(ctx.modelAlias);
     // Claude Code validates ANTHROPIC_MODEL against its own catalog. Keep the
     // client-facing alias recognized while routing the selected alias through
     // the provider-specific tier variable; DeepSeek still receives the real
     // V4 model in the request body, but no longer emits an unrecognized-model
     // warning for its provider model id.
     const env: Record<string, string> = { ANTHROPIC_MODEL: "sonnet" };
-    // Keep Claude's catalog-facing values recognized. The supported
-    // modelOverrides setting below maps these IDs to the actual provider
-    // model sent over the redirected API connection.
+    // opus/sonnet/fable tiers: Claude Code honors the `modelOverrides` setting
+    // (set in statusLineArgs below) for these catalog IDs, so the env var keeps
+    // a recognized catalog-facing value and the override carries the wire model.
     if (tierMap?.opus) env.ANTHROPIC_DEFAULT_OPUS_MODEL = "claude-opus-5";
     if (tierMap?.sonnet) env.ANTHROPIC_DEFAULT_SONNET_MODEL = "claude-sonnet-5";
-    if (tierMap?.haiku) env.ANTHROPIC_DEFAULT_HAIKU_MODEL = "claude-haiku-4-5";
-    if (tierMap?.subagent) env.CLAUDE_CODE_SUBAGENT_MODEL = "claude-sonnet-5";
+    if (tierMap?.fable) env.ANTHROPIC_DEFAULT_FABLE_MODEL = "claude-fable-5";
+    // haiku/subagent tiers: Claude Code ignores `modelOverrides` for these
+    // (verified on v2.1.251 — the haiku wire leaked the catalog id), so the env
+    // var itself must carry the provider model. Pointing it directly at the
+    // wire model is the only supported mechanism that prevents a Claude-native
+    // model name from reaching the redirected endpoint on these internal calls.
+    if (tierMap?.haiku) env.ANTHROPIC_DEFAULT_HAIKU_MODEL = this.resolveModel(tierMap.haiku);
+    if (tierMap?.subagent) env.CLAUDE_CODE_SUBAGENT_MODEL = this.resolveModel(tierMap.subagent);
     return env;
   }
 
@@ -263,12 +268,13 @@ class DataDrivenProviderAdapter implements ProviderAdapter {
       // metadata without exposing provider model IDs to the catalog
       // validator. The sonnet (primary) override follows an explicit model
       // selection first, then the profile's declared tier mapping; the
-      // opus/haiku tiers follow the profile's declared mapping (falling back
-      // to the historical `flash` alias only when no mapping is declared).
+      // opus/haiku/fable tiers follow the profile's declared mapping (falling
+      // back to the historical `flash` alias only when no mapping is declared).
       modelOverrides: {
         "claude-sonnet-5": this.resolveModel(ctx.modelAlias ?? launch.modelTierMap?.sonnet ?? "default"),
         "claude-opus-5": this.resolveModel(launch.modelTierMap?.opus ?? "flash"),
         "claude-haiku-4-5": this.resolveModel(launch.modelTierMap?.haiku ?? "flash"),
+        "claude-fable-5": this.resolveModel(launch.modelTierMap?.fable ?? "flash"),
       },
     })];
   }

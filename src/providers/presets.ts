@@ -185,7 +185,7 @@ export const deepseekManifest: ProviderManifest = {
     // mapping: every implicit Claude tier is Flash. Pro is only selected by
     // an explicit user model choice and is never inferred from the opus alias,
     // task difficulty, retries, or context size.
-    modelTierMap: { opus: "flash", sonnet: "flash", haiku: "flash", subagent: "flash" },
+    modelTierMap: { opus: "flash", sonnet: "flash", haiku: "flash", fable: "flash", subagent: "flash" },
   },
   // Optional Tencent MemoryProxy route — only used when explicitly enabled
   // (`continuum auth deepseek --proxy`, or config.proxyRouting.deepseek="proxy").
@@ -212,7 +212,7 @@ export const deepseekManifest: ProviderManifest = {
     mcp: { supported: true, serverName: "continuum" },
     mcpLaunch: { kind: "mcp-config-flag", flag: "--mcp-config" },
     // Same Flash-only implicit tier mapping as the direct route.
-    modelTierMap: { opus: "flash", sonnet: "flash", haiku: "flash", subagent: "flash" },
+    modelTierMap: { opus: "flash", sonnet: "flash", haiku: "flash", fable: "flash", subagent: "flash" },
   },
   proxyUserKey: { envVar: "CONTINUUM_TENCENT_PROXY_USER_KEY", credentialName: "proxy-user-key" },
 };
@@ -344,36 +344,47 @@ export const antigravityManifest: ProviderManifest = {
 };
 
 /**
- * Ox Alpha Free — a time-boxed free preview coding model (the same model
- * OpenCode Go exposes as `ox-alpha-free`), reached through OpenRouter as
- * `stealth/ox-alpha`.
+ * GLM 5.2 Free (OpenRouter) — ZAI's free-tier GLM-5.2, reached through
+ * OpenRouter. Formerly "Ox Alpha Free" (`ox-alpha`, wire model
+ * `stealth/ox-alpha`); OpenRouter retired that id with a 404 and the free
+ * preview was succeeded by `z-ai/glm-5.2:free`, the same GLM family. The
+ * provider is renamed to reflect its real identity; `ox-alpha` survives only
+ * as an id alias so old persisted provider/session ids keep resolving, and
+ * `stealth/ox-alpha` survives only as a model alias so stale saved model
+ * preferences resolve to the current free wire model. The paid
+ * `z-ai/glm-5.2` is deliberately NOT reachable through this provider.
  *
  * Two harnesses, one credential (OpenRouter API key, stored via
- * `continuum auth ox-alpha` in the OS credential store, never in this repo):
+ * `continuum auth glm-5-2-free` in the OS credential store, never in this
+ * repo):
  *   - Preferred: Claude Code, redirected to OpenRouter's Anthropic-compatible
  *     endpoint (`ANTHROPIC_BASE_URL=https://openrouter.ai/api`) with the wire
  *     model set through Claude Code's documented `modelOverrides` mechanism
- *     (catalog alias client-side, `stealth/ox-alpha` on the wire).
+ *     (catalog alias client-side, `z-ai/glm-5.2:free` on the wire).
  *   - Fallback (`apiFallback`): CONTINUUM's generic direct-API agent loop,
  *     selected automatically when the `claude` executable is unavailable.
- * The `promo` block marks the limited-time free window — while it is active,
- * automatic preference routing may select it; a declared-and-passed `until`
- * would stop advertising/auto-preference, but the provider stays explicitly
- * selectable.
  */
-export const oxAlphaManifest: ProviderManifest = {
+export const glm52FreeManifest: ProviderManifest = {
   schemaVersion: 1,
-  id: "ox-alpha",
-  displayName: "Ox Alpha Free",
+  id: "glm-5-2-free",
+  // Legacy identity: persisted provider/session ids recorded before the rename
+  // keep resolving through the registry's id-alias map.
+  idAliases: ["ox-alpha"],
+  displayName: "GLM 5.2 Free (OpenRouter)",
   protocol: "openai-compatible",
   baseUrl: "https://openrouter.ai/api/v1",
   auth: { kind: "bearer-token", envVar: "OPENROUTER_API_KEY" },
   billing: "free",
-  models: { default: "stealth/ox-alpha" },
+  models: {
+    default: "z-ai/glm-5.2:free",
+    // Legacy model alias: saved session/project preferences that recorded the
+    // retired Ox Alpha wire model resolve to the current free wire model.
+    aliases: { "stealth/ox-alpha": "z-ai/glm-5.2:free" },
+  },
   capabilities: {
     cliAvailable: true,
     contextWindowTokens: 1_000_000,
-    notes: "OpenRouter — stealth/ox-alpha (Ox Alpha Free). Runs Claude Code redirected to OpenRouter's Anthropic-compatible endpoint (modelOverrides → stealth/ox-alpha), with the direct API-agent as an automatic fallback harness when the claude CLI is unavailable. Limited-time free preview; the OpenRouter API key is stored via `continuum auth ox-alpha` (never in this repo).",
+    notes: "OpenRouter — z-ai/glm-5.2:free (successor to the retired stealth/ox-alpha). Runs Claude Code redirected to OpenRouter's Anthropic-compatible endpoint (modelOverrides → z-ai/glm-5.2:free), with the direct API-agent as an automatic fallback harness when the claude CLI is unavailable. The OpenRouter API key is stored via `continuum auth glm-5-2-free` (never in this repo).",
   },
   environment: { owns: ["OPENROUTER_API_KEY"] },
   apiFallback: true,
@@ -382,8 +393,10 @@ export const oxAlphaManifest: ProviderManifest = {
   // Explicit `--safe` still selects normal approval mode.
   cliLaunch: {
     kind: "redirected",
-    // A dedicated config dir so ox sessions never touch the user's global
-    // Claude config (~/.claude) or DeepSeek's (~/.claude-deepseek).
+    // Legacy config-dir name, kept on purpose: this directory is the on-disk
+    // home of this harness's live native Claude sessions (~/.claude-oxalpha/
+    // projects), and renaming it would strand them — breaking resume. Only
+    // the provider *identity* is renamed; the filesystem home stays put.
     configDirName: ".claude-oxalpha",
     baseUrl: "https://openrouter.ai/api",
     authTokenEnvVar: "OPENROUTER_API_KEY",
@@ -403,14 +416,20 @@ export const oxAlphaManifest: ProviderManifest = {
     mcpLaunch: { kind: "mcp-config-flag", flag: "--mcp-config" },
     // Every Claude Code tier maps to the single provider model on the wire
     // ("default" resolves through `resolveModel`, same as any alias key).
-    modelTierMap: { opus: "default", sonnet: "default", haiku: "default", subagent: "default" },
+    modelTierMap: { opus: "default", sonnet: "default", haiku: "default", fable: "default", subagent: "default" },
+    // Pre-launch model verification: OpenRouter's catalog is fetched once and
+    // the wire model confirmed to still exist, so a retired free preview fails
+    // loudly before launch instead of opening a session where every prompt
+    // errors with "There's an issue with the selected model". Hard-fails only
+    // on a confirmed absence; network/429/parse blips degrade to proceed.
+    modelVerify: {
+      catalogUrl: "https://openrouter.ai/api/v1/models",
+      listPath: "data",
+      idField: "id",
+    },
   },
-  // Limited-time free preview: no authoritative end timestamp is published
-  // upstream, so `until` is deliberately omitted (never guessed). Routing
-  // preference therefore follows current usability, not a date.
-  promo: { note: "FREE" },
 };
-// Live-compatibility note (not an ox incompatibility): on FIRST run in a
+// Live-compatibility note (not a GLM incompatibility): on FIRST run in a
 // workspace, Claude Code shows its own workspace-trust dialog and ignores
 // `.claude/settings.json` allow-lists until the user accepts it once
 // (`~/.claude-oxalpha/.claude.json`). That is standard interactive Claude
@@ -531,7 +550,7 @@ export const huggingFaceFreeManifest: ProviderManifest = {
  * Automatic provider-preference chain: when a launch carries no explicit
  * provider/model selection, the launcher walks this list (skipping expired
  * promos and unusable providers) and picks the first usable one. The stable
- * free pool (Gemini → Groq → OpenRouter → Ox Alpha) is preferred first. The
+ * free pool (Gemini → Groq → OpenRouter → GLM 5.2 Free) is preferred first. The
  * trial/non-pool-eligible additions (Cerebras, NVIDIA, HuggingFace,
  * Cloudflare) are skipped under default free-only policy — they are reached
  * only with explicit paid-fallback permission, where they participate ahead
@@ -542,7 +561,7 @@ export const DEFAULT_PROVIDER_PREFERENCE_CHAIN: readonly string[] = [
   "gemini-free",
   "groq-free",
   "openrouter-free",
-  "ox-alpha",
+  "glm-5-2-free",
   "cerebras-trial",
   "nvidia-free",
   "huggingface-free",
@@ -558,7 +577,7 @@ export const bundledManifests: readonly ProviderManifest[] = [
   geminiFreeManifest,
   groqFreeManifest,
   openRouterFreeManifest,
-  oxAlphaManifest,
+  glm52FreeManifest,
   cerebrasTrialManifest,
   nvidiaFreeManifest,
   huggingFaceFreeManifest,

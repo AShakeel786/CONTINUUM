@@ -190,7 +190,10 @@ describe("DeepSeek Flash-by-default routing (launcher level)", () => {
     expect(prep.plan.env.ANTHROPIC_MODEL).toBe("sonnet");
     expect(prep.plan.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("claude-opus-5");
     expect(prep.plan.env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe("claude-sonnet-5");
-    expect(prep.plan.env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("claude-haiku-4-5");
-    expect(prep.plan.env.CLAUDE_CODE_SUBAGENT_MODEL).toBe("claude-sonnet-5");
+    expect(prep.plan.env.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe("claude-fable-5");
+    // haiku + subagent are not override-able by Claude Code — env carries the
+    // provider model directly so no claude-* id leaks upstream.
+    expect(prep.plan.env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("deepseek-v4-flash");
+    expect(prep.plan.env.CLAUDE_CODE_SUBAGENT_MODEL).toBe("deepseek-v4-flash");
   });
 });

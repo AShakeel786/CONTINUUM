@@ -154,8 +154,8 @@ describe("buildHudData", () => {
 
   it("surfaces an active promo label and omits it otherwise", async () => {
     const active = await buildHudData(
-      prep({ providerRef: { providerId: "ox-alpha", model: "ox-alpha-free" } }),
-      { launcher: fakeLauncher([]), providers: fakeProvidersWithPromo("Ox Alpha Free", { until: "2099-01-01T00:00:00Z", note: "FREE" }) },
+      prep({ providerRef: { providerId: "glm-5-2-free", model: "z-ai/glm-5.2:free" } }),
+      { launcher: fakeLauncher([]), providers: fakeProvidersWithPromo("GLM 5.2 Free (OpenRouter)", { until: "2099-01-01T00:00:00Z", note: "FREE" }) },
     );
     expect(active.promo).toBeDefined();
     expect(active.promo).toContain("FREE");
@@ -248,11 +248,13 @@ describe("printHud", () => {
 });
 
 describe("provider identity promo line", () => {
-  function oxProviders(promo?: { until: string; note: string }): ProviderRegistry {
+  // Generic fixture with a standing provider (GLM 5.2 Free) and an optional
+  // promo overlay — exercises the (dormant) promo formatting infra.
+  function glmProviders(promo?: { until: string; note: string }): ProviderRegistry {
     return {
       has: () => true,
       get: () => ({
-        profile: { displayName: "Ox Alpha Free", baseUrl: "https://openrouter.ai/zen/go/v1", promo },
+        profile: { displayName: "GLM 5.2 Free (OpenRouter)", baseUrl: "https://openrouter.ai/zen/go/v1", promo },
         resolveCliLaunch: () => ({ kind: "native", executable: "n/a" }),
       }) as unknown as ReturnType<ProviderRegistry["get"]>,
     } as unknown as ProviderRegistry;
@@ -260,11 +262,11 @@ describe("provider identity promo line", () => {
 
   it("shows Promo for an API-runtime provider with an active promo", () => {
     const identity = buildProviderIdentity(
-      prep({ providerRef: { providerId: "ox-alpha", model: "ox-alpha-free" }, runtimeKind: "api" }),
-      oxProviders({ until: "2099-01-01T00:00:00Z", note: "FREE" }),
+      prep({ providerRef: { providerId: "glm-5-2-free", model: "z-ai/glm-5.2:free" }, runtimeKind: "api" }),
+      glmProviders({ until: "2099-01-01T00:00:00Z", note: "FREE" }),
     );
-    expect(identity.provider).toBe("Ox Alpha Free");
-    expect(identity.model).toBe("ox-alpha-free");
+    expect(identity.provider).toBe("GLM 5.2 Free (OpenRouter)");
+    expect(identity.model).toBe("z-ai/glm-5.2:free");
     expect(identity.route).toContain("openrouter.ai");
     const text = formatProviderIdentity(identity);
     expect(text).toContain("Promo: FREE");
@@ -272,13 +274,13 @@ describe("provider identity promo line", () => {
 
   it("omits the Promo line without a promo (and for expired promos)", () => {
     const none = formatProviderIdentity(
-      buildProviderIdentity(prep({ providerRef: { providerId: "ox-alpha", model: "ox-alpha-free" }, runtimeKind: "api" }), oxProviders()),
+      buildProviderIdentity(prep({ providerRef: { providerId: "glm-5-2-free", model: "z-ai/glm-5.2:free" }, runtimeKind: "api" }), glmProviders()),
     );
     expect(none).not.toContain("Promo:");
     const expired = formatProviderIdentity(
       buildProviderIdentity(
-        prep({ providerRef: { providerId: "ox-alpha", model: "ox-alpha-free" }, runtimeKind: "api" }),
-        oxProviders({ until: "2000-01-01T00:00:00Z", note: "FREE" }),
+        prep({ providerRef: { providerId: "glm-5-2-free", model: "z-ai/glm-5.2:free" }, runtimeKind: "api" }),
+        glmProviders({ until: "2000-01-01T00:00:00Z", note: "FREE" }),
       ),
     );
     expect(expired).not.toContain("Promo:");
@@ -288,12 +290,12 @@ describe("provider identity promo line", () => {
     const providers = {
       has: () => true,
       get: () => ({
-        profile: { displayName: "Ox Alpha Free", baseUrl: "https://openrouter.ai/api/v1" },
+        profile: { displayName: "GLM 5.2 Free (OpenRouter)", baseUrl: "https://openrouter.ai/api/v1" },
         resolveCliLaunch: () => ({ kind: "redirected", executable: "claude", baseUrl: "https://openrouter.ai/api" }),
       }) as unknown as ReturnType<ProviderRegistry["get"]>,
     } as unknown as ProviderRegistry;
     const identity = buildProviderIdentity(
-      prep({ providerRef: { providerId: "ox-alpha", model: "stealth/ox-alpha" }, runtimeKind: "cli" }),
+      prep({ providerRef: { providerId: "glm-5-2-free", model: "z-ai/glm-5.2:free" }, runtimeKind: "cli" }),
       providers,
     );
     expect(identity.client).toBe("Claude Code");

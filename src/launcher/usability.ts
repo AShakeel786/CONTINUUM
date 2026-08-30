@@ -146,7 +146,7 @@ export async function evaluateProvider(
   //    DeepSeek, whose `claude` CLI is redirected to a remote endpoint or an
   //    optional proxy): the declared launch executable must be detected, plus
   //    the credential(s) required by the selected route. A provider that also
-  //    declares `apiFallback` (Ox Alpha) is NOT reported unusable when the
+  //    declares `apiFallback` (GLM Free) is NOT reported unusable when the
   //    CLI executable is missing — the generic direct-API harness is selected
   //    instead, honestly reported with `launchKind: "direct-api"`.
   if (adapter.profile.capabilities.cliAvailable) {

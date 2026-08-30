@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { claudeProfile } from "../profiles/claude.js";
 import { deepseekProfile } from "../profiles/deepseek.js";
 import { codexProfile } from "../profiles/codex.js";
-import { oxalphaProfile } from "../profiles/ox-alpha.js";
+import { glm52FreeProfile } from "../profiles/glm-5-2-free.js";
 import { createDefaultProviderRegistry } from "../index.js";
 
 /**
@@ -48,14 +48,14 @@ describe("no secrets in provider profiles", () => {
     assertNoLiteralSecrets(codexProfile);
   });
 
-  it("Ox Alpha Free profile is fully JSON-serializable and secret-free", () => {
-    const json = JSON.stringify(oxalphaProfile);
+  it("GLM 5.2 Free profile is fully JSON-serializable and secret-free", () => {
+    const json = JSON.stringify(glm52FreeProfile);
     expect(json).toBeTruthy();
-    assertNoLiteralSecrets(oxalphaProfile);
+    assertNoLiteralSecrets(glm52FreeProfile);
   });
 
   it("every auth strategy that carries a secret uses a SecretRef (envVar name only), not a literal", () => {
-    for (const profile of [claudeProfile, deepseekProfile, oxalphaProfile]) {
+    for (const profile of [claudeProfile, deepseekProfile, glm52FreeProfile]) {
       const auth = profile.auth;
       if ("secret" in auth) {
         expect(Object.keys(auth.secret)).toEqual(["envVar"]);

@@ -14,7 +14,7 @@ import { ProviderRegistry } from "../../../providers/registry.js";
 import { createProviderAdapter } from "../../../providers/adapter.js";
 import { claudeProfile } from "../../../providers/profiles/claude.js";
 import { deepseekProfile } from "../../../providers/profiles/deepseek.js";
-import { oxAlphaManifest } from "../../../providers/presets.js";
+import { glm52FreeManifest } from "../../../providers/presets.js";
 import { manifestToProfile, manifestToAuthMetadata, type ProviderManifest } from "../../../providers/manifest.js";
 import { CredentialManager } from "../../../auth/credential-manager.js";
 import { CliAuthManager } from "../../../auth/cli-auth-manager.js";
@@ -65,7 +65,7 @@ describe("native session capture guard", () => {
   });
 });
 
-// ── Automatic-routing fallback (Ox Alpha Free → DeepSeek) ─────────────────
+// ── Automatic-routing fallback (GLM 5.2 Free → DeepSeek) ─────────────────
 
 class FakeBackend implements CredentialBackend {
   readonly id = "fake";
@@ -91,7 +91,7 @@ function fakeCliAdapter(providerId: string): CliAuthAdapter {
 }
 
 interface FallbackDepsOpts {
-  readonly oxUsable?: boolean;
+  readonly glmUsable?: boolean;
   readonly deepseekUsable?: boolean;
   readonly chain?: readonly string[];
   readonly extraProfiles?: readonly ProviderProfile[];
@@ -107,13 +107,13 @@ async function buildFallbackDeps(opts: FallbackDepsOpts = {}) {
   const providers = new ProviderRegistry();
   providers.register(createProviderAdapter(claudeProfile));
   providers.register(createProviderAdapter(deepseekProfile));
-  providers.register(createProviderAdapter(manifestToProfile(oxAlphaManifest)));
+  providers.register(createProviderAdapter(manifestToProfile(glm52FreeManifest)));
   for (const profile of opts.extraProfiles ?? []) providers.register(createProviderAdapter(profile));
 
   const backend = new FakeBackend();
   const credentialManager = new CredentialManager(backend);
   if (opts.deepseekUsable) await credentialManager.setCredential("deepseek", "api-key", "sk-ds-test");
-  if (opts.oxUsable) await credentialManager.setCredential("ox-alpha", "api-key", "sk-ox-test");
+  if (opts.glmUsable) await credentialManager.setCredential("glm-5-2-free", "api-key", "sk-glm-test");
   for (const manifest of opts.extraManifests ?? []) {
     await credentialManager.setCredential(manifest.id, "api-key", `sk-${manifest.id}-test`);
   }
@@ -138,7 +138,7 @@ async function buildFallbackDeps(opts: FallbackDepsOpts = {}) {
     sessionManager,
     prompt: createScriptedPrompt({}),
     sessionBaseDir: sessionDir,
-    preferredProviderChain: opts.chain ?? ["ox-alpha", "deepseek"],
+    preferredProviderChain: opts.chain ?? ["glm-5-2-free", "deepseek"],
     ...(opts.findExecutable
       ? { findExecutable: opts.findExecutable }
       : { findExecutable: (e: string) => (e === "claude" ? "/fake/claude" : undefined) }),
@@ -158,12 +158,12 @@ describe("launchPrepared automatic-routing fallback", () => {
     mockedRun.mockReset();
   });
 
-  it("dispatches the chain-routed Ox Alpha to its Claude Code harness (no API agent, redirected env)", async () => {
-    const { deps, registry, sessionManager, dataDir } = await buildFallbackDeps({ oxUsable: true, deepseekUsable: true });
+  it("dispatches the chain-routed GLM Free to its Claude Code harness (no API agent, redirected env)", async () => {
+    const { deps, registry, sessionManager, dataDir } = await buildFallbackDeps({ glmUsable: true, deepseekUsable: true });
     const project = await registry.add({ name: `fb-${Math.random().toString(36).slice(2, 8)}`, path: "/work/fb" });
     const launcher = new Launcher(deps);
     const launchPrep = await launcher.prepareLaunch({ projectKey: project.id, taskGoal: "do it" }, { permissionMode: "safe" });
-    expect(launchPrep.providerRef.providerId).toBe("ox-alpha");
+    expect(launchPrep.providerRef.providerId).toBe("glm-5-2-free");
     expect(launchPrep.autoRoute?.index).toBe(0);
     expect(launchPrep.runtimeKind).toBe("cli");
 
@@ -178,19 +178,19 @@ describe("launchPrepared automatic-routing fallback", () => {
 
     expect(exit).toBe(0);
     expect(mockedRun).not.toHaveBeenCalled();
-    expect(spawnedPlan?.providerId).toBe("ox-alpha");
+    expect(spawnedPlan?.providerId).toBe("glm-5-2-free");
     expect(spawnedPlan?.executable).toBe("claude");
     expect(spawnedPlan?.env.ANTHROPIC_BASE_URL).toBe("https://openrouter.ai/api");
-    expect(spawnedPlan?.env.ANTHROPIC_AUTH_TOKEN).toBe("sk-ox-test");
+    expect(spawnedPlan?.env.ANTHROPIC_AUTH_TOKEN).toBe("sk-glm-test");
     expect(spawnedPlan?.configDir).toContain(".claude-oxalpha");
   });
 
   it("an explicit launch on the API harness never falls back — it fails fast", async () => {
     const noCli = { findExecutable: () => undefined };
-    const { deps, registry, sessionManager, dataDir } = await buildFallbackDeps({ oxUsable: true, deepseekUsable: true, ...noCli });
+    const { deps, registry, sessionManager, dataDir } = await buildFallbackDeps({ glmUsable: true, deepseekUsable: true, ...noCli });
     const project = await registry.add({ name: `fb-${Math.random().toString(36).slice(2, 8)}`, path: "/work/fb" });
     const launcher = new Launcher(deps);
-    const launchPrep = await launcher.prepareLaunch({ projectKey: project.id, providerId: "ox-alpha", taskGoal: "do it" }, { permissionMode: "safe" });
+    const launchPrep = await launcher.prepareLaunch({ projectKey: project.id, providerId: "glm-5-2-free", taskGoal: "do it" }, { permissionMode: "safe" });
     expect(launchPrep.autoRoute).toBeUndefined();
     expect(launchPrep.runtimeKind).toBe("api");
 
@@ -200,17 +200,17 @@ describe("launchPrepared automatic-routing fallback", () => {
 
     expect(exit).toBe(1);
     expect(mockedRun).toHaveBeenCalledTimes(1);
-    expect(lines.join("\n")).toContain("Ox Alpha Free API connection failed");
+    expect(lines.join("\n")).toContain("GLM 5.2 Free (OpenRouter) API connection failed");
     expect(lines.join("\n")).not.toContain("falling back");
   });
 
   it("fails fast when the chain has no usable fallback member (API harness)", async () => {
     const noCli = { findExecutable: () => undefined };
-    const { deps, registry, sessionManager, dataDir } = await buildFallbackDeps({ oxUsable: true, ...noCli }); // deepseek: no credential, no claude
+    const { deps, registry, sessionManager, dataDir } = await buildFallbackDeps({ glmUsable: true, ...noCli }); // deepseek: no credential, no claude
     const project = await registry.add({ name: `fb-${Math.random().toString(36).slice(2, 8)}`, path: "/work/fb" });
     const launcher = new Launcher(deps);
     const launchPrep = await launcher.prepareLaunch({ projectKey: project.id, taskGoal: "do it" }, { permissionMode: "safe" });
-    expect(launchPrep.providerRef.providerId).toBe("ox-alpha");
+    expect(launchPrep.providerRef.providerId).toBe("glm-5-2-free");
     expect(launchPrep.runtimeKind).toBe("api");
 
     mockedRun.mockRejectedValueOnce(new ApiAgentError("auth failed", { kind: "auth" }));
@@ -224,7 +224,7 @@ describe("launchPrepared automatic-routing fallback", () => {
 
   it("never falls back on a local (non-ApiAgentError) failure", async () => {
     const noCli = { findExecutable: () => undefined };
-    const { deps, registry, sessionManager, dataDir } = await buildFallbackDeps({ oxUsable: true, deepseekUsable: true, ...noCli });
+    const { deps, registry, sessionManager, dataDir } = await buildFallbackDeps({ glmUsable: true, deepseekUsable: true, ...noCli });
     const project = await registry.add({ name: `fb-${Math.random().toString(36).slice(2, 8)}`, path: "/work/fb" });
     const launcher = new Launcher(deps);
     const launchPrep = await launcher.prepareLaunch({ projectKey: project.id, taskGoal: "do it" }, { permissionMode: "safe" });
@@ -252,8 +252,8 @@ describe("launchPrepared automatic-routing fallback", () => {
       capabilities: { cliAvailable: false },
     };
     const { deps, registry, sessionManager, dataDir } = await buildFallbackDeps({
-      oxUsable: true,
-      chain: ["ox-alpha", "api-b"],
+      glmUsable: true,
+      chain: ["glm-5-2-free", "api-b"],
       findExecutable: () => undefined,
       extraManifests: [apiBManifest],
       extraProfiles: [manifestToProfile(apiBManifest)],
@@ -261,7 +261,7 @@ describe("launchPrepared automatic-routing fallback", () => {
     const project = await registry.add({ name: `fb-${Math.random().toString(36).slice(2, 8)}`, path: "/work/fb" });
     const launcher = new Launcher(deps);
     const launchPrep = await launcher.prepareLaunch({ projectKey: project.id, taskGoal: "do it" }, { permissionMode: "safe" });
-    expect(launchPrep.providerRef.providerId).toBe("ox-alpha");
+    expect(launchPrep.providerRef.providerId).toBe("glm-5-2-free");
     expect(launchPrep.runtimeKind).toBe("api");
 
     mockedRun.mockRejectedValue(new ApiAgentError("rate-limited", { kind: "rate-limit" }));
@@ -270,14 +270,14 @@ describe("launchPrepared automatic-routing fallback", () => {
 
     expect(exit).toBe(1);
     expect(mockedRun).toHaveBeenCalledTimes(1);
-    expect(mockedRun.mock.calls[0]![0].adapter.profile.id).toBe("ox-alpha");
+    expect(mockedRun.mock.calls[0]![0].adapter.profile.id).toBe("glm-5-2-free");
     expect(mockedRun.mock.calls[0]![0].runner).toBeDefined();
   });
 });
 
 // ── CLI-harness automatic-routing fallback (runtime provider failure) ──────
 
-const OX_429_TAIL = "API Error: Request rejected (429) · Provider returned error";
+const GLM_429_TAIL = "API Error: Request rejected (429) · Provider returned error";
 
 describe("launchPrepared CLI-harness automatic-routing fallback", () => {
   beforeEach(() => {
@@ -294,27 +294,27 @@ describe("launchPrepared CLI-harness automatic-routing fallback", () => {
     return { plans, spawnFn };
   }
 
-  it("auto-routed Ox CLI 429 falls back to DeepSeek via its own CLI harness", async () => {
-    const { deps, registry, sessionManager, dataDir } = await buildFallbackDeps({ oxUsable: true, deepseekUsable: true });
+  it("auto-routed GLM CLI 429 falls back to DeepSeek via its own CLI harness", async () => {
+    const { deps, registry, sessionManager, dataDir } = await buildFallbackDeps({ glmUsable: true, deepseekUsable: true });
     const project = await registry.add({ name: `cf-${Math.random().toString(36).slice(2, 8)}`, path: "/work/cf" });
     const launcher = new Launcher(deps);
     const launchPrep = await launcher.prepareLaunch({ projectKey: project.id, taskGoal: "do it" }, { permissionMode: "safe" });
-    expect(launchPrep.providerRef.providerId).toBe("ox-alpha");
+    expect(launchPrep.providerRef.providerId).toBe("glm-5-2-free");
     expect(launchPrep.autoRoute?.index).toBe(0);
     expect(launchPrep.runtimeKind).toBe("cli");
     const sessionId = launchPrep.session!.sessionId;
     // The deterministic native id is recorded into the session store during
     // prepareLaunch; the returned snapshot predates that write.
-    const oxNativeId = (await sessionManager.loadSession(sessionId)).nativeSessionIds?.["ox-alpha"];
+    const oxNativeId = (await sessionManager.loadSession(sessionId)).nativeSessionIds?.["glm-5-2-free"];
     expect(oxNativeId).toBeTruthy();
 
-    const { plans, spawnFn } = spawnScripted([{ exitCode: 1, stderrTail: OX_429_TAIL }]);
+    const { plans, spawnFn } = spawnScripted([{ exitCode: 1, stderrTail: GLM_429_TAIL }]);
     const { out, lines } = collectOut();
     const exit = await launchPrepared({ launcher, providers: deps.providers, sessionManager, dataDir, apiFailoverPolicy: { mode: "freeFirst", allowPaidFallback: true } }, launchPrep, out, spawnFn);
 
     expect(exit).toBe(0);
     expect(plans.length).toBe(2);
-    expect(plans[0]!.providerId).toBe("ox-alpha");
+    expect(plans[0]!.providerId).toBe("glm-5-2-free");
     // The failed attempt requested bounded stderr capture; the fallback did not need to.
     expect(plans[0]!.stderrTailBytes).toBeTruthy();
     expect(plans[1]!.providerId).toBe("deepseek");
@@ -324,12 +324,12 @@ describe("launchPrepared CLI-harness automatic-routing fallback", () => {
     // Session/handoff semantics: provider transition recorded, native id intact.
     const session = await sessionManager.loadSession(sessionId);
     expect(session.activeProvider.providerId).toBe("deepseek");
-    expect(session.lastHandoff?.fromProvider.providerId).toBe("ox-alpha");
-    expect(session.nativeSessionIds?.["ox-alpha"]).toBe(oxNativeId);
+    expect(session.lastHandoff?.fromProvider.providerId).toBe("glm-5-2-free");
+    expect(session.nativeSessionIds?.["glm-5-2-free"]).toBe(oxNativeId);
   });
 
   it("auto-routed CLI upstream-provider failure (5xx) also falls back", async () => {
-    const { deps, registry, sessionManager, dataDir } = await buildFallbackDeps({ oxUsable: true, deepseekUsable: true });
+    const { deps, registry, sessionManager, dataDir } = await buildFallbackDeps({ glmUsable: true, deepseekUsable: true });
     const project = await registry.add({ name: `cf-${Math.random().toString(36).slice(2, 8)}`, path: "/work/cf" });
     const launcher = new Launcher(deps);
     const launchPrep = await launcher.prepareLaunch({ projectKey: project.id, taskGoal: "do it" }, { permissionMode: "safe" });
@@ -344,14 +344,14 @@ describe("launchPrepared CLI-harness automatic-routing fallback", () => {
     expect(lines.join("\n")).toContain("falling back");
   });
 
-  it("an explicit Ox CLI failure never switches providers silently", async () => {
-    const { deps, registry, sessionManager, dataDir } = await buildFallbackDeps({ oxUsable: true, deepseekUsable: true });
+  it("an explicit GLM CLI failure never switches providers silently", async () => {
+    const { deps, registry, sessionManager, dataDir } = await buildFallbackDeps({ glmUsable: true, deepseekUsable: true });
     const project = await registry.add({ name: `cf-${Math.random().toString(36).slice(2, 8)}`, path: "/work/cf" });
     const launcher = new Launcher(deps);
-    const launchPrep = await launcher.prepareLaunch({ projectKey: project.id, providerId: "ox-alpha", taskGoal: "do it" }, { permissionMode: "safe" });
+    const launchPrep = await launcher.prepareLaunch({ projectKey: project.id, providerId: "glm-5-2-free", taskGoal: "do it" }, { permissionMode: "safe" });
     expect(launchPrep.autoRoute).toBeUndefined();
 
-    const { plans, spawnFn } = spawnScripted([{ exitCode: 1, stderrTail: OX_429_TAIL }]);
+    const { plans, spawnFn } = spawnScripted([{ exitCode: 1, stderrTail: GLM_429_TAIL }]);
     const { out, lines } = collectOut();
     const exit = await launchPrepared({ launcher, providers: deps.providers, sessionManager, dataDir }, launchPrep, out, spawnFn);
 
@@ -361,7 +361,7 @@ describe("launchPrepared CLI-harness automatic-routing fallback", () => {
   });
 
   it("a user interrupt never falls back", async () => {
-    const { deps, registry, sessionManager, dataDir } = await buildFallbackDeps({ oxUsable: true, deepseekUsable: true });
+    const { deps, registry, sessionManager, dataDir } = await buildFallbackDeps({ glmUsable: true, deepseekUsable: true });
     const project = await registry.add({ name: `cf-${Math.random().toString(36).slice(2, 8)}`, path: "/work/cf" });
     const launcher = new Launcher(deps);
     const launchPrep = await launcher.prepareLaunch({ projectKey: project.id, taskGoal: "do it" }, { permissionMode: "safe" });
@@ -377,7 +377,7 @@ describe("launchPrepared CLI-harness automatic-routing fallback", () => {
   });
 
   it("an ordinary task/local CLI failure never falls back", async () => {
-    const { deps, registry, sessionManager, dataDir } = await buildFallbackDeps({ oxUsable: true, deepseekUsable: true });
+    const { deps, registry, sessionManager, dataDir } = await buildFallbackDeps({ glmUsable: true, deepseekUsable: true });
     const project = await registry.add({ name: `cf-${Math.random().toString(36).slice(2, 8)}`, path: "/work/cf" });
     const launcher = new Launcher(deps);
     const launchPrep = await launcher.prepareLaunch({ projectKey: project.id, taskGoal: "do it" }, { permissionMode: "safe" });
@@ -393,14 +393,14 @@ describe("launchPrepared CLI-harness automatic-routing fallback", () => {
   });
 
   it("the fallback chain cannot loop — a failing fallback member is final", async () => {
-    const { deps, registry, sessionManager, dataDir } = await buildFallbackDeps({ oxUsable: true, deepseekUsable: true });
+    const { deps, registry, sessionManager, dataDir } = await buildFallbackDeps({ glmUsable: true, deepseekUsable: true });
     const project = await registry.add({ name: `cf-${Math.random().toString(36).slice(2, 8)}`, path: "/work/cf" });
     const launcher = new Launcher(deps);
     const launchPrep = await launcher.prepareLaunch({ projectKey: project.id, taskGoal: "do it" }, { permissionMode: "safe" });
 
     const { plans, spawnFn } = spawnScripted([
-      { exitCode: 1, stderrTail: OX_429_TAIL },
-      { exitCode: 1, stderrTail: OX_429_TAIL },
+      { exitCode: 1, stderrTail: GLM_429_TAIL },
+      { exitCode: 1, stderrTail: GLM_429_TAIL },
     ]);
     const lines: string[] = [];
     const exit = await launchPrepared({ launcher, providers: deps.providers, sessionManager, dataDir, apiFailoverPolicy: { mode: "freeFirst", allowPaidFallback: true } }, launchPrep, (s) => lines.push(s), spawnFn);
@@ -410,7 +410,7 @@ describe("launchPrepared CLI-harness automatic-routing fallback", () => {
   });
 
   it("a successful auto-routed CLI launch never touches fallback and captures nothing extra", async () => {
-    const { deps, registry, sessionManager, dataDir } = await buildFallbackDeps({ oxUsable: true, deepseekUsable: true });
+    const { deps, registry, sessionManager, dataDir } = await buildFallbackDeps({ glmUsable: true, deepseekUsable: true });
     const project = await registry.add({ name: `cf-${Math.random().toString(36).slice(2, 8)}`, path: "/work/cf" });
     const launcher = new Launcher(deps);
     const launchPrep = await launcher.prepareLaunch({ projectKey: project.id, taskGoal: "do it" }, { permissionMode: "safe" });
@@ -421,19 +421,19 @@ describe("launchPrepared CLI-harness automatic-routing fallback", () => {
 
     expect(exit).toBe(0);
     expect(plans.length).toBe(1);
-    expect(plans[0]!.providerId).toBe("ox-alpha");
+    expect(plans[0]!.providerId).toBe("glm-5-2-free");
     expect(lines.join("\n")).not.toContain("falling back");
   });
 
   it("explicit DeepSeek and native Claude CLI failures keep fail-fast behavior", async () => {
-    const { deps, registry, sessionManager, dataDir } = await buildFallbackDeps({ oxUsable: true, deepseekUsable: true });
+    const { deps, registry, sessionManager, dataDir } = await buildFallbackDeps({ glmUsable: true, deepseekUsable: true });
     const project = await registry.add({ name: `cf-${Math.random().toString(36).slice(2, 8)}`, path: "/work/cf" });
     const launcher = new Launcher(deps);
 
     for (const providerId of ["deepseek", "claude"] as const) {
       const launchPrep = await launcher.prepareLaunch({ projectKey: project.id, providerId, taskGoal: "do it" }, { permissionMode: "safe" });
       expect(launchPrep.runtimeKind).toBe("cli");
-      const { plans, spawnFn } = spawnScripted([{ exitCode: 1, stderrTail: OX_429_TAIL }]);
+      const { plans, spawnFn } = spawnScripted([{ exitCode: 1, stderrTail: GLM_429_TAIL }]);
       const lines: string[] = [];
       const exit = await launchPrepared({ launcher, providers: deps.providers, sessionManager, dataDir }, launchPrep, (s) => lines.push(s), spawnFn);
       expect(exit).toBe(1);
@@ -454,8 +454,8 @@ describe("launchPrepared CLI-harness automatic-routing fallback", () => {
       capabilities: { cliAvailable: false },
     };
     const { deps, registry, sessionManager, dataDir } = await buildFallbackDeps({
-      oxUsable: true,
-      chain: ["ox-alpha", "api-b"],
+      glmUsable: true,
+      chain: ["glm-5-2-free", "api-b"],
       extraManifests: [apiBManifest],
       extraProfiles: [manifestToProfile(apiBManifest)],
     });
@@ -465,7 +465,7 @@ describe("launchPrepared CLI-harness automatic-routing fallback", () => {
     expect(launchPrep.runtimeKind).toBe("cli");
 
     mockedRun.mockResolvedValueOnce({ finalContent: "fallback ok" } as never);
-    const { plans, spawnFn } = spawnScripted([{ exitCode: 1, stderrTail: OX_429_TAIL }]);
+    const { plans, spawnFn } = spawnScripted([{ exitCode: 1, stderrTail: GLM_429_TAIL }]);
     const lines: string[] = [];
     const exit = await launchPrepared({ launcher, providers: deps.providers, sessionManager, dataDir, apiFailoverPolicy: { mode: "freeFirst", allowPaidFallback: true } }, launchPrep, (s) => lines.push(s), spawnFn);
 

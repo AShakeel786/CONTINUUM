@@ -79,11 +79,11 @@ describe("AgentManager — list", () => {
       "codex",
       "deepseek",
       "gemini-free",
+      "glm-5-2-free",
       "groq-free",
       "huggingface-free",
       "nvidia-free",
       "openrouter-free",
-      "ox-alpha",
     ]);
     const claude = descriptors.find((d) => d.providerId === "claude")!;
     expect(claude.source).toBe("builtin");
@@ -100,7 +100,7 @@ describe("AgentManager — list", () => {
     }
   });
 
-  it("carries the active promo label on Ox Alpha Free and nowhere else", async () => {
+  it("declares no promotional labels on any bundled agent (promo is dormant generic infra now)", async () => {
     const dataDir = tmp();
     const backend = new FakeBackend();
     const configStore = new ConfigStore(dataDir);
@@ -112,11 +112,10 @@ describe("AgentManager — list", () => {
       buildCliAuthManager: () => makeCliManager(),
     });
     const descriptors = await manager.listDescriptors();
-    const ox = descriptors.find((d) => d.providerId === "ox-alpha")!;
-    expect(ox.displayName).toBe("Ox Alpha Free");
-    expect(ox.promo).toBeDefined();
-    expect(ox.promo).toContain("FREE");
-    for (const d of descriptors.filter((x) => x.providerId !== "ox-alpha")) {
+    // No bundled provider carries a limited-time promo anymore — "FREE · limited
+    // time" messaging was removed when the retired Ox Alpha identity was replaced
+    // by GLM 5.2 Free, whose free status is standing, not promotional.
+    for (const d of descriptors) {
       expect(d.promo).toBeUndefined();
     }
   });

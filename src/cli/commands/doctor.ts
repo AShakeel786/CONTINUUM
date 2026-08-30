@@ -44,6 +44,9 @@ export async function runDoctorCommand(args: readonly string[], io: CliIo): Prom
     credentialManager: ctx.credentialManager,
     cliAuthManager: ctx.cliAuthManager,
     providerMetadata: ctx.providerMetadata,
+    // A config entry persisted under a legacy provider id (ox-alpha) still
+    // reports against its current canonical identity (glm-5-2-free).
+    resolveProviderId: (id) => ctx.providers.canonicalId(id) ?? id,
   });
   const authReport = await authDoctor.diagnose(config);
 

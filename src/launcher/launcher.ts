@@ -27,7 +27,7 @@ import { dirname } from "node:path";
 import type { ProjectRegistry } from "../registry/registry.js";
 import type { ProjectRecord } from "../registry/types.js";
 import type { ProviderRegistry } from "../providers/registry.js";
-import type { LaunchRoute, ProviderAdapter, ProviderProfile } from "../providers/types.js";
+import type { CliLaunchDescriptor, LaunchRoute, ProviderAdapter, ProviderProfile } from "../providers/types.js";
 import type { DiscoveredModel } from "../providers/model-discovery.js";
 import { discoverModelsFor } from "../providers/model-discovery.js";
 import { isPromoActive } from "../providers/promo.js";
@@ -55,7 +55,7 @@ import { buildToolSurfaceBlock, codingToolsAvailable } from "../mcp/coding-tools
 import { applyReversiblePruning } from "../context/pruning.js";
 import type { ContextBlock } from "../context/types.js";
 import type { Prompt, PromptOutput } from "../auth/prompt.js";
-import { LocalDependencyUnavailableError, NoAuthenticatedAgentError, NoProjectError, ProviderNotAuthenticatedError } from "./errors.js";
+import { LocalDependencyUnavailableError, ModelUnavailableError, NoAuthenticatedAgentError, NoProjectError, ProviderNotAuthenticatedError } from "./errors.js";
 import type { ProxyReadiness } from "../health/launch-guard.js";
 import { evaluateProvider, type ProviderUsability } from "./usability.js";
 import type { ApiFailoverLaunchCandidate, LaunchOptions, LaunchPlan, LaunchPreparation } from "./types.js";
@@ -106,6 +106,13 @@ export interface LauncherDeps {
    */
   readonly discoverModels?: (profile: ProviderProfile) => Promise<readonly DiscoveredModel[]>;
   /**
+   * Model-verify preflight (test seam + best-effort override). Defaults to
+   * `verifyWireModel`, which fetches the provider's declared model catalog and
+   * hard-fails with `ModelUnavailableError` on a confirmed absence. A stub
+   * keeps tests deterministic (no live catalog fetch).
+   */
+  readonly verifyWireModel?: (launch: CliLaunchDescriptor, profile: ProviderProfile, wireModel: string) => Promise<string | undefined>;
+  /**
    * Automatic provider-preference chain (overridable in tests). When a launch
    * carries no explicit provider/model selection, the launcher walks this
    * list and picks the first usable member. Defaults to the bundled
@@ -124,9 +131,9 @@ export interface LauncherDeps {
    * bypass confirmation inside the provider's isolated config dir.
    */
   readonly seedConfigDirFlag?: (configDir: string, key: string, value: unknown) => Promise<void>;
-  /** Optional Ox-only onboarding-state seeding seam (test override). */
+  /** Optional GLM Free-only onboarding-state seeding seam (test override). */
   readonly seedConfigDirOnboarding?: (configDir: string) => Promise<void>;
-  /** Optional Ox-only workspace-trust seeding seam (test override). */
+  /** Optional GLM Free-only workspace-trust seeding seam (test override). */
   readonly seedConfigDirProjectTrust?: (configDir: string, projectPath: string) => Promise<void>;
 }
 
@@ -154,6 +161,22 @@ export class Launcher {
 
   private adapterFor(providerId: string): ProviderAdapter {
     return this.deps.providers.get(providerId);
+  }
+
+  /**
+   * Stored native session id for a resumed session, honoring legacy id
+   * aliases: the current canonical provider key is checked first, then any
+   * historical alias it was persisted under (a pre-rename ox-alpha session
+   * keyed its native id by "ox-alpha").
+   */
+  private nativeSessionIdFor(session: TaskSession, providerId: string): string | undefined {
+    const ids = session.nativeSessionIds;
+    if (!ids) return undefined;
+    if (ids[providerId]) return ids[providerId];
+    for (const alias of this.adapterFor(providerId).profile.idAliases ?? []) {
+      if (ids[alias]) return ids[alias];
+    }
+    return undefined;
   }
 
   /**
@@ -241,11 +264,15 @@ export class Launcher {
             : await this.detectProjectOrThrow(target.cwd);
 
     // Resume: keep the session's active provider unless an explicit override
-    // is given (e.g. a handoff to a different agent).
-    let providerId =
+    // is given (e.g. a handoff to a different agent). Persisted ids may be a
+    // legacy alias (ox-alpha) of a current canonical id (glm-5-2-free) —
+    // canonicalize once so every downstream lookup, plan, and session write
+    // uses the current identity.
+    let providerId = this.deps.providers.canonicalId(
       target.providerId ??
-      existingSession?.activeProvider.providerId ??
-      project.defaultProvider;
+        existingSession?.activeProvider.providerId ??
+        project.defaultProvider,
+    );
 
     // Automatic provider-preference chain (stable free APIs → active free
     // promotions → explicit paid fallback).
@@ -292,7 +319,7 @@ export class Launcher {
       throw new ProviderNotAuthenticatedError(providerId, usable.reason ?? "no API key");
     }
     // Which harness carries this launch: the provider's coding-agent CLI when
-    // selected (Claude Code redirected for Ox Alpha/DeepSeek), or the generic
+    // selected (Claude Code redirected for GLM Free/DeepSeek), or the generic
     // direct-API agent (apiFallback providers with no CLI executable, and
     // API-only providers). Comes from the usability evaluation, never guessed.
     const runtimeKind = usable.launchKind === "cli" ? "cli" : "api";
@@ -390,16 +417,28 @@ export class Launcher {
               ? "automatic-default-flash: no explicit user/project/session model preference"
               : "provider default";
           }
-          const promoNote = providerId === "ox-alpha" ? " (limited-time free promo)" : "";
           return project.defaultProvider
-            ? `automatic-preference: ${project.defaultProvider} default → ${providerId}${promoNote}`
-            : `automatic-preference: no default provider → ${providerId}${promoNote}`;
+            ? `automatic-preference: ${this.deps.providers.canonicalId(project.defaultProvider)} default → ${providerId}`
+            : `automatic-preference: no default provider → ${providerId}`;
         }
         return providerId === "deepseek"
           ? "automatic-default-flash: no explicit user/project/session model preference"
           : "provider default";
       })(),
     };
+
+    // Model-verify preflight (declared `modelVerify`): confirm the resolved
+    // wire model still exists in the provider's catalog BEFORE any session is
+    // created or mutated. A confirmed absence hard-fails with an actionable
+    // error instead of opening a session where every prompt errors with
+    // "There's an issue with the selected model". Transient failures (network,
+    // 429, unparseable catalog) degrade to proceed — the check is advisory,
+    // never the cause of an outage. CLI harness only: an API-harness run
+    // resolves its own model at request time.
+    if (runtimeKind === "cli") {
+      const verifyNote = await (this.deps.verifyWireModel ?? this.verifyWireModel)(effectiveLaunch, adapter.profile, model);
+      if (verifyNote) modelNote = modelNote ? `${modelNote} ${verifyNote}` : verifyNote;
+    }
 
     // Session identity: resume an existing session, or create a new one.
     let session: TaskSession | undefined;
@@ -414,7 +453,7 @@ export class Launcher {
       // Bump last-active on resume so the resume picker sorts by "most recently
       // worked on". Provider-change resumes already refresh `updatedAt` via
       // setActiveProvider below, so only touch the common same-provider path.
-      const providerChanging = !!target.providerId && target.providerId !== session.activeProvider.providerId;
+      const providerChanging = !!target.providerId && this.deps.providers.canonicalId(target.providerId) !== this.deps.providers.canonicalId(session.activeProvider.providerId);
       if (!providerChanging) {
         await this.deps.sessionManager.markActive(session.sessionId).catch(() => {});
       }
@@ -464,13 +503,23 @@ export class Launcher {
       });
     }
 
+    // A resumed session persisted under a legacy provider alias (ox-alpha)
+    // keeps its stored id until now: rewrite activeProvider to the canonical
+    // id so identity is clean from here on. An alias resume is NOT a provider
+    // change (no fake handoff was recorded above); a real provider change was
+    // already written by the providerChanging block.
+    if (existingSession && session.activeProvider.providerId !== providerId) {
+      session = await this.deps.sessionManager.setActiveProvider(session.sessionId, { providerId, model });
+    }
+
     // Native-session resume: only on a SAME-provider resume (not a handoff to
     // a different provider — the target there starts a fresh native session).
-    // Uses the stored native id when present; otherwise undefined → fresh
-    // native session + resume-brief fallback. Never fabricates an id.
+    // Uses the stored native id when present (canonical key, then any legacy
+    // alias it was persisted under); otherwise undefined → fresh native
+    // session + resume-brief fallback. Never fabricates an id.
     const sameProviderResume =
-      existingSession !== undefined && existingSession.activeProvider.providerId === providerId;
-    let resumeNativeSessionId = sameProviderResume ? session.nativeSessionIds?.[providerId] : undefined;
+      existingSession !== undefined && this.deps.providers.canonicalId(existingSession.activeProvider.providerId) === providerId;
+    let resumeNativeSessionId = sameProviderResume ? this.nativeSessionIdFor(session, providerId) : undefined;
     let rollover: LaunchPreparation["rollover"];
     if (resumeNativeSessionId && providerId === "deepseek") {
       const native = effectiveLaunch.nativeResume;
@@ -615,7 +664,7 @@ export class Launcher {
       bypassPermissions,
     };
 
-    // A bypass-default provider (Ox Alpha) pre-accepts Claude Code's
+    // A bypass-default provider (GLM Free) pre-accepts Claude Code's
     // one-time bypass-permissions confirmation inside its OWN isolated
     // config dir, so neither fresh launches nor resumes ever prompt. The
     // user's global Claude settings are never touched. Advisory — a failure
@@ -623,11 +672,11 @@ export class Launcher {
     if (bypassPermissions && plan.configDir) {
       const seedFlag = this.deps.seedConfigDirFlag ?? ensureConfigDirSettingsFlag;
       await seedFlag(plan.configDir, "skipDangerousModePermissionPrompt", true);
-      // Ox uses a fresh CLAUDE_CONFIG_DIR. Claude Code otherwise pauses at
-      // its theme/security onboarding before honoring the bypass flag. Keep
-      // this strictly Ox-scoped; DeepSeek and native Claude retain their
+      // GLM Free uses a fresh CLAUDE_CONFIG_DIR. Claude Code otherwise pauses
+      // at its theme/security onboarding before honoring the bypass flag. Keep
+      // this strictly GLM Free-scoped; DeepSeek and native Claude retain their
       // existing config and permission behavior.
-      if (providerId === "ox-alpha") {
+      if (providerId === "glm-5-2-free") {
         const seedOnboarding = this.deps.seedConfigDirOnboarding ?? ensureConfigDirOnboardingState;
         await seedOnboarding(plan.configDir);
         const seedTrust = this.deps.seedConfigDirProjectTrust ?? ensureConfigDirProjectTrust;
@@ -662,6 +711,60 @@ export class Launcher {
   private discoverModels(profile: ProviderProfile): Promise<readonly DiscoveredModel[]> {
     if (this.deps.discoverModels) return this.deps.discoverModels(profile);
     return discoverModelsFor(profile);
+  }
+
+  /**
+   * Model-verify preflight (declared via `ModelVerifyDescriptor`): fetch the
+   * provider's model catalog and confirm the resolved wire model still exists
+   * upstream. A CONFIRMED absence hard-fails with `ModelUnavailableError`
+   * (fail loudly, never open a session where every prompt errors); transient
+   * failures — network, 429/5xx, unparseable or unexpectedly-shaped catalog —
+   * degrade to proceed. `bestEffort: true` downgrades a confirmed absence to
+   * a visible note instead of an error. Returns a note string when degraded.
+   */
+  private async verifyWireModel(
+    launch: CliLaunchDescriptor,
+    profile: ProviderProfile,
+    wireModel: string,
+  ): Promise<string | undefined> {
+    const descriptor = launch.modelVerify;
+    if (!descriptor) return undefined;
+    let text: string;
+    try {
+      const res = await fetch(descriptor.catalogUrl, { signal: AbortSignal.timeout(10_000) });
+      if (!res.ok) return undefined; // transient upstream error → proceed
+      text = await res.text();
+    } catch {
+      return undefined; // network/timeout → proceed
+    }
+    let ids: readonly string[];
+    try {
+      const parsed: unknown = JSON.parse(text);
+      let node: unknown = parsed;
+      for (const seg of descriptor.listPath.split(".")) {
+        if (node === null || typeof node !== "object") {
+          node = undefined;
+          break;
+        }
+        node = (node as Record<string, unknown>)[seg];
+      }
+      if (!Array.isArray(node)) return undefined; // unexpected catalog shape → proceed
+      const idField = descriptor.idField ?? "id";
+      ids = node
+        .map((e) => (e !== null && typeof e === "object" ? (e as Record<string, unknown>)[idField] : undefined))
+        .filter((x): x is string => typeof x === "string");
+    } catch {
+      return undefined; // unparseable catalog → proceed
+    }
+    if (ids.includes(wireModel)) return undefined;
+    if (descriptor.bestEffort) {
+      return `provider "${profile.id}" routes wire model "${wireModel}", which is not listed in the current upstream catalog (best-effort check — proceeding).`;
+    }
+    throw new ModelUnavailableError(
+      profile.id,
+      wireModel,
+      `the model is not listed in the catalog at ${descriptor.catalogUrl}`,
+    );
   }
 
   /** Persist a provider-native session id after a successful launch. Never throws — a capture failure is a safe fallback, not an error. */

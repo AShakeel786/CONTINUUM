@@ -27,7 +27,7 @@ export function resolveConfigDir(configDirName: string | undefined): string | un
  * Ensure a settings flag exists in a RESOLVED provider config dir's
  * `settings.json` — used to pre-accept Claude Code's one-time
  * bypass-permissions confirmation (`skipDangerousModePermissionPrompt`)
- * inside CONTINUUM's OWN isolated config dir (e.g. `.claude-oxalpha`).
+ * inside CONTINUUM's OWN isolated config dir (e.g. `.claude-deepseek`).
  * Never touches the user's global `~/.claude/settings.json`: the path
  * passed in is always a provider-scoped config dir CONTINUUM created.
  * Best-effort and idempotent — failures never block a launch.

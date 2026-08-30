@@ -23,8 +23,23 @@ export function parseCredentialUri(uri: string): { providerId: string; name: str
   return { providerId: match[1]!, name: match[2]! };
 }
 
+/**
+ * Provider-id aliases for credential lookups. When a bundled provider is
+ * renamed (ox-alpha → glm-5-2-free), a key stored under the old id must keep
+ * resolving so existing auth is never lost: reads try the canonical id first,
+ * then each legacy alias. Writes always use the canonical id, so the next
+ * `continuum auth` migrates the key automatically; `deleteCredential` removes
+ * the canonical and legacy keys together.
+ */
+export const DEFAULT_CREDENTIAL_ID_ALIASES: Readonly<Record<string, readonly string[]>> = {
+  "glm-5-2-free": ["ox-alpha"],
+};
+
 export class CredentialManager {
-  constructor(private readonly backend: CredentialBackend) {}
+  constructor(
+    private readonly backend: CredentialBackend,
+    private readonly idAliases: Readonly<Record<string, readonly string[]>> = DEFAULT_CREDENTIAL_ID_ALIASES,
+  ) {}
 
   get backendId(): string {
     return this.backend.id;
@@ -44,18 +59,28 @@ export class CredentialManager {
     return credentialUriFor(providerId, name);
   }
 
+  private async backendGet(providerId: string, name: string): Promise<string | undefined> {
+    for (const id of [providerId, ...(this.idAliases[providerId] ?? [])]) {
+      const value = await this.backend.get(credentialKeyFor(id, name));
+      if (value !== undefined) return value;
+    }
+    return undefined;
+  }
+
   async getCredential(providerId: string, name: string): Promise<string> {
-    const value = await this.backend.get(credentialKeyFor(providerId, name));
+    const value = await this.backendGet(providerId, name);
     if (value === undefined) throw new CredentialNotFoundError(credentialUriFor(providerId, name));
     return value;
   }
 
   async hasCredential(providerId: string, name: string): Promise<boolean> {
-    return (await this.backend.get(credentialKeyFor(providerId, name))) !== undefined;
+    return (await this.backendGet(providerId, name)) !== undefined;
   }
 
   async deleteCredential(providerId: string, name: string): Promise<void> {
-    await this.backend.delete(credentialKeyFor(providerId, name));
+    for (const id of [providerId, ...(this.idAliases[providerId] ?? [])]) {
+      await this.backend.delete(credentialKeyFor(id, name));
+    }
   }
 
   /** Credential *names* for one provider — e.g. for `providers`/`doctor` listings. Never returns values. */

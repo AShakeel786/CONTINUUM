@@ -11,7 +11,7 @@ import { claudeProfile } from "../../providers/profiles/claude.js";
 import { deepseekProfile } from "../../providers/profiles/deepseek.js";
 import { codexProfile } from "../../providers/profiles/codex.js";
 import { antigravityProfile } from "../../providers/profiles/antigravity.js";
-import { oxAlphaManifest } from "../../providers/presets.js";
+import { glm52FreeManifest } from "../../providers/presets.js";
 import { manifestToProfile, manifestToAuthMetadata } from "../../providers/manifest.js";
 import type { ProviderManifest } from "../../providers/manifest.js";
 import { CredentialManager } from "../../auth/credential-manager.js";
@@ -102,13 +102,13 @@ async function buildDeps(opts: {
   providers.register(createProviderAdapter(deepseekProfile));
   providers.register(createProviderAdapter(codexProfile));
   providers.register(createProviderAdapter(antigravityProfile));
-  providers.register(createProviderAdapter(manifestToProfile(oxAlphaManifest)));
+  providers.register(createProviderAdapter(manifestToProfile(glm52FreeManifest)));
 
   const backend = new FakeBackend();
   const credentialManager = new CredentialManager(backend);
   await credentialManager.setCredential("deepseek", "api-key", "sk-test");
   await credentialManager.setCredential("deepseek", "proxy-user-key", "pk-test");
-  await credentialManager.setCredential("ox-alpha", "api-key", "sk-ox-test");
+  await credentialManager.setCredential("glm-5-2-free", "api-key", "sk-glm-test");
 
   const cliAuthManager = new CliAuthManager();
   cliAuthManager.register(fakeCliAdapter("claude"));
@@ -225,12 +225,12 @@ describe("permission mode — global bypass default", () => {
   });
 
   it("API runtime emits no CLI bypass flag and no FULL ACCESS claim", async () => {
-    // Ox Alpha with the claude executable missing → the direct-API harness.
+    // GLM Free with the claude executable missing → the direct-API harness.
     const { deps, registry } = await buildDeps({
       findExecutable: () => undefined,
     });
     const launcher = new Launcher(deps);
-    const prep = await launcher.prepareLaunch({ projectKey: (await registry.add({ name: "O1", path: "/w/O1", defaultProvider: "ox-alpha" })).id, providerId: "ox-alpha", taskGoal: "ship" }, {});
+    const prep = await launcher.prepareLaunch({ projectKey: (await registry.add({ name: "O1", path: "/w/O1", defaultProvider: "glm-5-2-free" })).id, providerId: "glm-5-2-free", taskGoal: "ship" }, {});
     expect(prep.runtimeKind).toBe("api");
     expect(prep.plan.bypassPermissions).toBe(false);
     expect(prep.plan.args).not.toContain("--dangerously");
