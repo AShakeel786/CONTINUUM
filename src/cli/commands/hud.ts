@@ -36,6 +36,7 @@ import type { Launcher } from "../../launcher/launcher.js";
 import type { ProviderRegistry } from "../../providers/registry.js";
 import type { PricingAwarenessService } from "../../pricing/service.js";
 import { formatPromoLabel } from "../../providers/promo.js";
+import { codingToolsAvailable } from "../../mcp/coding-tools.js";
 
 export type HandoffHudState = "ready" | "pending" | "off";
 
@@ -251,10 +252,11 @@ export function buildProviderIdentity(prep: LaunchPreparation, providers: Provid
   const adapter = providers.get(prep.providerRef.providerId);
   const promo = formatPromoLabel(adapter.profile.promo);
   if (prep.runtimeKind === "api") {
+    const coding = codingToolsAvailable(prep.project.path);
     return {
       provider: adapter.profile.displayName,
       model: prep.providerRef.model,
-      client: "CONTINUUM (direct API — no coding-agent CLI)",
+      client: coding ? "CONTINUUM (direct API — coding harness)" : "CONTINUUM (direct API — chat only)",
       route: `Direct API → ${hostOf(adapter.profile.baseUrl)}`,
       ...(promo ? { promo } : {}),
     };

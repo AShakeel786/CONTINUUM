@@ -9,6 +9,7 @@ import { ToolRegistry, type RegisteredTool } from "./tools.js";
 import { textResult } from "./tools.js";
 import { buildMemoryTools, type MemoryCoreProvider } from "./memory-tools.js";
 import { buildSessionTools, type SessionToolDeps } from "./session-tools.js";
+import { buildCodingTools, codingToolsAvailable } from "./coding-tools.js";
 import { defaultRawStore } from "../tool-output/store.js";
 import { FilePruneStore } from "../context/pruning.js";
 
@@ -28,6 +29,13 @@ export interface BuildRegistryOptions {
   readonly memoryProvider?: MemoryCoreProvider;
   /** Optional credential manager for the gateway service token; defaults to the native backend. */
   readonly credentialManager?: CredentialManager;
+  /**
+   * When set, registers the local coding harness (exec/read_file/write_file/
+   * edit_file/list_files/search_files) scoped to this project — the Direct-API
+   * session's real coding-agent surface. Absent → chat-only: no shell or
+   * filesystem tools are registered or advertised.
+   */
+  readonly coding?: { readonly projectPath: string };
 }
 
 /** Assembles the default tool registry. */
@@ -45,6 +53,9 @@ export async function buildToolRegistry(opts: BuildRegistryOptions = {}): Promis
   for (const t of buildMemoryTools(memoryProvider)) registry.register(t);
   for (const t of buildSessionTools(sessionDeps)) registry.register(t);
   for (const t of buildRetrievalTools()) registry.register(t);
+  if (opts.coding && codingToolsAvailable(opts.coding.projectPath)) {
+    for (const t of buildCodingTools(opts.coding.projectPath)) registry.register(t);
+  }
   return registry;
 }
 

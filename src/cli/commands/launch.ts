@@ -251,7 +251,7 @@ const AUTO_ROUTE_STDERR_TAIL_BYTES = 8192;
 export async function launchPrepared(ctx: { launcher: Launcher; providers: ProviderRegistry; sessionManager: SessionManager; pricing?: PricingAwarenessService; dataDir: string; apiFailoverPolicy?: FailoverPolicy }, prep: LaunchPreparation, out: (s: string) => void, spawnFn: (plan: import("../../launcher/types.js").LaunchPlan) => Promise<{ exitCode: number | null; stderrTail?: string }> = spawnCli): Promise<number> {
   if (prep.runtimeKind === "api") {
     const adapter = ctx.providers.get(prep.providerRef.providerId);
-    const tools = await buildToolRegistry({ dataDir: ctx.dataDir });
+    const tools = await buildToolRegistry({ dataDir: ctx.dataDir, coding: { projectPath: prep.project.path } });
     const cache = new ToolResultCache({}, join(ctx.dataDir, "tool-cache"));
     const scopeProvider = makeScopeProvider({ projectPath: prep.project.path, sessionManager: ctx.sessionManager });
     const sessionId = prep.session?.sessionId;

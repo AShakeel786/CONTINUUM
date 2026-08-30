@@ -51,6 +51,7 @@ import { findRecentNativeSessionId } from "./native-session.js";
 import { ensureConfigDirOnboardingState, ensureConfigDirProjectTrust, ensureConfigDirSettingsFlag, resolveConfigDir } from "./config-dir.js";
 import { mcpServerCommand } from "../mcp/registration.js";
 import { repoMapBlock } from "../repo-map/repo-map.js";
+import { buildToolSurfaceBlock, codingToolsAvailable } from "../mcp/coding-tools.js";
 import { applyReversiblePruning } from "../context/pruning.js";
 import type { ContextBlock } from "../context/types.js";
 import type { Prompt, PromptOutput } from "../auth/prompt.js";
@@ -526,6 +527,15 @@ export class Launcher {
       } catch {
         // degrade to no repo map
       }
+    }
+    // Direct-API sessions get a capability surface block: it tells the model
+    // exactly which coding tools are registered (or marks the session chat-only
+    // with no shell/filesystem claims). The registry side (cli/commands/launch.ts
+    // passes `coding: { projectPath }` to buildToolRegistry) decides under the
+    // same `codingToolsAvailable(project.path)` condition, so the advertised
+    // block and the registered harness can never diverge.
+    if (runtimeKind === "api") {
+      callerBlocks.push(buildToolSurfaceBlock(codingToolsAvailable(project.path), project.path));
     }
 
     let envelope;
