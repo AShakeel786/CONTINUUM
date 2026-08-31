@@ -53,10 +53,16 @@ class StackRuntime implements HealthRuntime {
   bootDelayInfoCalls = 0;
   private infoCallsSinceOpen = 0;
   started = new Set<string>();
+  /** Simulate Docker Desktop's terminal "engine cannot boot" daemon error. */
+  terminalError = false;
+  /** Simulate a `docker info` that hangs its whole timeout (engine up, VM dead). */
+  hangInfo = false;
 
-  constructor(opts?: { dockerUp?: boolean; started?: string[]; bootDelayInfoCalls?: number }) {
+  constructor(opts?: { dockerUp?: boolean; started?: string[]; bootDelayInfoCalls?: number; terminalError?: boolean; hangInfo?: boolean }) {
     this.dockerUp = opts?.dockerUp ?? false;
     this.bootDelayInfoCalls = opts?.bootDelayInfoCalls ?? 0;
+    this.terminalError = opts?.terminalError ?? false;
+    this.hangInfo = opts?.hangInfo ?? false;
     for (const c of opts?.started ?? []) this.started.add(c);
     if (this.dockerUp && !opts?.started) for (const c of ALL) this.started.add(c);
   }
@@ -79,7 +85,9 @@ class StackRuntime implements HealthRuntime {
     if (cmd.endsWith("Docker Desktop.exe")) {
       this.dockerBooting = true;
       this.infoCallsSinceOpen = 0;
-      if (this.bootDelayInfoCalls === 0) this.dockerUp = true;
+      // In the terminal/hang failure modes, launching the exe must NOT boot the
+      // daemon — the engine stays down so the repair exercises those paths.
+      if (!this.terminalError && !this.hangInfo && this.bootDelayInfoCalls === 0) this.dockerUp = true;
       return { ok: true };
     }
     return { ok: true };
@@ -88,6 +96,13 @@ class StackRuntime implements HealthRuntime {
   private docker(args: readonly string[]): { code: number | null; stdout: string; stderr: string } {
     const sub = args[0];
     if (sub === "info") {
+      if (this.terminalError && !this.dockerUp) {
+        return { code: 1, stdout: "", stderr: "ERROR: Error response from daemon: Docker Desktop is unable to start" };
+      }
+      if (this.hangInfo && !this.dockerUp) {
+        this.nowMs += 30_000; // consume the poll's whole 30s timeout
+        return { code: 1, stdout: "", stderr: "" };
+      }
       if (!this.dockerUp && this.dockerBooting) {
         this.infoCallsSinceOpen += 1;
         if (this.infoCallsSinceOpen >= this.bootDelayInfoCalls) this.dockerUp = true;
@@ -151,20 +166,19 @@ const openedDocker = (r: StackRuntime) => r.calls.some((c) => c.cmd === "open" &
 describe("ensureLaunchStackHealthy — already healthy", () => {
   it("does not repair and emits no warnings when the whole stack is up", async () => {
     const runtime = new StackRuntime({ dockerUp: true });
-    const result = await ensureLaunchStackHealthy({ runtime, options: options(), policy: POLICY, memoryConfigured: true });
+    const result = await ensureLaunchStackHealthy({ runtime, options: options(), policy: POLICY });
 
     expect(result).toEqual({ warnings: [], repairAttempted: false, recovered: false });
     expect(openedDocker(runtime)).toBe(false);
     expect(dockerCalls(runtime, "start")).toEqual([]);
   });
 
-  it("stays warn-only (never repairs) when the user never opted into the Tencent stack", async () => {
+  it("stays warn-only (never repairs) when no Tencent stack is configured or deployed", async () => {
     const runtime = new StackRuntime({ dockerUp: false });
     const result = await ensureLaunchStackHealthy({
       runtime,
       options: options({ tencentConfigured: false }),
       policy: POLICY,
-      memoryConfigured: false,
     });
 
     expect(result.repairAttempted).toBe(false);
@@ -181,7 +195,6 @@ describe("ensureLaunchStackHealthy — Docker down", () => {
       runtime,
       options: options(),
       policy: POLICY,
-      memoryConfigured: true,
       discoverDockerDesktop: async () => undefined,
       onProgress: (l) => progress.push(l),
     });
@@ -200,7 +213,6 @@ describe("ensureLaunchStackHealthy — Docker down", () => {
       runtime,
       options: options(),
       policy: POLICY,
-      memoryConfigured: true,
       discoverDockerDesktop: async () => undefined,
     });
 
@@ -216,7 +228,6 @@ describe("ensureLaunchStackHealthy — Docker down", () => {
       runtime,
       options: options(),
       policy: POLICY,
-      memoryConfigured: true,
       discoverDockerDesktop: async () => exe,
     });
 
@@ -233,11 +244,28 @@ describe("ensureLaunchStackHealthy — Docker down", () => {
 describe("ensureLaunchStackHealthy — Docker up, services down", () => {
   it("starts stopped containers without touching Docker Desktop", async () => {
     const runtime = new StackRuntime({ dockerUp: true, started: [] });
-    const result = await ensureLaunchStackHealthy({ runtime, options: options(), policy: POLICY, memoryConfigured: true });
+    const result = await ensureLaunchStackHealthy({ runtime, options: options(), policy: POLICY });
 
     expect(result.recovered).toBe(true);
     expect(result.warnings).toEqual([]);
     expect(openedDocker(runtime)).toBe(false);
+    expect(new Set(dockerCalls(runtime, "start").map((c) => c.args[1]))).toEqual(new Set(ALL));
+  });
+
+  it("recovers a deployed stack even without a memory token — the containers are the opt-in signal", async () => {
+    // Regression: the old heal short-circuited on `memoryConfigured` (token in
+    // vault/env). A user with the stack deployed but no token stored never got
+    // auto-recovery. The stack's own presence (docker up + its containers
+    // stopped) must be enough to arm the existing repair cascade.
+    const runtime = new StackRuntime({ dockerUp: true, started: [] });
+    const result = await ensureLaunchStackHealthy({
+      runtime,
+      options: options({ tencentConfigured: false }),
+      policy: POLICY,
+    });
+
+    expect(result.recovered).toBe(true);
+    expect(result.warnings).toEqual([]);
     expect(new Set(dockerCalls(runtime, "start").map((c) => c.args[1]))).toEqual(new Set(ALL));
   });
 
@@ -260,9 +288,85 @@ describe("ensureLaunchStackHealthy — Docker up, services down", () => {
       return r;
     };
 
-    const result = await ensureLaunchStackHealthy({ runtime, options: options(), policy: POLICY, memoryConfigured: true });
+    const result = await ensureLaunchStackHealthy({ runtime, options: options(), policy: POLICY });
     expect(result.recovered).toBe(true);
     expect(result.warnings).toEqual([]);
+  });
+});
+
+describe("ensureLaunchStackHealthy — Docker Desktop cannot boot its engine", () => {
+  it("Windows: fails fast with the exact reason when Docker reports a terminal engine error", async () => {
+    // Regression: a terminal "Docker Desktop is unable to start" used to be
+    // ignored — the repair polled the full 180s and then printed the same
+    // generic "not ready" line. It must surface the real reason immediately.
+    const runtime = new StackRuntime({ dockerUp: false, terminalError: true });
+    const exe = "C:\\Program Files\\Docker\\Docker\\Docker Desktop.exe";
+    const progress: string[] = [];
+    const result = await ensureLaunchStackHealthy({
+      runtime,
+      options: options(),
+      policy: POLICY,
+      discoverDockerDesktop: async () => exe,
+      onProgress: (l) => progress.push(l),
+    });
+
+    expect(result.recovered).toBe(false);
+    expect(result.repairAttempted).toBe(true);
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toMatch(/unable to start/i);
+    // Explicit startup progress, then fail fast — no blind retry loop.
+    expect(progress.some((l) => /Starting Docker Desktop/.test(l))).toBe(true);
+    expect(progress.some((l) => /waiting for engine/.test(l))).toBe(true);
+    // Launch diagnose + repair's before/after diagnoses + the single repair
+    // poll. A blind loop would have burned ~90 polls, not 4.
+    expect(dockerCalls(runtime, "info").length).toBe(4);
+  });
+
+  it("Windows: fails fast with the WSL/virtualization reason when the engine hangs and the prerequisite is missing", async () => {
+    // Regression: a hung `docker info` (engine process up, VM never reachable)
+    // was polled until the 180s deadline then reported generically. The
+    // prerequisite probe must run once and surface the real machine-level cause.
+    const runtime = new StackRuntime({ dockerUp: false, hangInfo: true });
+    const exe = "C:\\Program Files\\Docker\\Docker\\Docker Desktop.exe";
+    let probeCalls = 0;
+    const result = await ensureLaunchStackHealthy({
+      runtime,
+      options: options(),
+      policy: POLICY,
+      discoverDockerDesktop: async () => exe,
+      probeEnginePrerequisite: async () => {
+        probeCalls += 1;
+        return { ok: false, detail: "this machine reports virtualization disabled (WSL2 cannot start)" };
+      },
+    });
+
+    expect(result.recovered).toBe(false);
+    expect(probeCalls).toBe(1);
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toMatch(/virtualization disabled/i);
+    expect(result.warnings[0]).toMatch(/wsl2 cannot start/i);
+  });
+
+  it("Windows: keeps polling (probing once) when the prerequisite is satisfied but the engine is still hanging", async () => {
+    const runtime = new StackRuntime({ dockerUp: false, hangInfo: true });
+    let probeCalls = 0;
+    const result = await ensureLaunchStackHealthy({
+      runtime,
+      options: options(),
+      policy: POLICY,
+      discoverDockerDesktop: async () => "C:\\Program Files\\Docker\\Docker\\Docker Desktop.exe",
+      probeEnginePrerequisite: async () => {
+        probeCalls += 1;
+        return { ok: true, detail: "" };
+      },
+    });
+
+    // A healthy prerequisite is not a false failure: the poll keeps running
+    // until the wait window elapses, and the probe runs exactly once.
+    expect(probeCalls).toBe(1);
+    expect(result.recovered).toBe(false);
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toMatch(/not ready within/i);
   });
 });
 
@@ -273,7 +377,6 @@ describe("ensureLaunchStackHealthy — unrecoverable", () => {
       runtime,
       options: options(),
       policy: POLICY,
-      memoryConfigured: true,
       discoverDockerDesktop: async () => undefined,
     });
 
@@ -297,7 +400,6 @@ describe("ensureLaunchStackHealthy — concurrency", () => {
       runtime,
       options: options(),
       policy: POLICY,
-      memoryConfigured: true,
       lock: busyLock,
     });
 
@@ -324,7 +426,6 @@ describe("ensureLaunchStackHealthy — concurrency", () => {
       runtime,
       options: options(),
       policy: POLICY,
-      memoryConfigured: true,
       lock: waitedLock,
     });
 

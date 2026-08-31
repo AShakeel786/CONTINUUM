@@ -49,6 +49,15 @@ export interface RepairDeps {
    * when no launchable executable exists (macOS/linux, or no install found).
    */
   readonly discoverDockerDesktop?: () => Promise<string | undefined>;
+  /** One-line recovery progress (Docker boot stages); never a raw retry stream. */
+  readonly onProgress?: (line: string) => void;
+  /**
+   * Injectable engine-prerequisite probe (Windows: WSL2/virtualization). The
+   * default runs `wsl --status`; a machine whose Linux engine cannot boot
+   * reports the exact reason so the repair fails fast instead of polling the
+   * whole wait window blind.
+   */
+  readonly probeEnginePrerequisite?: (runtime: HealthRuntime) => Promise<{ ok: boolean; detail: string }>;
 }
 
 /** Read `MEMORY_CORE_IMAGE` from the canonical Tencent `.env`. */
@@ -149,10 +158,48 @@ async function runCanonicalStart(deps: RepairDeps): Promise<{ ok: boolean; detai
   return { ok: res.code === 0, detail: detail || "start script completed" };
 }
 
+/**
+ * Windows engine prerequisite: Docker Desktop's Linux engine runs in WSL2,
+ * which needs CPU virtualization (VT-x/AMD-V) enabled in firmware plus the
+ * Virtual Machine Platform feature. `wsl --status` names the missing
+ * prerequisite in one line — surface it so the user gets the real reason
+ * instead of a blind wait. Non-Windows and ambiguous results report ok so a
+ * healthy machine never gets a false failure.
+ */
+export async function defaultEnginePrerequisiteProbe(
+  runtime: HealthRuntime,
+  platform: NodeJS.Platform = process.platform,
+): Promise<{ ok: boolean; detail: string }> {
+  if (platform !== "win32") return { ok: true, detail: "" };
+  const res = await runtime.run("wsl", ["--status"], { timeoutMs: DOCKER_TIMEOUT_MS });
+  // `wsl --status` emits UTF-16LE; strip the NUL bytes before matching text.
+  const text = `${res.stdout}\n${res.stderr}`.replace(/\0/g, "").toLowerCase();
+  if (text.includes("virtualization is not enabled") || text.includes("wsl2 is unable to start")) {
+    return {
+      ok: false,
+      detail:
+        "this machine reports virtualization disabled (WSL2 cannot start) — enable VT-x/AMD-V in firmware and the Virtual Machine Platform feature, then restart Docker Desktop",
+    };
+  }
+  return { ok: true, detail: "" };
+}
+
+/** A terminal daemon error means more polling cannot help — fail fast. */
+function terminalEngineError(info: { code: number | null; stdout: string; stderr: string }): string | undefined {
+  const text = `${info.stderr}\n${info.stdout}`;
+  if (text.includes("Docker Desktop is unable to start")) {
+    return "Docker Desktop is unable to start — the Linux engine failed to boot";
+  }
+  return undefined;
+}
+
 async function waitForDockerDesktop(deps: RepairDeps): Promise<{ ok: boolean; detail: string }> {
   const { runtime } = deps;
+  const probe = deps.probeEnginePrerequisite ?? defaultEnginePrerequisiteProbe;
   const discover = deps.discoverDockerDesktop ?? defaultDockerDesktopDiscovery;
   const exe = await discover();
+
+  deps.onProgress?.("Starting Docker Desktop…");
   let launched: { ok: boolean; detail: string };
   if (exe) {
     // Windows: launch the discovered Docker Desktop executable detached. A
@@ -169,10 +216,38 @@ async function waitForDockerDesktop(deps: RepairDeps): Promise<{ ok: boolean; de
       : { ok: false, detail: `could not launch Docker Desktop: ${firstLine(open.stderr)}` };
   }
   if (!launched.ok) return { ok: false, detail: launched.detail };
+
+  deps.onProgress?.("Docker Desktop started; waiting for engine…");
   const deadline = runtime.now() + DOCKER_DESKTOP_WAIT_MS;
+  let prerequisiteProbed = false;
+  // Diagnose the engine prerequisite (WSL/virtualization) at most once, on the
+  // first terminal error OR full-timeout hang. Both mean the engine process
+  // exists but its VM never became reachable — the real machine-level reason
+  // (e.g. virtualization disabled) beats a generic "not ready" line.
+  const diagnosePrerequisite = async (): Promise<string | undefined> => {
+    if (prerequisiteProbed) return undefined;
+    prerequisiteProbed = true;
+    const prereq = await probe(runtime);
+    return prereq.ok ? undefined : prereq.detail;
+  };
   while (runtime.now() < deadline) {
+    const t0 = runtime.now();
     const info = await runtime.run("docker", ["info"], { timeoutMs: DOCKER_TIMEOUT_MS });
     if (info.code === 0) return { ok: true, detail: "Docker Desktop started, daemon reachable" };
+    const terminal = terminalEngineError(info);
+    if (terminal) {
+      const prereq = await diagnosePrerequisite();
+      return { ok: false, detail: prereq ? `${terminal} — ${prereq}` : terminal };
+    }
+    // A poll that consumed nearly its whole timeout without reaching the
+    // daemon is a hang (engine up, VM dead). Diagnose once; keep polling after
+    // a clean probe in case a slow boot resolves it — never burn the whole
+    // window without telling the user what is actually wrong. The 1s tolerance
+    // covers the timeout-kill landing a hair under the nominal 30s.
+    if (runtime.now() - t0 >= DOCKER_TIMEOUT_MS - 1000) {
+      const prereq = await diagnosePrerequisite();
+      if (prereq) return { ok: false, detail: `Docker Desktop started but its engine could not come up: ${prereq}` };
+    }
     await runtime.sleep(DOCKER_DESKTOP_POLL_MS);
   }
   return { ok: false, detail: `Docker Desktop launched but daemon not ready within ${Math.round(DOCKER_DESKTOP_WAIT_MS / 1000)}s` };

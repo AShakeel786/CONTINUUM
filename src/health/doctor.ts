@@ -27,6 +27,10 @@ export interface HealthDoctorDeps {
   readonly readPinnedEnv?: () => Promise<string | undefined>;
   /** Injectable Docker Desktop path discovery; default reads the live machine. */
   readonly discoverDockerDesktop?: () => Promise<string | undefined>;
+  /** One-line recovery progress (Docker boot stages); never a raw retry stream. */
+  readonly onProgress?: (line: string) => void;
+  /** Injectable engine-prerequisite probe; default runs `wsl --status` on Windows. */
+  readonly probeEnginePrerequisite?: (runtime: HealthRuntime) => Promise<{ ok: boolean; detail: string }>;
 }
 
 export interface RepairSummary {
@@ -72,6 +76,8 @@ export class HealthDoctor {
           state,
           readPinnedEnv: this.deps.readPinnedEnv,
           discoverDockerDesktop: this.deps.discoverDockerDesktop,
+          onProgress: this.deps.onProgress,
+          probeEnginePrerequisite: this.deps.probeEnginePrerequisite,
         },
         checks,
       );

@@ -119,7 +119,7 @@ describe("exec through the local harness", () => {
         const sawTool = messages.some((m) => (m as { role?: string }).role === "tool");
         return sawTool
           ? { content: "done", toolCalls: [], finishReason: "stop" }
-          : { content: null, toolCalls: [{ id: "c1", name: "exec", arguments: JSON.stringify({ command: "printf hi-loop" }) }], finishReason: "tool_calls" };
+          : { content: null, toolCalls: [{ id: "c1", name: "exec", arguments: JSON.stringify({ command: "echo hi-loop" }) }], finishReason: "tool_calls" };
       },
     };
     const events: string[] = [];
