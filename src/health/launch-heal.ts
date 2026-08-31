@@ -49,6 +49,8 @@ export interface LaunchHealDeps {
   readonly lockWaitMs?: number;
   /** Short, stateful progress lines (never a raw retry-spam stream). */
   readonly onProgress?: (line: string) => void;
+  /** Injectable Docker Desktop path discovery; default reads the live machine. */
+  readonly discoverDockerDesktop?: () => Promise<string | undefined>;
 }
 
 export interface LaunchHealResult {
@@ -73,6 +75,7 @@ function buildDoctor(deps: LaunchHealDeps): HealthDoctor {
     options: deps.options,
     policy: deps.policy,
     ...(deps.staleProcesses ? { probes: { staleProcesses: deps.staleProcesses } } : {}),
+    discoverDockerDesktop: deps.discoverDockerDesktop,
   });
 }
 

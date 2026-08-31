@@ -20,6 +20,7 @@ import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { HealthCheckResult, HealthOptions, HealthRuntime, RepairOutcome } from "./types.js";
 import { RecoveryState } from "./state.js";
+import { defaultDockerDesktopDiscovery } from "./docker-desktop.js";
 
 const SCRIPT_TIMEOUT_MS = 180_000;
 const DOCKER_TIMEOUT_MS = 30_000;
@@ -41,6 +42,13 @@ export interface RepairDeps {
   readonly state: RecoveryState;
   /** Injectable env read so tests never touch the real canonical repo. */
   readonly readPinnedEnv?: () => Promise<string | undefined>;
+  /**
+   * Injectable Docker Desktop path discovery. Default reads the real machine
+   * (platform + env + PATH + filesystem); tests inject a fake so the repair
+   * never depends on the test host's actual Docker install. Returns undefined
+   * when no launchable executable exists (macOS/linux, or no install found).
+   */
+  readonly discoverDockerDesktop?: () => Promise<string | undefined>;
 }
 
 /** Read `MEMORY_CORE_IMAGE` from the canonical Tencent `.env`. */
@@ -141,11 +149,26 @@ async function runCanonicalStart(deps: RepairDeps): Promise<{ ok: boolean; detai
   return { ok: res.code === 0, detail: detail || "start script completed" };
 }
 
-async function waitForDockerDesktop(runtime: HealthRuntime): Promise<{ ok: boolean; detail: string }> {
-  const open = await runtime.run("open", ["-a", "Docker"], { timeoutMs: DOCKER_TIMEOUT_MS });
-  if (open.code !== 0) {
-    return { ok: false, detail: `could not launch Docker Desktop: ${firstLine(open.stderr)}` };
+async function waitForDockerDesktop(deps: RepairDeps): Promise<{ ok: boolean; detail: string }> {
+  const { runtime } = deps;
+  const discover = deps.discoverDockerDesktop ?? defaultDockerDesktopDiscovery;
+  const exe = await discover();
+  let launched: { ok: boolean; detail: string };
+  if (exe) {
+    // Windows: launch the discovered Docker Desktop executable detached. A
+    // normal `run`/cmd-start would hang on the GUI child's inherited pipes.
+    const started = await runtime.start(exe, []);
+    launched = started.ok
+      ? { ok: true, detail: `launched Docker Desktop (${exe})` }
+      : { ok: false, detail: `could not launch Docker Desktop: ${started.error ?? "unknown error"}` };
+  } else {
+    // macOS/linux, or no install discovered: preserve the existing `open` path.
+    const open = await runtime.run("open", ["-a", "Docker"], { timeoutMs: DOCKER_TIMEOUT_MS });
+    launched = open.code === 0
+      ? { ok: true, detail: "launched Docker Desktop" }
+      : { ok: false, detail: `could not launch Docker Desktop: ${firstLine(open.stderr)}` };
   }
+  if (!launched.ok) return { ok: false, detail: launched.detail };
   const deadline = runtime.now() + DOCKER_DESKTOP_WAIT_MS;
   while (runtime.now() < deadline) {
     const info = await runtime.run("docker", ["info"], { timeoutMs: DOCKER_TIMEOUT_MS });
@@ -174,7 +197,7 @@ async function repairTarget(deps: RepairDeps, check: HealthCheckResult): Promise
 
   switch (target) {
     case "docker-desktop": {
-      const res = await waitForDockerDesktop(runtime);
+      const res = await waitForDockerDesktop(deps);
       if (res.ok) {
         state.recordSuccess(key);
         return { target, checkName: check.name, status: "repaired", detail: res.detail };

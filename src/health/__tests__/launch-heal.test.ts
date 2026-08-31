@@ -73,6 +73,18 @@ class StackRuntime implements HealthRuntime {
     return { code: 0, stdout: "", stderr: "" };
   }
 
+  /** Detached GUI launch (Windows Docker Desktop.exe) — boots the daemon like `open`. */
+  async start(cmd: string, args: readonly string[]): Promise<{ ok: boolean; error?: string }> {
+    this.calls.push({ cmd, args });
+    if (cmd.endsWith("Docker Desktop.exe")) {
+      this.dockerBooting = true;
+      this.infoCallsSinceOpen = 0;
+      if (this.bootDelayInfoCalls === 0) this.dockerUp = true;
+      return { ok: true };
+    }
+    return { ok: true };
+  }
+
   private docker(args: readonly string[]): { code: number | null; stdout: string; stderr: string } {
     const sub = args[0];
     if (sub === "info") {
@@ -170,6 +182,7 @@ describe("ensureLaunchStackHealthy — Docker down", () => {
       options: options(),
       policy: POLICY,
       memoryConfigured: true,
+      discoverDockerDesktop: async () => undefined,
       onProgress: (l) => progress.push(l),
     });
 
@@ -183,11 +196,37 @@ describe("ensureLaunchStackHealthy — Docker down", () => {
 
   it("recovers on the same launch even when the Docker daemon cold-boots slowly", async () => {
     const runtime = new StackRuntime({ dockerUp: false, bootDelayInfoCalls: 5 });
-    const result = await ensureLaunchStackHealthy({ runtime, options: options(), policy: POLICY, memoryConfigured: true });
+    const result = await ensureLaunchStackHealthy({
+      runtime,
+      options: options(),
+      policy: POLICY,
+      memoryConfigured: true,
+      discoverDockerDesktop: async () => undefined,
+    });
 
     expect(result.recovered).toBe(true);
     expect(result.warnings).toEqual([]);
     expect(dockerCalls(runtime, "info").length).toBeGreaterThan(5); // polled through the boot
+  });
+
+  it("Windows: launches the discovered Docker Desktop executable and recovers the stack", async () => {
+    const runtime = new StackRuntime({ dockerUp: false });
+    const exe = "C:\\Program Files\\Docker\\Docker\\Docker Desktop.exe";
+    const result = await ensureLaunchStackHealthy({
+      runtime,
+      options: options(),
+      policy: POLICY,
+      memoryConfigured: true,
+      discoverDockerDesktop: async () => exe,
+    });
+
+    expect(result.recovered).toBe(true);
+    expect(result.warnings).toEqual([]);
+    // The discovered exe was launched detached — `open -a Docker` was NOT used.
+    expect(openedDocker(runtime)).toBe(false);
+    expect(runtime.calls.some((c) => c.cmd === exe && c.args.length === 0)).toBe(true);
+    // Same-launch cascade then started every container.
+    expect(new Set(dockerCalls(runtime, "start").map((c) => c.args[1]))).toEqual(new Set(ALL));
   });
 });
 
@@ -230,7 +269,13 @@ describe("ensureLaunchStackHealthy — Docker up, services down", () => {
 describe("ensureLaunchStackHealthy — unrecoverable", () => {
   it("degrades with exactly one concise, actionable warning when Docker never comes up", async () => {
     const runtime = new StackRuntime({ dockerUp: false, bootDelayInfoCalls: 100_000 }); // never boots
-    const result = await ensureLaunchStackHealthy({ runtime, options: options(), policy: POLICY, memoryConfigured: true });
+    const result = await ensureLaunchStackHealthy({
+      runtime,
+      options: options(),
+      policy: POLICY,
+      memoryConfigured: true,
+      discoverDockerDesktop: async () => undefined,
+    });
 
     expect(result.recovered).toBe(false);
     expect(result.repairAttempted).toBe(true);

@@ -25,6 +25,8 @@ export interface HealthDoctorDeps {
   readonly probes?: Omit<CheckDeps, "runtime" | "options">;
   /** Injectable pinned-env read (tests); default reads the canonical .env. */
   readonly readPinnedEnv?: () => Promise<string | undefined>;
+  /** Injectable Docker Desktop path discovery; default reads the live machine. */
+  readonly discoverDockerDesktop?: () => Promise<string | undefined>;
 }
 
 export interface RepairSummary {
@@ -64,7 +66,13 @@ export class HealthDoctor {
     // Each round is still bounded by the same per-target cooldown/breaker.
     for (let round = 0; round < MAX_REPAIR_ROUNDS; round += 1) {
       const roundOutcomes = await runRepairs(
-        { runtime: this.deps.runtime, options: this.deps.options, state, readPinnedEnv: this.deps.readPinnedEnv },
+        {
+          runtime: this.deps.runtime,
+          options: this.deps.options,
+          state,
+          readPinnedEnv: this.deps.readPinnedEnv,
+          discoverDockerDesktop: this.deps.discoverDockerDesktop,
+        },
         checks,
       );
       outcomes.push(...roundOutcomes);

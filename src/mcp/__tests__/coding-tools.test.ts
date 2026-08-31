@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildToolRegistry } from "../build.js";
@@ -9,6 +9,34 @@ import { runAgentLoop } from "../../api-agent/agent.js";
 import { toOpenAiTools } from "../../api-agent/format.js";
 import type { ApiRunner } from "../../api-agent/runner.js";
 import type { AgentTurnResult } from "../../api-agent/types.js";
+
+/**
+ * Windows requires SeCreateSymbolicLinkPrivilege (admin/Developer Mode) for
+ * symlink creation; without it `symlinkSync` throws EPERM. The symlink-escape
+ * isolation test below only runs when this capability actually exists — the
+ * test skips explicitly rather than failing on hosts that cannot create
+ * symlinks. Any non-privilege symlink error rethrows so a genuine problem is
+ * never masked by the probe.
+ */
+function symlinksSupported(): boolean {
+  const probe = join(tmpdir(), `continuum-symlink-probe-${process.pid}.txt`);
+  try {
+    writeFileSync(probe, "");
+    symlinkSync(probe, `${probe}.link`);
+    unlinkSync(`${probe}.link`);
+    return true;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException | null)?.code;
+    if (code === "EPERM" || code === "EACCES") return false; // capability absent → skip
+    throw err; // anything else is a real environment problem, not a skip
+  } finally {
+    try {
+      unlinkSync(probe);
+    } catch {
+      // probe cleanup best-effort
+    }
+  }
+}
 
 function tmpProject(): { dir: string; outside: string } {
   const parent = mkdtempSync(join(tmpdir(), "coding-proj-parent-"));
@@ -142,7 +170,7 @@ describe("file tools and project-path isolation", () => {
     void outside;
   });
 
-  it("read_file rejects symlink escapes outside the project", async () => {
+  it.runIf(symlinksSupported())("read_file rejects symlink escapes outside the project", async () => {
     const { dir, outside } = tmpProject();
     symlinkSync(outside, join(dir, "link.txt"));
     const tools = await registry(dir);

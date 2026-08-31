@@ -40,6 +40,11 @@ class FakeRuntime implements HealthRuntime {
     const r = h(args);
     return { code: r.code, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
   }
+  /** Detached GUI launch (Windows Docker Desktop.exe). */
+  async start(cmd: string, args: readonly string[]): Promise<{ ok: boolean; error?: string }> {
+    this.calls.push({ cmd, args });
+    return { ok: true };
+  }
   async fetch(url: string): Promise<{ ok: boolean; status: number; body?: string }> {
     return this.fetchResults.get(url) ?? { ok: false, status: 0 };
   }

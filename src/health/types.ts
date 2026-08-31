@@ -54,6 +54,13 @@ export interface HealthRuntime {
   readonly now: () => number;
   /** Run a shell command; resolves {code, stdout, stderr}. Never prints directly. */
   readonly run: (cmd: string, args: readonly string[], opts?: { timeoutMs?: number; cwd?: string }) => Promise<{ code: number | null; stdout: string; stderr: string }>;
+  /**
+   * Launch a GUI application (e.g. Docker Desktop) detached from our own
+   * console/pipes and do NOT wait for it to exit. Resolves once the process
+   * has spawned. `run` is unsuitable here: execFile/cmd-start on Windows hang
+   * while a GUI child inherits the pipe handles.
+   */
+  readonly start: (cmd: string, args: readonly string[]) => Promise<{ ok: boolean; error?: string }>;
   /** HTTP probe (used for gateway + functional auth-path health). GET by default;
    *  method/headers/body enable the non-secret POST probes that distinguish a
    *  degraded-but-"healthy" proxy from a genuinely working auth path. */
