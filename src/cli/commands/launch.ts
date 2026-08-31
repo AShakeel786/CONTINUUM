@@ -25,9 +25,8 @@ import type { CliIo } from "../index.js";
 import { ToolResultCache } from "../../tool-cache/tool-cache.js";
 import { makeScopeProvider } from "../../tool-cache/scope.js";
 import { buildLauncherContext } from "./launcher-context.js";
-import { HealthDoctor } from "../../health/doctor.js";
 import { DEFAULT_OPTIONS, DEFAULT_POLICY, liveRuntime, scanStaleProviderProcesses } from "../../health/adapters.js";
-import { buildPreflightWarnings } from "../../health/preflight.js";
+import { ensureLaunchStackHealthy } from "../../health/launch-heal.js";
 import { ConfigStore } from "../../config/store.js";
 import { ensureMcpRegistered } from "../../mcp/registration.js";
 import { claudeProfile } from "../../providers/profiles/claude.js";
@@ -47,14 +46,23 @@ import { estimateCostUsd, DEFAULT_ROLLOVER_POLICY, evaluateRollover } from "../.
 import { nativeSessionFile, readClaudeTurns, readClaudeUsage } from "../../cost/native-usage.js";
 
 /**
- * Runtime-only preflight (docker/containers/gateways/processes). Deliberately
- * excludes provider/credential probes — those live in `continuum doctor`, and
- * launch already enforces auth via prepareLaunch. Failure-tolerant: a broken
- * preflight must never block a launch.
+ * Launch-time stack readiness (docker/containers/gateways/processes).
+ * Diagnoses the runtime stack and, when the user opted into the Tencent
+ * memory stack and a recoverable check is down, runs the EXISTING bounded
+ * `continuum doctor --repair` cascade before the agent starts — so a normal
+ * desktop/session launch self-heals instead of silently degrading. Post-
+ * repair state is what reaches the launch plan; a genuine, unrecoverable
+ * failure prints one concise degraded-mode line. Never blocks a launch.
+ *
+ * Deliberately excludes provider/credential probes — those live in
+ * `continuum doctor`, and launch already enforces auth via prepareLaunch.
  */
-export async function runLaunchPreflight(memoryCoreConfigured = DEFAULT_OPTIONS.tencentConfigured): Promise<readonly string[]> {
+export async function runLaunchPreflight(
+  memoryCoreConfigured = DEFAULT_OPTIONS.tencentConfigured,
+  onProgress?: (line: string) => void,
+): Promise<readonly string[]> {
   try {
-    const doctor = new HealthDoctor({
+    const result = await ensureLaunchStackHealthy({
       runtime: liveRuntime,
       options: {
         ...DEFAULT_OPTIONS,
@@ -62,11 +70,11 @@ export async function runLaunchPreflight(memoryCoreConfigured = DEFAULT_OPTIONS.
         tencentConfigured: memoryCoreConfigured,
       },
       policy: { ...DEFAULT_POLICY },
-      probes: {
-        staleProcesses: async () => scanStaleProviderProcesses([...DEFAULT_OPTIONS.providerExecutables]),
-      },
+      memoryConfigured: memoryCoreConfigured,
+      staleProcesses: async () => scanStaleProviderProcesses([...DEFAULT_OPTIONS.providerExecutables]),
+      ...(onProgress ? { onProgress } : {}),
     });
-    return buildPreflightWarnings(await doctor.diagnose());
+    return result.warnings;
   } catch {
     return [];
   }
@@ -487,9 +495,10 @@ export async function runLaunchCommand(args: readonly string[], io: CliIo): Prom
   const apiFailoverPolicy = apiFailoverPolicyFromArgs(args);
 
   try {
-    // Preflight: surface stack problems BEFORE the interactive session starts.
-    // Never blocks launch — degraded mode is a launcher feature, not an error.
-    for (const warning of await runLaunchPreflight(memoryCoreConfigured)) out(`⚠️  ${warning}\n`);
+    // Preflight + self-heal: recover the Tencent stack (via the existing
+    // doctor --repair cascade) BEFORE the session starts, so a healthy launch
+    // gets full memory and only a genuine, unrecoverable failure degrades.
+    for (const warning of await runLaunchPreflight(memoryCoreConfigured, (line) => out(`ℹ️  ${line}\n`))) out(`⚠️  ${warning}\n`);
 
     const prep = await launcher.prepareLaunch(
       { ...(mode ? {} : projectKey ? { projectKey } : {}), ...(mode ? { mode } : {}), providerId, modelAlias, taskGoal },
@@ -541,7 +550,7 @@ export async function runResumeCommand(args: readonly string[], io: CliIo): Prom
   const permissionMode: "safe" | "bypass" | undefined = bypass ? "bypass" : safe ? "safe" : undefined;
 
   const prompt = createPrompt();
-  const { launcher, sessionManager, providers, pricing, handoffManager, dataDir } = await buildLauncherContext({
+  const { launcher, sessionManager, providers, pricing, handoffManager, dataDir, memoryCoreConfigured } = await buildLauncherContext({
     prompt,
     onDependencyProgress: (line) => out(`ℹ️  ${line}\n`),
   });
@@ -557,6 +566,9 @@ export async function runResumeCommand(args: readonly string[], io: CliIo): Prom
   }
 
   try {
+    // Self-heal the Tencent stack before resuming, same as a fresh launch.
+    for (const warning of await runLaunchPreflight(memoryCoreConfigured, (line) => out(`ℹ️  ${line}\n`))) out(`⚠️  ${warning}\n`);
+
     const prep = await launcher.prepareLaunch(
       { sessionId: targetSessionId, ...(providerId ? { providerId } : {}), ...(modelAlias ? { modelAlias } : {}) },
       { permissionMode },

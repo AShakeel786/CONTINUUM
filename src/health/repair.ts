@@ -23,7 +23,14 @@ import { RecoveryState } from "./state.js";
 
 const SCRIPT_TIMEOUT_MS = 180_000;
 const DOCKER_TIMEOUT_MS = 30_000;
-const DOCKER_DESKTOP_WAIT_MS = 30_000;
+/**
+ * Docker Desktop cold boot from a full stop routinely takes 60–120s on a Mac;
+ * a 30s ceiling made the recovery "fail" and forced the user to rerun. Poll
+ * the daemon on a short interval up to this bound instead — and because the
+ * poll loop re-checks `docker info` every tick, a user who starts Docker by
+ * hand mid-wait is picked up by the same launch with no rerun.
+ */
+const DOCKER_DESKTOP_WAIT_MS = 180_000;
 const DOCKER_DESKTOP_POLL_MS = 2000;
 const CONTAINER_HEALTHY_WAIT_MS = 60_000;
 const CONTAINER_HEALTHY_POLL_MS = 2000;
@@ -145,7 +152,7 @@ async function waitForDockerDesktop(runtime: HealthRuntime): Promise<{ ok: boole
     if (info.code === 0) return { ok: true, detail: "Docker Desktop started, daemon reachable" };
     await runtime.sleep(DOCKER_DESKTOP_POLL_MS);
   }
-  return { ok: false, detail: "Docker Desktop launched but daemon not ready within 30s" };
+  return { ok: false, detail: `Docker Desktop launched but daemon not ready within ${Math.round(DOCKER_DESKTOP_WAIT_MS / 1000)}s` };
 }
 
 async function repairTarget(deps: RepairDeps, check: HealthCheckResult): Promise<RepairOutcome> {

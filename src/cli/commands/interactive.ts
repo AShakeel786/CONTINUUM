@@ -680,7 +680,7 @@ export async function runInteractiveCommand(args: readonly string[], io: CliIo):
   ctx = await buildLauncherContext({ prompt, onDependencyProgress: (line) => out(`ℹ️  ${line}\n`) });
 
   try {
-    for (const warning of await runLaunchPreflight(ctx.memoryCoreConfigured)) out(`⚠️  ${warning}\n`);
+    for (const warning of await runLaunchPreflight(ctx.memoryCoreConfigured, (line) => out(`ℹ️  ${line}\n`))) out(`⚠️  ${warning}\n`);
     await ensureMcpRegistration();
 
     // No explicit permission choice from the menu → the launcher's global

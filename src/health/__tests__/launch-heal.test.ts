@@ -1,0 +1,290 @@
+/**
+ * Launch-time stack self-heal (health/launch-heal.ts) — the fix for
+ * "CONTINUUM.app launches straight into degraded mode with Docker/Tencent
+ * stopped and never tries to recover". The regression matrix the report asked
+ * for:
+ *
+ *   healthy stack            → no repair, no warnings
+ *   Docker down              → same launch auto-repairs the full stack
+ *   Docker cold-boots slowly → same launch still recovers (no rerun)
+ *   Docker up, containers down→ containers started
+ *   gateway down             → POST-repair state used, not the frozen one
+ *   unrecoverable            → one concise degraded-mode warning
+ *   after a successful repair → zero stale degraded-mode warnings
+ *   concurrent launches      → second launch never starts a competing repair
+ *
+ * Reuses the real HealthDoctor (checks.ts + repair.ts + state.ts) against a
+ * fake runtime — no second recovery path is exercised.
+ */
+import { describe, expect, it } from "vitest";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { HealthOptions, HealthRuntime, RecoveryPolicy } from "../types.js";
+import type { RepairLock } from "../repair-lock.js";
+import { ensureLaunchStackHealthy } from "../launch-heal.js";
+
+interface CmdResult {
+  code: number | null;
+  stdout?: string;
+  stderr?: string;
+}
+
+const IMAGE: Record<string, string> = {
+  "tdai-memory-core": "agentmemory/memory-core:phase13",
+  "tdai-proxy": "agentmemory/memory-proxy:latest",
+  "tdai-memory-hub": "agentmemory/memory-hub:latest",
+};
+const ALL = Object.keys(IMAGE);
+
+/**
+ * A stack that starts fully stopped. `open -a Docker` boots the daemon (after
+ * `bootDelayInfoCalls` further `docker info` polls, to model a cold boot);
+ * `docker start <c>` marks a container up; gateways answer only once the
+ * daemon is up and every container it fronts is started.
+ */
+class StackRuntime implements HealthRuntime {
+  nowMs = 1_000_000;
+  now = () => this.nowMs;
+  calls: { cmd: string; args: readonly string[] }[] = [];
+
+  dockerUp = false;
+  dockerBooting = false;
+  bootDelayInfoCalls = 0;
+  private infoCallsSinceOpen = 0;
+  started = new Set<string>();
+
+  constructor(opts?: { dockerUp?: boolean; started?: string[]; bootDelayInfoCalls?: number }) {
+    this.dockerUp = opts?.dockerUp ?? false;
+    this.bootDelayInfoCalls = opts?.bootDelayInfoCalls ?? 0;
+    for (const c of opts?.started ?? []) this.started.add(c);
+    if (this.dockerUp && !opts?.started) for (const c of ALL) this.started.add(c);
+  }
+
+  async run(cmd: string, args: readonly string[]): Promise<{ code: number | null; stdout: string; stderr: string }> {
+    this.calls.push({ cmd, args });
+    if (cmd === "open" && args[0] === "-a" && args[1] === "Docker") {
+      this.dockerBooting = true;
+      this.infoCallsSinceOpen = 0;
+      if (this.bootDelayInfoCalls === 0) this.dockerUp = true;
+      return { code: 0, stdout: "", stderr: "" };
+    }
+    if (cmd === "docker") return this.docker(args);
+    return { code: 0, stdout: "", stderr: "" };
+  }
+
+  private docker(args: readonly string[]): { code: number | null; stdout: string; stderr: string } {
+    const sub = args[0];
+    if (sub === "info") {
+      if (!this.dockerUp && this.dockerBooting) {
+        this.infoCallsSinceOpen += 1;
+        if (this.infoCallsSinceOpen >= this.bootDelayInfoCalls) this.dockerUp = true;
+      }
+      return this.dockerUp ? { code: 0, stdout: "", stderr: "" } : { code: 1, stdout: "", stderr: "Cannot connect to the Docker daemon" };
+    }
+    if (!this.dockerUp) return { code: 1, stdout: "", stderr: "daemon down" };
+    if (sub === "ps") {
+      const line = (n: string) =>
+        `${n}\t${this.started.has(n) ? "Up 2 seconds (healthy)" : "Exited (255) 16 hours ago"}\t${IMAGE[n]}`;
+      return { code: 0, stdout: ALL.map(line).join("\n"), stderr: "" };
+    }
+    if (sub === "start") {
+      this.started.add(args[1] ?? "");
+      return { code: 0, stdout: "", stderr: "" };
+    }
+    if (sub === "restart") {
+      this.started.add(args[1] ?? "");
+      return { code: 0, stdout: "", stderr: "" };
+    }
+    if (sub === "inspect") return { code: 0, stdout: "healthy", stderr: "" };
+    return { code: 0, stdout: "", stderr: "" };
+  }
+
+  async fetch(url: string): Promise<{ ok: boolean; status: number; body?: string }> {
+    const serving = this.dockerUp && ALL.every((c) => this.started.has(c));
+    if (!serving) return { ok: false, status: 0 };
+    if (url.includes("/v3/meta/auth/verify")) return { ok: true, status: 200, body: JSON.stringify({ code: 0, data: { valid: false } }) };
+    if (url.includes("/proxy/default/v1/chat/completions")) return { ok: false, status: 401, body: "invalid user_key" };
+    return { ok: true, status: 200 };
+  }
+
+  async sleep(ms: number): Promise<void> {
+    this.nowMs += ms;
+  }
+}
+
+function tmpStateFile(): string {
+  return join(mkdtempSync(join(tmpdir(), "launch-heal-")), "health-state.json");
+}
+
+function options(overrides?: Partial<HealthOptions>): HealthOptions {
+  return {
+    tencentMacDir: "/tmp/fake-tencent/mac",
+    memoryCoreUrl: "http://127.0.0.1:8420",
+    tencentConfigured: true,
+    proxyHealthUrl: "http://127.0.0.1:8096/health",
+    containers: { memoryCore: "tdai-memory-core", proxy: "tdai-proxy", hub: "tdai-memory-hub" },
+    pinnedImage: "agentmemory/memory-core:phase13",
+    stateFile: tmpStateFile(),
+    providerExecutables: ["claude"],
+    ...overrides,
+  };
+}
+
+const POLICY: RecoveryPolicy = { cooldownMs: 30_000, breakerFailureThreshold: 3, breakerOpenMs: 5 * 60_000 };
+
+const dockerCalls = (r: StackRuntime, sub: string) => r.calls.filter((c) => c.cmd === "docker" && c.args[0] === sub);
+const openedDocker = (r: StackRuntime) => r.calls.some((c) => c.cmd === "open" && c.args[1] === "Docker");
+
+describe("ensureLaunchStackHealthy — already healthy", () => {
+  it("does not repair and emits no warnings when the whole stack is up", async () => {
+    const runtime = new StackRuntime({ dockerUp: true });
+    const result = await ensureLaunchStackHealthy({ runtime, options: options(), policy: POLICY, memoryConfigured: true });
+
+    expect(result).toEqual({ warnings: [], repairAttempted: false, recovered: false });
+    expect(openedDocker(runtime)).toBe(false);
+    expect(dockerCalls(runtime, "start")).toEqual([]);
+  });
+
+  it("stays warn-only (never repairs) when the user never opted into the Tencent stack", async () => {
+    const runtime = new StackRuntime({ dockerUp: false });
+    const result = await ensureLaunchStackHealthy({
+      runtime,
+      options: options({ tencentConfigured: false }),
+      policy: POLICY,
+      memoryConfigured: false,
+    });
+
+    expect(result.repairAttempted).toBe(false);
+    expect(openedDocker(runtime)).toBe(false);
+    expect(dockerCalls(runtime, "start")).toEqual([]);
+  });
+});
+
+describe("ensureLaunchStackHealthy — Docker down", () => {
+  it("boots Docker Desktop and starts every container in the same launch", async () => {
+    const runtime = new StackRuntime({ dockerUp: false });
+    const progress: string[] = [];
+    const result = await ensureLaunchStackHealthy({
+      runtime,
+      options: options(),
+      policy: POLICY,
+      memoryConfigured: true,
+      onProgress: (l) => progress.push(l),
+    });
+
+    expect(result.recovered).toBe(true);
+    expect(result.warnings).toEqual([]);
+    expect(openedDocker(runtime)).toBe(true);
+    expect(new Set(dockerCalls(runtime, "start").map((c) => c.args[1]))).toEqual(new Set(ALL));
+    expect(progress.some((l) => /attempting automatic recovery/i.test(l))).toBe(true);
+    expect(progress.some((l) => /recovered/i.test(l))).toBe(true);
+  });
+
+  it("recovers on the same launch even when the Docker daemon cold-boots slowly", async () => {
+    const runtime = new StackRuntime({ dockerUp: false, bootDelayInfoCalls: 5 });
+    const result = await ensureLaunchStackHealthy({ runtime, options: options(), policy: POLICY, memoryConfigured: true });
+
+    expect(result.recovered).toBe(true);
+    expect(result.warnings).toEqual([]);
+    expect(dockerCalls(runtime, "info").length).toBeGreaterThan(5); // polled through the boot
+  });
+});
+
+describe("ensureLaunchStackHealthy — Docker up, services down", () => {
+  it("starts stopped containers without touching Docker Desktop", async () => {
+    const runtime = new StackRuntime({ dockerUp: true, started: [] });
+    const result = await ensureLaunchStackHealthy({ runtime, options: options(), policy: POLICY, memoryConfigured: true });
+
+    expect(result.recovered).toBe(true);
+    expect(result.warnings).toEqual([]);
+    expect(openedDocker(runtime)).toBe(false);
+    expect(new Set(dockerCalls(runtime, "start").map((c) => c.args[1]))).toEqual(new Set(ALL));
+  });
+
+  it("uses the POST-repair gateway state, never the frozen pre-repair diagnosis", async () => {
+    // Containers report 'running' from the start, but the gateway only answers
+    // once a start/restart has kicked the memory-core. A launch that trusted
+    // the first diagnosis would degrade; this one must recover.
+    const runtime = new StackRuntime({ dockerUp: true, started: [] });
+    runtime.started = new Set(ALL); // containers 'up'…
+    const realFetch = runtime.fetch.bind(runtime);
+    let kicked = false;
+    runtime.fetch = async (url: string) => {
+      if (!kicked) return { ok: false, status: 0 };
+      return realFetch(url);
+    };
+    const realRun = runtime.run.bind(runtime);
+    runtime.run = async (cmd, args) => {
+      const r = await realRun(cmd, args);
+      if (cmd === "docker" && (args[0] === "start" || args[0] === "restart")) kicked = true;
+      return r;
+    };
+
+    const result = await ensureLaunchStackHealthy({ runtime, options: options(), policy: POLICY, memoryConfigured: true });
+    expect(result.recovered).toBe(true);
+    expect(result.warnings).toEqual([]);
+  });
+});
+
+describe("ensureLaunchStackHealthy — unrecoverable", () => {
+  it("degrades with exactly one concise, actionable warning when Docker never comes up", async () => {
+    const runtime = new StackRuntime({ dockerUp: false, bootDelayInfoCalls: 100_000 }); // never boots
+    const result = await ensureLaunchStackHealthy({ runtime, options: options(), policy: POLICY, memoryConfigured: true });
+
+    expect(result.recovered).toBe(false);
+    expect(result.repairAttempted).toBe(true);
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toMatch(/auto-recovery incomplete/i);
+    expect(result.warnings[0]).toMatch(/continuum doctor --repair/);
+    expect(result.warnings[0]).not.toMatch(/sk-|token|secret|bearer/i);
+  });
+});
+
+describe("ensureLaunchStackHealthy — concurrency", () => {
+  it("a second launch does not start a competing repair while another holds the lock", async () => {
+    const runtime = new StackRuntime({ dockerUp: false });
+    const busyLock: RepairLock = {
+      acquire: async () => ({ acquired: false, waited: true }),
+      release: async () => {},
+    };
+    const result = await ensureLaunchStackHealthy({
+      runtime,
+      options: options(),
+      policy: POLICY,
+      memoryConfigured: true,
+      lock: busyLock,
+    });
+
+    // It diagnosed and reported, but never fired its own Docker Desktop boot
+    // or `docker start` — the launch holding the lock owns recovery.
+    expect(openedDocker(runtime)).toBe(false);
+    expect(dockerCalls(runtime, "start")).toEqual([]);
+    expect(result.repairAttempted).toBe(true);
+  });
+
+  it("skips repair when the launch it waited on already recovered the stack", async () => {
+    // Starts down; the lock we're waiting on belongs to another launch whose
+    // repair finishes (stack comes up) just as we acquire it.
+    const runtime = new StackRuntime({ dockerUp: false });
+    const waitedLock: RepairLock = {
+      acquire: async () => {
+        runtime.dockerUp = true;
+        for (const c of ALL) runtime.started.add(c);
+        return { acquired: true, waited: true };
+      },
+      release: async () => {},
+    };
+    const result = await ensureLaunchStackHealthy({
+      runtime,
+      options: options(),
+      policy: POLICY,
+      memoryConfigured: true,
+      lock: waitedLock,
+    });
+
+    expect(result.recovered).toBe(true);
+    expect(openedDocker(runtime)).toBe(false);
+    expect(dockerCalls(runtime, "start")).toEqual([]);
+  });
+});
