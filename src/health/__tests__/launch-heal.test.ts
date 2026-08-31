@@ -23,6 +23,7 @@ import { join } from "node:path";
 import type { HealthOptions, HealthRuntime, RecoveryPolicy } from "../types.js";
 import type { RepairLock } from "../repair-lock.js";
 import { ensureLaunchStackHealthy } from "../launch-heal.js";
+import { RecoveryState } from "../state.js";
 
 interface CmdResult {
   code: number | null;
@@ -57,12 +58,15 @@ class StackRuntime implements HealthRuntime {
   terminalError = false;
   /** Simulate a `docker info` that hangs its whole timeout (engine up, VM dead). */
   hangInfo = false;
+  /** Simulate an engine that is up but has NO containers (stack genuinely removed). */
+  noContainers = false;
 
-  constructor(opts?: { dockerUp?: boolean; started?: string[]; bootDelayInfoCalls?: number; terminalError?: boolean; hangInfo?: boolean }) {
+  constructor(opts?: { dockerUp?: boolean; started?: string[]; bootDelayInfoCalls?: number; terminalError?: boolean; hangInfo?: boolean; noContainers?: boolean }) {
     this.dockerUp = opts?.dockerUp ?? false;
     this.bootDelayInfoCalls = opts?.bootDelayInfoCalls ?? 0;
     this.terminalError = opts?.terminalError ?? false;
     this.hangInfo = opts?.hangInfo ?? false;
+    this.noContainers = opts?.noContainers ?? false;
     for (const c of opts?.started ?? []) this.started.add(c);
     if (this.dockerUp && !opts?.started) for (const c of ALL) this.started.add(c);
   }
@@ -110,6 +114,7 @@ class StackRuntime implements HealthRuntime {
       return this.dockerUp ? { code: 0, stdout: "", stderr: "" } : { code: 1, stdout: "", stderr: "Cannot connect to the Docker daemon" };
     }
     if (!this.dockerUp) return { code: 1, stdout: "", stderr: "daemon down" };
+    if (sub === "ps" && this.noContainers) return { code: 0, stdout: "", stderr: "" };
     if (sub === "ps") {
       const line = (n: string) =>
         `${n}\t${this.started.has(n) ? "Up 2 seconds (healthy)" : "Exited (255) 16 hours ago"}\t${IMAGE[n]}`;
@@ -179,6 +184,10 @@ describe("ensureLaunchStackHealthy — already healthy", () => {
       runtime,
       options: options({ tencentConfigured: false }),
       policy: POLICY,
+      // Hermetic: no Docker Desktop installed — otherwise the discovery
+      // fallback would arm the docker-desktop repair on a Windows test host
+      // that happens to have Docker Desktop.
+      discoverDockerDesktop: async () => undefined,
     });
 
     expect(result.repairAttempted).toBe(false);
@@ -238,6 +247,127 @@ describe("ensureLaunchStackHealthy — Docker down", () => {
     expect(runtime.calls.some((c) => c.cmd === exe && c.args.length === 0)).toBe(true);
     // Same-launch cascade then started every container.
     expect(new Set(dockerCalls(runtime, "start").map((c) => c.args[1]))).toEqual(new Set(ALL));
+  });
+});
+
+/** Seed the persisted `stackSeen` marker the way a prior healthy launch would. */
+async function writeStackSeen(stateFile: string): Promise<void> {
+  const s = new RecoveryState(stateFile, POLICY, () => 0);
+  await s.load();
+  s.markStackSeen();
+  await s.persist();
+}
+
+async function readStackSeen(stateFile: string): Promise<boolean> {
+  const s = new RecoveryState(stateFile, POLICY, () => 0);
+  await s.load();
+  return s.stackSeen();
+}
+
+describe("ensureLaunchStackHealthy — deployed stack behind a stopped engine (persisted stackSeen)", () => {
+  // Regression for the exact Windows failure: the stack IS deployed, but the
+  // engine that would reveal its containers is the very thing recovery must
+  // start. Without the persisted marker, `tencentStackPresent` sees an empty
+  // `docker ps` (daemon down), reports the stack "skipped", and the
+  // docker-desktop repair never arms — Docker Desktop is never launched.
+  it("starts Docker Desktop on a stopped engine when the stack's containers were previously observed", async () => {
+    const stateFile = tmpStateFile();
+    await writeStackSeen(stateFile);
+    const runtime = new StackRuntime({ dockerUp: false });
+    const exe = "C:\\Program Files\\Docker\\Docker\\Docker Desktop.exe";
+    const result = await ensureLaunchStackHealthy({
+      runtime,
+      options: options({ stateFile, tencentConfigured: false }),
+      policy: POLICY,
+      discoverDockerDesktop: async () => exe,
+    });
+
+    expect(result.recovered).toBe(true);
+    expect(result.warnings).toEqual([]);
+    // The discovered exe was launched detached (NOT `open -a Docker`).
+    expect(runtime.calls.some((c) => c.cmd === exe && c.args.length === 0)).toBe(true);
+    // Same-launch cascade then started every container.
+    expect(new Set(dockerCalls(runtime, "start").map((c) => c.args[1]))).toEqual(new Set(ALL));
+  });
+
+  it("records stackSeen on a healthy launch, then auto-starts Docker on a later stopped engine", async () => {
+    const stateFile = tmpStateFile();
+    const healthy = await ensureLaunchStackHealthy({
+      runtime: new StackRuntime({ dockerUp: true }),
+      options: options({ stateFile, tencentConfigured: false }),
+      policy: POLICY,
+    });
+    expect(healthy.warnings).toEqual([]);
+    expect(await readStackSeen(stateFile)).toBe(true);
+
+    const stopped = await ensureLaunchStackHealthy({
+      runtime: new StackRuntime({ dockerUp: false }),
+      options: options({ stateFile, tencentConfigured: false }),
+      policy: POLICY,
+    });
+    expect(stopped.recovered).toBe(true);
+    expect(stopped.warnings).toEqual([]);
+  });
+
+  it("clears the marker when the engine is up and the containers are genuinely gone", async () => {
+    const stateFile = tmpStateFile();
+    await writeStackSeen(stateFile);
+    const result = await ensureLaunchStackHealthy({
+      runtime: new StackRuntime({ dockerUp: true, noContainers: true }),
+      options: options({ stateFile, tencentConfigured: false }),
+      policy: POLICY,
+    });
+
+    // The (stale) marker must not keep the optional stack armed forever — an
+    // engine with no containers means the stack was removed.
+    expect(await readStackSeen(stateFile)).toBe(false);
+    expect(result.repairAttempted).toBe(true);
+  });
+});
+
+describe("ensureLaunchStackHealthy — Docker Desktop installed but memory not configured (no token, no marker)", () => {
+  // Regression for the REAL Windows desktop launch. Reproduces this machine's
+  // verified-live state exactly: no memory token stored (so tencentConfigured
+  // is false), no prior stackSeen marker, and the engine stopped — yet Docker
+  // Desktop IS installed. Before the discovery fallback, `tencentStackPresent`
+  // read the unreachable `docker ps` as "stack never deployed", every Tencent
+  // check came back [skipped] with no repair, `isRecoverable` found nothing,
+  // and Docker Desktop was never launched. The installed Docker Desktop is the
+  // opt-in signal that the stack is deployed but invisible through its engine.
+  it("auto-starts Docker Desktop purely from an installed Docker Desktop, then recovers the stack", async () => {
+    const runtime = new StackRuntime({ dockerUp: false });
+    const exe = "C:\\Users\\Adminn\\AppData\\Local\\Programs\\DockerDesktop\\Docker Desktop.exe";
+    const result = await ensureLaunchStackHealthy({
+      runtime,
+      options: options({ tencentConfigured: false }), // fresh stateFile → no stackSeen marker
+      policy: POLICY,
+      discoverDockerDesktop: async () => exe,
+    });
+
+    expect(result.recovered).toBe(true);
+    expect(result.warnings).toEqual([]);
+    // The discovered exe was launched detached — the repair armed with no
+    // memory config and no prior marker, purely on Docker Desktop's presence.
+    expect(runtime.calls.some((c) => c.cmd === exe && c.args.length === 0)).toBe(true);
+    // Same-launch cascade then started every container.
+    expect(new Set(dockerCalls(runtime, "start").map((c) => c.args[1]))).toEqual(new Set(ALL));
+  });
+
+  it("does NOT arm the stack when the engine is REACHABLE but has no containers, even with Docker Desktop installed", async () => {
+    // An engine that answers `docker ps` with nothing authoritatively means the
+    // stack was removed — Docker Desktop staying installed must not resurrect
+    // a deliberately-deployed-down stack. The discovery fallback only applies
+    // while the engine itself is unreachable.
+    const runtime = new StackRuntime({ dockerUp: true, noContainers: true });
+    const result = await ensureLaunchStackHealthy({
+      runtime,
+      options: options({ tencentConfigured: false }),
+      policy: POLICY,
+      discoverDockerDesktop: async () => "C:\\Program Files\\Docker\\Docker\\Docker Desktop.exe",
+    });
+
+    expect(result.repairAttempted).toBe(false);
+    expect(runtime.calls.some((c) => c.cmd.includes("Docker Desktop.exe"))).toBe(false);
   });
 });
 

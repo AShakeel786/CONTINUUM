@@ -24,12 +24,21 @@ interface TargetState {
 
 interface PersistedState {
   readonly targets: Record<string, TargetState>;
+  /**
+   * True once the Tencent stack's containers were observed on some prior
+   * launch/doctor pass. Survives the engine going down, so a later stopped-
+   * engine launch still knows the stack is deployed and arms the
+   * docker-desktop repair (the daemon is what must be started — detection via
+   * `docker ps` can't see containers through a stopped engine).
+   */
+  readonly stackSeen?: boolean;
 }
 
 const EMPTY_TARGET: TargetState = { lastAttemptMs: 0, consecutiveFailures: 0, openUntilMs: 0 };
 
 export class RecoveryState {
   private targets = new Map<string, TargetState>();
+  private stackSeenFlag = false;
 
   constructor(
     private readonly stateFile: string,
@@ -53,6 +62,7 @@ export class RecoveryState {
           });
         }
       }
+      if (typeof data?.stackSeen === "boolean") this.stackSeenFlag = data.stackSeen;
     } catch {
       // Unreadable state file is not an error worth failing repair over.
     }
@@ -60,9 +70,25 @@ export class RecoveryState {
 
   async persist(): Promise<void> {
     if (!this.stateFile) return;
-    const data: PersistedState = { targets: Object.fromEntries(this.targets) };
+    const data: PersistedState = {
+      targets: Object.fromEntries(this.targets),
+      ...(this.stackSeenFlag ? { stackSeen: true } : {}),
+    };
     mkdirSync(dirname(this.stateFile), { recursive: true });
     await atomicWriteJson(this.stateFile, data);
+  }
+
+  /** True when the Tencent stack's containers were observed previously. */
+  stackSeen(): boolean {
+    return this.stackSeenFlag;
+  }
+
+  markStackSeen(): void {
+    this.stackSeenFlag = true;
+  }
+
+  clearStackSeen(): void {
+    this.stackSeenFlag = false;
   }
 
   private target(key: string): TargetState {

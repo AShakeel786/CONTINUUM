@@ -81,13 +81,27 @@ async function containerStates(runtime: HealthRuntime): Promise<ContainerState[]
   return parseContainerStates(res.stdout);
 }
 
-/** Whether the optional Tencent memory stack is present (explicitly configured OR its containers exist). */
+/** Whether the optional Tencent memory stack is present (explicitly configured OR its containers exist OR they were seen on a prior pass). */
 async function tencentStackPresent(runtime: HealthRuntime, options: HealthOptions): Promise<boolean> {
   if (options.tencentConfigured) return true;
-  const states = (await containerStates(runtime)) ?? [];
-  return states.some(
-    (s) => s.name === options.containers.memoryCore || s.name === options.containers.proxy || s.name === options.containers.hub,
-  );
+  const states = await containerStates(runtime);
+  if (states && states.some((s) => s.name === options.containers.memoryCore || s.name === options.containers.proxy || s.name === options.containers.hub)) {
+    return true;
+  }
+  // `docker ps` cannot see containers through a stopped engine — the exact
+  // state the docker-desktop repair exists to end. A previously-observed stack
+  // (persisted `stackSeen`) or an installed Docker Desktop (Windows) is the
+  // opt-in signal here, so a deployed stack is not misread as "never deployed"
+  // just because its engine is stopped. The discovery fallback only applies
+  // while the engine is unreachable: a REACHABLE engine with no containers
+  // authoritatively means the stack was removed, and Docker Desktop staying
+  // installed must not resurrect it.
+  if (options.stackSeen === true) return true;
+  if (states === undefined && options.dockerDesktopDiscovery) {
+    const exe = await options.dockerDesktopDiscovery();
+    if (exe !== undefined) return true;
+  }
+  return false;
 }
 
 function firstLine(s: string): string {

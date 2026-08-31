@@ -33,6 +33,8 @@ export interface EnsureProxyReadyDeps {
   readonly runtime: HealthRuntime;
   readonly options: HealthOptions;
   readonly policy: RecoveryPolicy;
+  /** Injectable Docker Desktop path discovery; default reads the live machine. */
+  readonly discoverDockerDesktop?: () => Promise<string | undefined>;
 }
 
 const FAST_PROBE_TIMEOUT_MS = 3000;
@@ -60,7 +62,12 @@ export function makeEnsureProxyReady(
     // this stays a LOCAL-dependency check only, never touching provider
     // auth or credential state, and never restarting a container the
     // checks below didn't themselves report as failed.
-    const doctor = new HealthDoctor({ runtime: deps.runtime, options: deps.options, policy: deps.policy });
+    const doctor = new HealthDoctor({
+      runtime: deps.runtime,
+      options: deps.options,
+      policy: deps.policy,
+      discoverDockerDesktop: deps.discoverDockerDesktop,
+    });
     const { outcomes, after } = await doctor.repair();
 
     const repaired = outcomes.filter((o) => o.status === "repaired");

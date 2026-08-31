@@ -79,6 +79,22 @@ export interface HealthOptions {
   readonly memoryCoreUrl?: string;
   /** True when the user has explicitly configured the optional Tencent memory stack (CONTINUUM_MEMORY_CORE_URL set). */
   readonly tencentConfigured?: boolean;
+  /**
+   * True when the Tencent stack's containers were observed on a previous
+   * launch/doctor pass (persisted in the state file). Lets the docker-desktop
+   * repair arm even when the engine is stopped — the daemon is exactly what
+   * must be started, so container detection can't be allowed to hide it.
+   */
+  readonly stackSeen?: boolean;
+  /**
+   * On Windows, probe for an installed Docker Desktop. Consulted only while the
+   * engine is unreachable AND no config/container/marker signal exists: an
+   * installed Docker Desktop is the remaining opt-in sign that the optional
+   * Tencent stack is deployed (its containers are just invisible through the
+   * stopped engine), so the docker-desktop repair can arm. Injectable so tests
+   * stay deterministic regardless of the test host's Docker install.
+   */
+  readonly dockerDesktopDiscovery?: () => Promise<string | undefined>;
   /** MemoryProxy health URL. */
   readonly proxyHealthUrl: string;
   /** Container names used by the canonical Mac stack. */
