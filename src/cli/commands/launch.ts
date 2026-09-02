@@ -564,13 +564,28 @@ export async function ensureMcpRegistration(): Promise<void> {
 
 /**
  * Whether a launch should open the persistent interactive Direct-API session.
- * Requires a real TTY (so a piped/CI run stays one-shot and backward-
- * compatible) and no explicit `--print` / `--one-shot` opt-out. Native-CLI
- * providers are never affected — this only gates the API-agent branch.
+ *
+ * Opt-outs that ALWAYS win (automation / scripting must stay one-shot):
+ *   - `--print` / `--one-shot` / `-1` on the command line
+ *   - `CONTINUUM_ONE_SHOT=1` in the environment
+ *   - `io.nonInteractive` (print-mode host)
+ *
+ * Otherwise interactive when the session is genuinely a human one:
+ *   - `trustedInteractive` — the caller is the interactive front-door menu
+ *     (`continuum` with no subcommand, incl. the CONTINUUM.app desktop
+ *     launcher), which has already refused to run without a TTY. This is the
+ *     explicit trusted signal so we never depend on TTY bits surviving the
+ *     Terminal.app → osascript → shell → `exec` chain.
+ *   - else: both stdin and stdout are real TTYs (a user typing `continuum
+ *     launch …` directly).
+ *
+ * Native-CLI providers are unaffected — this only gates the API-agent branch.
  */
-export function wantsInteractive(args: readonly string[], io: CliIo): boolean {
+export function wantsInteractive(args: readonly string[], io: CliIo, opts: { trustedInteractive?: boolean } = {}): boolean {
   if (args.includes("--print") || args.includes("--one-shot") || args.includes("-1")) return false;
+  if (process.env.CONTINUUM_ONE_SHOT === "1") return false;
   if (io.nonInteractive) return false;
+  if (opts.trustedInteractive) return true;
   return isStdinTty() && Boolean((process.stdout as NodeJS.WriteStream).isTTY);
 }
 

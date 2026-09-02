@@ -33,7 +33,7 @@ import type { AgentAuthFacts, AgentDescriptor } from "../../agents/index.js";
 import type { ProviderAuthMethod } from "../../config/types.js";
 import type { CliIo } from "../index.js";
 import { buildLauncherContext } from "./launcher-context.js";
-import { checkPricing, ensureMcpRegistration, launchPrepared, printPermissionState, runLaunchPreflight } from "./launch.js";
+import { checkPricing, ensureMcpRegistration, launchPrepared, printPermissionState, runLaunchPreflight, wantsInteractive } from "./launch.js";
 import { getTerminalColumns, isStdinTty, NON_TTY_HINT } from "./common.js";
 import { printHud, printProviderIdentity } from "./hud.js";
 
@@ -719,8 +719,20 @@ export async function runInteractiveCommand(args: readonly string[], io: CliIo):
     // TTY — nothing below this point reads from `prompt`.
     prompt.close();
 
+    // The interactive front-door menu IS a human desktop session (it already
+    // refused to run without a TTY above), so a Direct-API launch from here
+    // opens the persistent REPL — unless the user explicitly asked for
+    // one-shot (`--print` / `--one-shot` / `CONTINUUM_ONE_SHOT=1`). This is the
+    // trusted signal; it does not rely on TTY bits surviving CONTINUUM.app's
+    // Terminal.app → osascript → shell → `exec continuum` chain.
     return launchPrepared(
-      { launcher: ctx.launcher, providers: ctx.providers, sessionManager: ctx.sessionManager, dataDir: ctx.dataDir },
+      {
+        launcher: ctx.launcher,
+        providers: ctx.providers,
+        sessionManager: ctx.sessionManager,
+        dataDir: ctx.dataDir,
+        interactive: wantsInteractive(args, io, { trustedInteractive: true }),
+      },
       prep,
       out,
     );

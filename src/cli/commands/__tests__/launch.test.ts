@@ -670,4 +670,40 @@ describe("wantsInteractive gating", () => {
   it("is false for a nonInteractive CliIo", () => {
     expect(wantsInteractive([], { nonInteractive: true })).toBe(false);
   });
+
+  it("is false when CONTINUUM_ONE_SHOT=1 (automation escape hatch)", () => {
+    const orig = process.env.CONTINUUM_ONE_SHOT;
+    const oi = process.stdin.isTTY, oo = process.stdout.isTTY;
+    try {
+      (process.stdin as { isTTY?: boolean }).isTTY = true;
+      (process.stdout as { isTTY?: boolean }).isTTY = true;
+      process.env.CONTINUUM_ONE_SHOT = "1";
+      expect(wantsInteractive([], {})).toBe(false);
+      expect(wantsInteractive([], {}, { trustedInteractive: true })).toBe(false);
+    } finally {
+      if (orig === undefined) delete process.env.CONTINUUM_ONE_SHOT; else process.env.CONTINUUM_ONE_SHOT = orig;
+      (process.stdin as { isTTY?: boolean }).isTTY = oi;
+      (process.stdout as { isTTY?: boolean }).isTTY = oo;
+    }
+  });
+
+  describe("trustedInteractive (the desktop front-door menu)", () => {
+    it("is interactive even when TTY bits are missing (Terminal.app → osascript → exec chain)", () => {
+      const oi = process.stdin.isTTY, oo = process.stdout.isTTY;
+      try {
+        (process.stdin as { isTTY?: boolean }).isTTY = undefined;
+        (process.stdout as { isTTY?: boolean }).isTTY = undefined;
+        expect(wantsInteractive([], {}, { trustedInteractive: true })).toBe(true);
+      } finally {
+        (process.stdin as { isTTY?: boolean }).isTTY = oi;
+        (process.stdout as { isTTY?: boolean }).isTTY = oo;
+      }
+    });
+    it("still yields one-shot for explicit --print / --one-shot / nonInteractive", () => {
+      expect(wantsInteractive(["--print"], {}, { trustedInteractive: true })).toBe(false);
+      expect(wantsInteractive(["--one-shot"], {}, { trustedInteractive: true })).toBe(false);
+      expect(wantsInteractive(["-1"], {}, { trustedInteractive: true })).toBe(false);
+      expect(wantsInteractive([], { nonInteractive: true }, { trustedInteractive: true })).toBe(false);
+    });
+  });
 });
