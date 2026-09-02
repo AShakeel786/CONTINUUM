@@ -672,7 +672,10 @@ export async function runInteractiveCommand(args: readonly string[], io: CliIo):
     prompt,
     out,
   );
-  if (decision.kind === "exit") return 0;
+  if (decision.kind === "exit") {
+    prompt.close();
+    return 0;
+  }
 
   // Rebuild the launcher context so any agent added/removed/configured during
   // this session is reflected in the launch graph (the launcher was built at
@@ -711,6 +714,11 @@ export async function runInteractiveCommand(args: readonly string[], io: CliIo):
       for (const line of pricingLines) out(line);
     }
 
+    // Release the menu's readline interface so the spawned agent (native CLI
+    // or the Direct-API REPL, which opens its own) inherits a clean, un-paused
+    // TTY — nothing below this point reads from `prompt`.
+    prompt.close();
+
     return launchPrepared(
       { launcher: ctx.launcher, providers: ctx.providers, sessionManager: ctx.sessionManager, dataDir: ctx.dataDir },
       prep,
@@ -722,5 +730,9 @@ export async function runInteractiveCommand(args: readonly string[], io: CliIo):
       return 2;
     }
     throw err;
+  } finally {
+    // Idempotent — already closed on the normal path just before the spawn;
+    // this covers the error/early-return paths.
+    prompt.close();
   }
 }

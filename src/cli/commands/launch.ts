@@ -635,6 +635,8 @@ export async function runLaunchCommand(args: readonly string[], io: CliIo): Prom
     }
 
     await ensureMcpRegistration();
+    // Hand a clean, un-paused TTY to the spawned agent.
+    prompt.close();
     return launchPrepared({ launcher, providers, sessionManager, pricing, dataDir, apiFailoverPolicy, interactive: wantsInteractive(args, io) }, prep, out);
   } catch (err) {
     if (err instanceof NoProjectError || err instanceof ProviderNotAuthenticatedError || err instanceof NoAuthenticatedAgentError || err instanceof LocalDependencyUnavailableError || err instanceof LocalServiceUnavailableError || err instanceof ModelUnavailableError) {
@@ -642,6 +644,8 @@ export async function runLaunchCommand(args: readonly string[], io: CliIo): Prom
       return 2;
     }
     throw err;
+  } finally {
+    prompt.close();
   }
 }
 
@@ -694,6 +698,7 @@ export async function runResumeCommand(args: readonly string[], io: CliIo): Prom
     if (prep.session) for (const line of await checkPricing(prep.session.sessionId, pricing, handoffManager)) out(line);
     printPeakProWarning(out, prep, pricing);
     await ensureMcpRegistration();
+    prompt.close();
     return launchPrepared({ launcher, providers, sessionManager, pricing, dataDir, apiFailoverPolicy: apiFailoverPolicyFromArgs(args), interactive: wantsInteractive(args, io) }, prep, out);
   } catch (err) {
     if (err instanceof NoAuthenticatedAgentError || err instanceof ProviderNotAuthenticatedError || err instanceof LocalDependencyUnavailableError || err instanceof LocalServiceUnavailableError || err instanceof ModelUnavailableError) {
@@ -701,6 +706,8 @@ export async function runResumeCommand(args: readonly string[], io: CliIo): Prom
       return 2;
     }
     throw err;
+  } finally {
+    prompt.close();
   }
 }
 
@@ -748,6 +755,7 @@ export async function runHandoffCommand(args: readonly string[], io: CliIo): Pro
     printProviderIdentity(out, prep, providers);
     await printHud(out, prep, { launcher, providers }, getTerminalColumns());
     await ensureMcpRegistration();
+    prompt.close();
     return launchPrepared({ launcher, providers, sessionManager, dataDir }, prep, out);
   } catch (err) {
     if (err instanceof NoAuthenticatedAgentError || err instanceof LocalDependencyUnavailableError || err instanceof LocalServiceUnavailableError) {
@@ -755,5 +763,7 @@ export async function runHandoffCommand(args: readonly string[], io: CliIo): Pro
       return 2;
     }
     throw err;
+  } finally {
+    prompt.close();
   }
 }
