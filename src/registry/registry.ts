@@ -176,6 +176,30 @@ export class ProjectRegistry {
     return updated;
   }
 
+  /**
+   * Lazy one-time migration: rewrite any persisted `defaultProvider` that is a
+   * retired provider id to its current canonical id (e.g. `local-qwen38` →
+   * `local-ornith15`). Uses the same atomic checksummed `save()` path as every
+   * other mutation — never a manual file edit. Returns the project ids changed
+   * (empty = nothing to migrate; no write performed).
+   */
+  async migrateProviderIds(canonicalize: (providerId: string) => string): Promise<readonly string[]> {
+    const reg = await this.store.load();
+    const changed: string[] = [];
+    const projects = reg.projects.map((p) => {
+      if (!p.defaultProvider) return p;
+      const canon = canonicalize(p.defaultProvider);
+      if (canon === p.defaultProvider) return p;
+      changed.push(p.id);
+      return { ...p, defaultProvider: canon, updatedAt: now() };
+    });
+    if (changed.length > 0) {
+      await this.store.save({ schemaVersion: PROJECT_SCHEMA_VERSION, projects });
+      await this.rebuildIndex();
+    }
+    return changed;
+  }
+
   async remove(idOrKey: string): Promise<void> {
     const existing = await this.resolve(idOrKey);
     const reg = await this.store.load();

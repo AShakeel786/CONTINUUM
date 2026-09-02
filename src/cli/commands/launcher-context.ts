@@ -54,6 +54,10 @@ export async function buildLauncherContext(options: { dataDir?: string; prompt: 
   const projects = new ProjectRegistry(new ProjectRegistryStore(dataDir));
   const { manifests: userManifests } = await loadUserManifests(dataDir);
   const providers = createProviderRegistry(userManifests);
+  // Lazy registry migration: canonicalize any persisted `defaultProvider` that
+  // is a retired alias (e.g. `local-qwen38` → `local-ornith15`) via the
+  // registry's own atomic write path. Idempotent; only writes on a real change.
+  await projects.migrateProviderIds((id) => providers.canonicalId(id) ?? id).catch(() => {});
   const credentialManager = ctx.credentialManager;
   // buildContext already loaded user manifests into these.
   const cliAuthManager = ctx.cliAuthManager;

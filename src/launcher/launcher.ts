@@ -738,6 +738,9 @@ export class Launcher {
       staleReasons,
       memoryCoreAvailable,
       memoryCoreNote,
+      // Project-mode sessions carry their stable registry id as the memory
+      // scope; general / current-directory carry none (intentional).
+      ...(sessionMode === "project" ? { projectScope: project.id } : {}),
       runtimeKind,
       rendered,
       contextWindowTokens: contextWindow,

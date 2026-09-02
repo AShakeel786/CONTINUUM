@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,7 +14,7 @@ import { ProviderRegistry } from "../../../providers/registry.js";
 import { createProviderAdapter } from "../../../providers/adapter.js";
 import { claudeProfile } from "../../../providers/profiles/claude.js";
 import { deepseekProfile } from "../../../providers/profiles/deepseek.js";
-import { glm52FreeManifest } from "../../../providers/presets.js";
+import { glm52FreeManifest, localOrnith15Manifest } from "../../../providers/presets.js";
 import { manifestToProfile, manifestToAuthMetadata, type ProviderManifest } from "../../../providers/manifest.js";
 import { CredentialManager } from "../../../auth/credential-manager.js";
 import { CliAuthManager } from "../../../auth/cli-auth-manager.js";
@@ -98,6 +98,10 @@ interface FallbackDepsOpts {
   readonly extraManifests?: readonly ProviderManifest[];
   /** Executable detection override — claude present unless explicitly disabled. */
   readonly findExecutable?: (executable: string) => string | undefined;
+  /** Register the bundled managed-local Ornith provider. */
+  readonly registerOrnith?: boolean;
+  readonly memoryCore?: LauncherDeps["memoryCore"];
+  readonly ensureLocalService?: LauncherDeps["ensureLocalService"];
 }
 
 async function buildFallbackDeps(opts: FallbackDepsOpts = {}) {
@@ -108,6 +112,7 @@ async function buildFallbackDeps(opts: FallbackDepsOpts = {}) {
   providers.register(createProviderAdapter(claudeProfile));
   providers.register(createProviderAdapter(deepseekProfile));
   providers.register(createProviderAdapter(manifestToProfile(glm52FreeManifest)));
+  if (opts.registerOrnith) providers.register(createProviderAdapter(manifestToProfile(localOrnith15Manifest)));
   for (const profile of opts.extraProfiles ?? []) providers.register(createProviderAdapter(profile));
 
   const backend = new FakeBackend();
@@ -142,6 +147,8 @@ async function buildFallbackDeps(opts: FallbackDepsOpts = {}) {
     ...(opts.findExecutable
       ? { findExecutable: opts.findExecutable }
       : { findExecutable: (e: string) => (e === "claude" ? "/fake/claude" : undefined) }),
+    ...(opts.memoryCore ? { memoryCore: opts.memoryCore } : {}),
+    ...(opts.ensureLocalService ? { ensureLocalService: opts.ensureLocalService } : {}),
   };
   return { deps, registry, sessionManager, dataDir };
 }
@@ -474,5 +481,120 @@ describe("launchPrepared CLI-harness automatic-routing fallback", () => {
     expect(mockedRun).toHaveBeenCalledTimes(1);
     expect(mockedRun.mock.calls[0]![0].adapter.profile.id).toBe("api-b");
     expect(lines.join("\n")).toContain("falling back to API B");
+  });
+});
+
+// ── Direct-API memory_recall is project-scoped (live regression) ──────────
+//
+// Regression for: a project launch on a managed-local Direct-API provider
+// whose api-agent `memory_recall` tool recalled another project's global
+// MemoryCore persona. The in-process tool registry built by `launchPrepared`
+// must carry the same per-project scope the launcher's own recall uses.
+describe("Direct-API api-agent memory_recall project scoping", () => {
+  const MEM_ENV = ["CONTINUUM_MEMORY_CORE_URL", "CONTINUUM_MEMORY_CORE_TOKEN", "CONTINUUM_MEMORY_CORE_AGENT_ID", MEMORY_CORE_ENV_ONLY_ENV] as const;
+  const saved: Record<string, string | undefined> = {};
+  beforeEach(() => {
+    for (const k of MEM_ENV) saved[k] = process.env[k];
+    // The api-agent tool registry resolves MemoryCore exactly as production
+    // does (resolveMemoryCoreConfig): token from env, no OS keychain.
+    process.env[MEMORY_CORE_ENV_ONLY_ENV] = "1";
+    process.env.CONTINUUM_MEMORY_CORE_URL = "http://memcore.test";
+    process.env.CONTINUUM_MEMORY_CORE_TOKEN = "tok";
+    process.env.CONTINUUM_MEMORY_CORE_AGENT_ID = "default";
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    for (const k of MEM_ENV) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+  });
+
+  function recordingMemoryFetch() {
+    const requests: Array<{ path: string; agentId: string | null }> = [];
+    vi.stubGlobal("fetch", async (url: string, init: { headers?: Record<string, string> }) => {
+      requests.push({ path: new URL(url).pathname, agentId: init.headers?.["x-tdai-agent-id"] ?? null });
+      return { ok: true, status: 200, json: async () => ({ data: { content: "", entries: [], items: [] } }), text: async () => "{}" };
+    });
+    return requests;
+  }
+
+  it("passes prep.projectScope to buildToolRegistry so memory_recall hits the per-project bucket, never 'default'", async () => {
+    const requests = recordingMemoryFetch();
+    const { deps, registry, sessionManager, dataDir } = await buildFallbackDeps({
+      registerOrnith: true,
+      chain: ["glm-5-2-free", "deepseek"],
+      memoryCore: { baseUrl: "http://memcore.test", serviceToken: { envVar: "T" }, serviceId: "s", teamId: "team", userId: "u", agentId: "default", resolveToken: async () => "tok" },
+      ensureLocalService: async () => ({ kind: "reused-foreign", host: "127.0.0.1", port: 8080 }),
+    });
+    const project = await registry.add({ name: "passcars-like", path: mkdtempSync(join(tmpdir(), "cont-mem-")) });
+    const launcher = new Launcher(deps);
+    const launchPrep = await launcher.prepareLaunch(
+      { projectKey: project.id, providerId: "local-ornith15", taskGoal: "hello" },
+      { permissionMode: "safe" },
+    );
+    expect(launchPrep.runtimeKind).toBe("api");
+    expect(launchPrep.projectScope).toBe(project.id);
+
+    mockedRun.mockResolvedValueOnce({ finalContent: "hi" } as never);
+    const { out } = collectOut();
+    await launchPrepared({ launcher, providers: deps.providers, sessionManager, dataDir }, launchPrep, out, async () => ({ exitCode: 0 }));
+
+    // The EXACT tool registry the api-agent received.
+    const tools = mockedRun.mock.calls.at(-1)![0].tools;
+    requests.length = 0;
+    await tools.call("memory_recall", {});
+    await tools.call("memory_search", { query: "anything" });
+
+    expect(requests.length).toBeGreaterThan(0);
+    for (const r of requests) {
+      expect(r.agentId).toBe(`project-${project.id}`);
+      expect(r.agentId).not.toBe("default");
+    }
+  });
+
+  it("general-mode Direct-API keeps the base identity (intentional, unchanged)", async () => {
+    const requests = recordingMemoryFetch();
+    const { deps, sessionManager, dataDir } = await buildFallbackDeps({
+      registerOrnith: true,
+      memoryCore: { baseUrl: "http://memcore.test", serviceToken: { envVar: "T" }, serviceId: "s", teamId: "team", userId: "u", agentId: "default", resolveToken: async () => "tok" },
+      ensureLocalService: async () => ({ kind: "reused-foreign", host: "127.0.0.1", port: 8080 }),
+    });
+    const launcher = new Launcher(deps);
+    const launchPrep = await launcher.prepareLaunch(
+      { mode: "general", cwd: mkdtempSync(join(tmpdir(), "cont-gen-")), providerId: "local-ornith15", taskGoal: "hello" },
+      { permissionMode: "safe" },
+    );
+    expect(launchPrep.projectScope).toBeUndefined();
+
+    mockedRun.mockResolvedValueOnce({ finalContent: "hi" } as never);
+    const { out } = collectOut();
+    await launchPrepared({ launcher, providers: deps.providers, sessionManager, dataDir }, launchPrep, out, async () => ({ exitCode: 0 }));
+    const tools = mockedRun.mock.calls.at(-1)![0].tools;
+    requests.length = 0;
+    await tools.call("memory_recall", {});
+    expect(requests.length).toBeGreaterThan(0);
+    for (const r of requests) expect(r.agentId).toBe("default");
+  });
+});
+
+// ── Stale project defaultProvider migration ──────────────────────────────
+describe("project defaultProvider migration (local-qwen38 → local-ornith15)", () => {
+  it("canonicalizes a retired provider alias via the registry's atomic write path", async () => {
+    const { registry } = await buildFallbackDeps({ registerOrnith: true });
+    const stale = await registry.add({ name: "legacy", path: "/work/legacy", defaultProvider: "local-qwen38" });
+    const untouched = await registry.add({ name: "kept", path: "/work/kept", defaultProvider: "claude" });
+
+    const changed = await registry.migrateProviderIds((id) => {
+      // mirror buildLauncherContext: providers.canonicalId
+      return id === "local-qwen38" ? "local-ornith15" : id;
+    });
+
+    expect(changed).toEqual([stale.id]);
+    expect((await registry.resolve(stale.id)).defaultProvider).toBe("local-ornith15");
+    expect((await registry.resolve(untouched.id)).defaultProvider).toBe("claude");
+
+    // Idempotent: a second run performs no write.
+    expect(await registry.migrateProviderIds((id) => id)).toEqual([]);
   });
 });

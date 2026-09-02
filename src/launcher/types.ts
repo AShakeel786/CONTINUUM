@@ -117,4 +117,15 @@ export interface LaunchPreparation {
    */
   readonly permissionNote?: string;
   readonly rollover?: { readonly fromNativeSessionId: string; readonly toNativeSessionId: string; readonly handoffFile: string; readonly reason: string; readonly estimatedCostAvoidedUsd: number };
+  /**
+   * Stable project-memory scope key for this launch — the project registry
+   * `id` for a project-mode session, `undefined` for general / current-
+   * directory (whose non-project memory identity is intentional). The
+   * in-process Direct-API tool registry (`launchPrepared`) passes this to
+   * `buildToolRegistry` as `memoryProjectScope` so `memory_recall` /
+   * `memory_search` / `memory_capture` from the API agent hit the same
+   * per-project MemoryCore bucket the launcher's own context injection uses —
+   * never the global `default` bucket.
+   */
+  readonly projectScope?: string;
 }
