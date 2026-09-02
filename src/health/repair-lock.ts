@@ -146,11 +146,21 @@ export class FileRepairLock implements RepairLock {
     } catch {
       return true; // vanished between checks — retry create
     }
-    let payload: Partial<LockPayload>;
-    try {
-      payload = JSON.parse(raw) as Partial<LockPayload>;
-    } catch {
-      return this.forceRemove(); // unparseable → not a lock we can trust
+    let payload: Partial<LockPayload> | undefined;
+    if (raw.trim().length > 0) {
+      try {
+        payload = JSON.parse(raw) as Partial<LockPayload>;
+      } catch {
+        payload = undefined;
+      }
+    }
+    if (!payload) {
+      // Empty or not-yet-parseable: almost always a lock file a competing
+      // acquirer just `open("wx")`d and has not written its `{pid,host,at}`
+      // into yet. Do NOT delete it (that would let two acquirers each think
+      // they hold it) and do NOT report it retriable (that spins the acquire
+      // loop). Treat it like a live holder: fall through to the bounded wait.
+      return false;
     }
     const at = Number(payload.at);
     const full: LockPayload = {

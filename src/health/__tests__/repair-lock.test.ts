@@ -141,12 +141,17 @@ describe("FileRepairLock", () => {
       expect(lines[0]).toMatch(/waiting/i);
     });
 
-    it("two concurrent acquirers never both hold it", async () => {
+    it("does not steal a lock file a competing acquirer just created but has not written yet", async () => {
+      // Reproduces the race that let two acquirers both hold the lock: an
+      // empty file (another process' `open("wx")` mid-write) must NOT be
+      // treated as a corrupt/stale lock and deleted.
       const file = lockFile();
-      const a = new FileRepairLock(file);
-      const b = new FileRepairLock(file, ...clockArgs());
-      const [ra, rb] = await Promise.all([a.acquire(0), b.acquire(1_000)]);
-      expect([ra.acquired, rb.acquired].filter(Boolean)).toHaveLength(1);
+      writeFileSync(file, ""); // the in-flight state
+      const clock = fakeClock(1_000_000);
+      const lock = new FileRepairLock(file, clock.now, clock.sleep, () => true);
+      const r = await lock.acquire(3_000);
+      expect(r.acquired).toBe(false); // waited it out, never claimed
+      expect(readFileSync(file, "utf8")).toBe(""); // the file was left intact
     });
   });
 });
