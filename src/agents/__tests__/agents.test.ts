@@ -82,6 +82,7 @@ describe("AgentManager — list", () => {
       "glm-5-2-free",
       "groq-free",
       "huggingface-free",
+      "local-ornith15",
       "nvidia-free",
       "openrouter-free",
     ]);

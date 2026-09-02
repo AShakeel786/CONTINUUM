@@ -35,6 +35,7 @@ export type ManifestAuth =
   | { readonly kind: "api-key"; readonly envVar: string }
   | { readonly kind: "bearer-token"; readonly envVar: string }
   | { readonly kind: "cli-session" }
+  | { readonly kind: "none" }
   | { readonly kind: "proxy-routed"; readonly envVar: string; readonly proxyBaseUrl: string };
 
 export type ManifestContextDelivery =
@@ -122,6 +123,23 @@ export interface ManifestProxyUserKey {
   readonly credentialName?: string;
 }
 
+/**
+ * Managed-local-server block (see `LocalServiceProfile`). Carried through to
+ * the profile unchanged — the manifest form and the runtime form are the
+ * same declarative shape; `src/local-service/descriptor.ts` resolves it.
+ */
+export interface ManifestLocalService {
+  readonly command: string;
+  readonly args: readonly string[];
+  readonly host?: string;
+  readonly port?: number;
+  readonly healthPath?: string;
+  readonly startupTimeoutSec?: number;
+  readonly cwd?: string;
+  readonly env?: Readonly<Record<string, string>>;
+  readonly model?: string;
+}
+
 export interface ManifestCapabilities {
   readonly thinking?: "none" | "supported" | "extended";
   readonly tools?: boolean;
@@ -176,6 +194,12 @@ export interface ProviderManifest {
    * selected instead when the CLI executable is unavailable.
    */
   readonly apiFallback?: boolean;
+  /**
+   * Declares a CONTINUUM-managed local inference server backing this provider
+   * (health-check → reuse → auto-start → stop). Provider-agnostic lifecycle;
+   * see `src/local-service/`.
+   */
+  readonly localService?: ManifestLocalService;
 }
 
 const ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -200,7 +224,7 @@ export function validateManifest(input: unknown): readonly string[] {
   const auth = m.auth as Partial<ManifestAuth> | undefined;
   if (!auth) errors.push("auth is required");
   else {
-    const kinds = ["api-key", "bearer-token", "cli-session", "proxy-routed"];
+    const kinds = ["api-key", "bearer-token", "cli-session", "none", "proxy-routed"];
     if (!kinds.includes(auth.kind as string)) errors.push(`auth.kind must be one of ${kinds.join(", ")}`);
     if ((auth.kind === "api-key" || auth.kind === "bearer-token") && (!auth.envVar || typeof auth.envVar !== "string")) {
       errors.push(`auth.envVar is required for auth.kind=${auth.kind}`);
@@ -280,6 +304,48 @@ export function validateManifest(input: unknown): readonly string[] {
   }
 
   if (m.apiFallback !== undefined && typeof m.apiFallback !== "boolean") errors.push("apiFallback must be a boolean");
+
+  const ls = m.localService;
+  if (ls !== undefined) {
+    if (typeof ls !== "object" || ls === null || Array.isArray(ls)) {
+      errors.push("localService must be an object");
+    } else {
+      if (typeof ls.command !== "string" || ls.command.trim().length === 0 || /[\r\n]/.test(ls.command)) {
+        errors.push("localService.command must be a non-empty single-line string (an executable path or name)");
+      }
+      if (!Array.isArray(ls.args) || ls.args.some((a) => typeof a !== "string" || /[\r\n]/.test(a))) {
+        errors.push("localService.args must be an array of single-line strings (spawned directly, never through a shell)");
+      }
+      if (ls.host !== undefined && (typeof ls.host !== "string" || ls.host.trim().length === 0)) {
+        errors.push("localService.host must be a non-empty string");
+      }
+      if (ls.port !== undefined && (!Number.isInteger(ls.port) || ls.port < 1 || ls.port > 65535)) {
+        errors.push("localService.port must be an integer 1-65535");
+      }
+      if (ls.healthPath !== undefined && (typeof ls.healthPath !== "string" || !ls.healthPath.startsWith("/"))) {
+        errors.push('localService.healthPath must be a string starting with "/"');
+      }
+      if (ls.startupTimeoutSec !== undefined && (typeof ls.startupTimeoutSec !== "number" || ls.startupTimeoutSec <= 0)) {
+        errors.push("localService.startupTimeoutSec must be a positive number");
+      }
+      if (ls.cwd !== undefined && (typeof ls.cwd !== "string" || ls.cwd.trim().length === 0)) {
+        errors.push("localService.cwd must be a non-empty string");
+      }
+      if (ls.env !== undefined) {
+        if (typeof ls.env !== "object" || ls.env === null || Array.isArray(ls.env)) {
+          errors.push("localService.env must be an object of NAME to string value");
+        } else {
+          for (const [name, value] of Object.entries(ls.env)) {
+            if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) errors.push(`localService.env key "${name}" is not a valid env var name`);
+            if (typeof value !== "string" || /[\r\n]/.test(value)) errors.push(`localService.env value for "${name}" must be a single-line string`);
+          }
+        }
+      }
+      if (ls.model !== undefined && (typeof ls.model !== "string" || ls.model.trim().length === 0)) {
+        errors.push("localService.model must be a non-empty string");
+      }
+    }
+  }
 
   // Structural validation for the (new) dual-route launch descriptors.
   const launch = m.cliLaunch;
@@ -420,7 +486,9 @@ export function manifestToProfile(m: ProviderManifest): ProviderProfile {
           ? { kind: "bearer-token", secret: secretRef(auth.envVar) }
           : auth.kind === "proxy-routed"
             ? { kind: "proxy-routed", secret: secretRef(auth.envVar), proxyBaseUrl: auth.proxyBaseUrl }
-            : { kind: "cli-session", note: `${m.displayName} authenticates via its own native CLI session.` },
+            : auth.kind === "none"
+              ? { kind: "none", note: `${m.displayName} is a local service and needs no credential.` }
+              : { kind: "cli-session", note: `${m.displayName} authenticates via its own native CLI session.` },
     models: { default: m.models.default, aliases: m.models.aliases ?? {} },
     capabilities: toCapabilities(m),
     environment: m.environment ?? { owns: envOwns(m) },
@@ -433,6 +501,7 @@ export function manifestToProfile(m: ProviderManifest): ProviderProfile {
     ...(m.staticHeaders ? { staticHeaders: m.staticHeaders } : {}),
     ...(m.endpointParams ? { endpointParams: m.endpointParams } : {}),
     ...(m.apiFallback ? { apiFallback: true } : {}),
+    ...(m.localService ? { localService: m.localService } : {}),
   };
 }
 

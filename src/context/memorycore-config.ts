@@ -34,6 +34,37 @@ export const MEMORY_CORE_ENV_ONLY_ENV = "CONTINUUM_MEMORY_CORE_ENV_ONLY";
 export const MEMORY_CORE_SERVICE_TOKEN_PROVIDER = "memorycore";
 export const MEMORY_CORE_SERVICE_TOKEN_NAME = "service-token";
 
+/**
+ * Project memory isolation. MemoryCore's `/v3/*` "strong isolation" routes key
+ * every read (L3 persona, L2 scene index, L1 atomic search) on `agent_id`.
+ * Two different projects sharing one `agent_id` therefore recall each other's
+ * memory — the observed cross-contamination. Deriving a stable per-project
+ * `agent_id` from the project's registry identity gives each project its own
+ * isolated memory bucket at the gateway, with no wire-contract change.
+ *
+ * `projectKey` MUST be a stable identity (the project registry `id`), not a
+ * path — so a moved/renamed project keeps its memory and a different project
+ * that later occupies the old path does not inherit it.
+ */
+export function projectScopedAgentId(baseAgentId: string, projectKey: string): string {
+  const safe = projectKey.replace(/[^A-Za-z0-9._-]/g, "-").slice(0, 128) || "unknown";
+  const base = baseAgentId && baseAgentId !== "default" ? `${baseAgentId}--` : "";
+  return `${base}project-${safe}`;
+}
+
+/**
+ * Return a copy of `cfg` whose recall is scoped to one project. Used for every
+ * project-mode session (launcher) and for an MCP server running inside a
+ * registered project. General / no-project sessions deliberately keep the
+ * base identity.
+ */
+export function scopeMemoryConfigToProject(
+  cfg: MemoryCoreGatewayConfig,
+  projectKey: string,
+): MemoryCoreGatewayConfig {
+  return { ...cfg, agentId: projectScopedAgentId(cfg.agentId, projectKey) };
+}
+
 /** Endpoint discovery: env override, else the local gateway default. */
 export function memoryCoreBaseUrl(env: Readonly<Record<string, string | undefined>> = process.env): string {
   return env[MEMORY_CORE_URL_ENV]?.trim() || MEMORY_CORE_DEFAULT_URL;

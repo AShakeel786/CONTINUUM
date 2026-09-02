@@ -188,6 +188,16 @@ async function evaluateDirectApi(
   if (!isDirectApiCompatible(adapter)) {
     return { usable: false, reason: `${id} has no compatible direct-API runtime`, launchKind: "none" };
   }
+  // A no-auth provider (a CONTINUUM-managed local server on loopback) needs no
+  // stored credential — its readiness is the managed-service lifecycle's job,
+  // checked at launch, not a credential probe here.
+  if (adapter.profile.auth.kind === "none") {
+    const missingParams = missingEndpointParams(adapter.profile, process.env);
+    if (missingParams.length > 0) {
+      return { usable: false, reason: `${id} missing ${missingParams.join(", ")}`, launchKind: "direct-api", route };
+    }
+    return { usable: true, launchKind: "direct-api", route };
+  }
   if (!metadata.api.supported) {
     return { usable: false, reason: `${id} declares no usable auth`, launchKind: "none" };
   }

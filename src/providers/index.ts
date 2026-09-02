@@ -23,6 +23,7 @@ export {
   groqFreeManifest,
   openRouterFreeManifest,
   glm52FreeManifest,
+  localOrnith15Manifest,
   DEFAULT_PROVIDER_PREFERENCE_CHAIN,
 } from "./presets.js";
 
@@ -38,7 +39,21 @@ import { manifestToProfile, type ProviderManifest } from "./manifest.js";
  */
 export function createProviderRegistry(userManifests: readonly ProviderManifest[] = []): ProviderRegistry {
   const registry = new ProviderRegistry();
-  for (const manifest of [...bundledManifests, ...userManifests]) {
+  // Reserved identity = every bundled id AND every bundled id-alias. A user
+  // manifest whose id collides with one of these is a stale hand-edit that a
+  // bundled preset has since superseded (e.g. `local-qwen38.json` after the
+  // managed `local-ornith15` preset landed) — the bundled preset wins and the
+  // shadowed user file is skipped rather than registered as a dead duplicate.
+  const reserved = new Set<string>();
+  for (const m of bundledManifests) {
+    reserved.add(m.id);
+    for (const alias of m.idAliases ?? []) reserved.add(alias);
+  }
+  for (const manifest of bundledManifests) {
+    registry.register(createProviderAdapter(manifestToProfile(manifest)));
+  }
+  for (const manifest of userManifests) {
+    if (reserved.has(manifest.id)) continue;
     registry.register(createProviderAdapter(manifestToProfile(manifest)));
   }
   return registry;

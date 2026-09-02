@@ -74,6 +74,10 @@ class DataDrivenProviderAdapter implements ProviderAdapter {
         const token = resolveSecret(this.profile.id, auth.secret, env);
         return { Authorization: `Bearer ${token}` };
       }
+      case "none":
+        // A managed local server on loopback needs no credential — a direct
+        // API call is made with no auth header.
+        return {};
       case "cli-session":
         // Honest failure, not a fabricated header: this auth kind holds no
         // secret CONTINUUM can use for a direct API call by design (see

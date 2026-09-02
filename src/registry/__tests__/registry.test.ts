@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { ProjectRegistry, normalizeProjectPath } from "../registry.js";
 import { ProjectRegistryStore } from "../store.js";
@@ -72,6 +72,21 @@ describe("CWD detection", () => {
     const r = reg(tmpDir());
     await r.add({ name: "foo", path: "/work/foo" });
     expect(await r.detect("/work/foobar")).toBeUndefined();
+  });
+
+  it("never ancestor-matches a project registered at the home directory (silent $HOME substitution)", async () => {
+    const home = homedir();
+    const r = reg(tmpDir());
+    await r.add({ name: "home-catchall", path: home });
+    await r.add({ name: "bunyan", path: join(home, "developer", "Bunyan") });
+    // Inside a real registered project → that project (exact).
+    expect((await r.detect(join(home, "developer", "Bunyan")))?.name).toBe("bunyan");
+    // A home subdir that is NOT a registered project → "no project", NOT the
+    // home catch-all (which would silently swap the working dir for $HOME).
+    expect(await r.detect(join(home, "developer", "not-registered"))).toBeUndefined();
+    expect(await r.detect(join(home, "Downloads"))).toBeUndefined();
+    // An exact match on the home dir itself is still honored.
+    expect((await r.detect(home))?.name).toBe("home-catchall");
   });
 });
 

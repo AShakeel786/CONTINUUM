@@ -7,9 +7,32 @@ import {
   MEMORY_CORE_DEFAULT_URL,
   MEMORY_CORE_SERVICE_TOKEN_ENV,
   memoryCoreBaseUrl,
+  projectScopedAgentId,
   resolveMemoryCoreConfig,
+  scopeMemoryConfigToProject,
   storeMemoryCoreServiceToken,
 } from "../memorycore-config.js";
+
+describe("project memory scoping", () => {
+  it("derives a stable, header-safe per-project agent id and isolates two projects", () => {
+    const a = projectScopedAgentId("default", "ef582cba-ded5-49fb-9545-cb9d9a0d84c4");
+    const b = projectScopedAgentId("default", "209c96d7-9d31-4f03-8e8d-617ce844fe0a");
+    expect(a).not.toBe(b);
+    expect(a).toBe("project-ef582cba-ded5-49fb-9545-cb9d9a0d84c4");
+    expect(a).toMatch(/^[A-Za-z0-9._-]+$/);
+  });
+
+  it("preserves a non-default base agent id as a prefix", () => {
+    expect(projectScopedAgentId("teambot", "p1")).toBe("teambot--project-p1");
+  });
+
+  it("scopeMemoryConfigToProject only changes agentId", () => {
+    const base = { baseUrl: "u", serviceToken: { envVar: "T" }, serviceId: "s", teamId: "t", userId: "u", agentId: "default" } as const;
+    const scoped = scopeMemoryConfigToProject(base, "p9");
+    expect(scoped.agentId).toBe("project-p9");
+    expect({ ...scoped, agentId: base.agentId }).toEqual(base);
+  });
+});
 
 function jsonResponse(body: unknown) {
   return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });

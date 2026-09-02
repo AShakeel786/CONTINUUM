@@ -74,7 +74,17 @@ export interface ProxyRoutedAuth {
   readonly proxyBaseUrl: string;
 }
 
-export type AuthStrategy = ApiKeyAuth | BearerTokenAuth | CliSessionAuth | ProxyRoutedAuth;
+/**
+ * No credential at all — the provider needs none (a CONTINUUM-managed local
+ * inference server on loopback). Unlike `cli-session`, a direct API call is
+ * fully supported: it simply carries no auth header.
+ */
+export interface NoAuth {
+  readonly kind: "none";
+  readonly note?: string;
+}
+
+export type AuthStrategy = ApiKeyAuth | BearerTokenAuth | CliSessionAuth | ProxyRoutedAuth | NoAuth;
 
 // ── Model mapping ─────────────────────────────────────────────────────
 
@@ -592,6 +602,41 @@ export interface ProviderProfile {
    * honestly via usability.
    */
   readonly apiFallback?: boolean;
+  /**
+   * Declares that this provider is backed by a local inference server
+   * CONTINUUM manages (health-check → reuse → auto-start → stop). Provider-
+   * agnostic: the lifecycle engine (`src/local-service/`) consumes only the
+   * resolved descriptor, never a provider id. Absent = remote/CLI provider,
+   * lifecycle untouched.
+   */
+  readonly localService?: LocalServiceProfile;
+}
+
+/**
+ * Declarative managed-local-server spec (post-manifest form). `host`/`port`
+ * default from the provider's own `baseUrl`; `${model}` / `${host}` / `${port}`
+ * placeholders in `args`/`cwd` are substituted at resolution time. The server
+ * is always spawned as `command` + `args` (never a shell string).
+ */
+export interface LocalServiceProfile {
+  /** Executable to spawn — absolute path or a PATH-resolvable name. */
+  readonly command: string;
+  /** Arguments, passed verbatim (supports `${model}`/`${host}`/`${port}`). */
+  readonly args: readonly string[];
+  /** Bind/probe host. Default: the baseUrl host, else 127.0.0.1 (localhost). */
+  readonly host?: string;
+  /** Listen/probe port. Default: the baseUrl port, else 8080. */
+  readonly port?: number;
+  /** Readiness path. Default: `<baseUrl path>/models` (e.g. `/v1/models`). */
+  readonly healthPath?: string;
+  /** Seconds to wait for readiness after a fresh spawn. Default 120. */
+  readonly startupTimeoutSec?: number;
+  /** Working directory for the spawned server. */
+  readonly cwd?: string;
+  /** Extra non-secret environment for the spawned server. */
+  readonly env?: Readonly<Record<string, string>>;
+  /** Model id/path passed as `${model}`. Default: `models.default`. */
+  readonly model?: string;
 }
 
 // ── CLI launch adapter ──────────────────────────────────────────────────

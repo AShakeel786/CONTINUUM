@@ -31,6 +31,7 @@ import { runMcpCommand } from "./commands/mcp.js";
 import { runMcpSetupCommand } from "./commands/mcp-setup.js";
 import type { PromptOutput } from "../auth/prompt.js";
 import { runCostCommand } from "./commands/cost.js";
+import { runLocalCommand } from "./commands/local.js";
 import { runDeepSeekSmokeCommand } from "./commands/test-deepseek.js";
 
 export interface CliIo {
@@ -95,6 +96,8 @@ export async function main(argv: readonly string[]): Promise<number> {
       return runMcpSetupCommand(rest, io);
     case "cost":
       return runCostCommand(rest, io);
+    case "local":
+      return runLocalCommand(rest, io);
     case "test":
       if (rest[0] === "deepseek") return runDeepSeekSmokeCommand(rest.slice(1), io);
       io.out?.("Usage: continuum test deepseek [--max-usd=0.05]\n");
@@ -128,6 +131,7 @@ function printHelp(io: CliIo): void {
       "  mcp               Run the MCP server (JSON-RPC over stdio)",
       "  mcp-setup         Idempotently register CONTINUUM MCP with Claude/Codex",
       "  cost [session]    Estimated DeepSeek usage/cost summary (not billing)",
+      "  local <sub>       Managed local model server: status | stop",
       "  test deepseek     Run one bounded live DeepSeek Flash + telemetry check",
       "  --version         Print the version",
       "  --help            Show this help",
@@ -200,6 +204,8 @@ const COMMAND_USAGE: Readonly<Record<string, string>> = {
   mcp: "Usage: continuum mcp\n\n  Run the MCP server (JSON-RPC over stdio).",
   "mcp-setup": "Usage: continuum mcp-setup\n\n  Idempotently register CONTINUUM MCP with Claude/Codex.",
   cost: "Usage: continuum cost [sessionId]\n\n  Show estimated usage/cost telemetry; validate against DeepSeek billing exports.",
+  local:
+    "Usage: continuum local <status|stop> [<provider>]\n\n  Inspect or control a CONTINUUM-managed local model server.\n  status  report running/stopped, ownership, health, pid, log path\n  stop    stop ONLY a server CONTINUUM started (a foreign process is left untouched)",
   test: "Usage: continuum test deepseek [--max-usd=0.05]\n\n  Run a bounded live Flash request, resume it, and verify native telemetry.",
 };
 

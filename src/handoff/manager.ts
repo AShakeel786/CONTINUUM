@@ -30,7 +30,7 @@ function isLaunchable(adapter: ProviderAdapter): boolean {
   const caps = adapter.getCapabilities();
   if (caps.cliAvailable) return true;
   const kind = adapter.profile.auth.kind;
-  return kind === "api-key" || kind === "bearer-token" || kind === "proxy-routed";
+  return kind === "api-key" || kind === "bearer-token" || kind === "proxy-routed" || kind === "none";
 }
 
 export interface ProviderChoice {

@@ -19,7 +19,7 @@ import { ProjectRegistryStore } from "../registry/store.js";
 import { SessionManager } from "../session/manager.js";
 import { FileSessionStore } from "../session/store.js";
 import { resolveDataDir } from "../config/paths.js";
-import { buildDefaultCredentialManager, resolveMemoryCoreConfig } from "../context/memorycore-config.js";
+import { buildDefaultCredentialManager, resolveMemoryCoreConfig, scopeMemoryConfigToProject } from "../context/memorycore-config.js";
 import type { CredentialManager } from "../auth/credential-manager.js";
 import path from "node:path";
 
@@ -36,6 +36,14 @@ export interface BuildRegistryOptions {
    * filesystem tools are registered or advertised.
    */
   readonly coding?: { readonly projectPath: string };
+  /**
+   * Stable project identity (the registry project id) the MCP server is
+   * running inside. When set, every MemoryCore recall is scoped to that
+   * project's isolated bucket, so a session for Project B can never recall
+   * Project A's memory. Absent → base (general / no-project) identity, which
+   * is the intended behavior outside a registered project.
+   */
+  readonly memoryProjectScope?: string;
 }
 
 /** Assembles the default tool registry. */
@@ -45,8 +53,18 @@ export async function buildToolRegistry(opts: BuildRegistryOptions = {}): Promis
   const sessionManager = new SessionManager(new FileSessionStore(path.join(dataDir, "sessions")));
 
   const credentialManager = opts.credentialManager ?? (await buildDefaultCredentialManager(dataDir));
-  const memoryProvider: MemoryCoreProvider =
+  const baseMemoryProvider: MemoryCoreProvider =
     opts.memoryProvider ?? (async () => (await resolveMemoryCoreConfig({ credentialManager })).config);
+  // Project-scope every recalled memory when the server runs inside a
+  // registered project. The scoped config is the ONLY one exposed: a project
+  // session that cannot resolve its bucket gets no recalled memory, never the
+  // unscoped global bucket.
+  const memoryProvider: MemoryCoreProvider = opts.memoryProjectScope
+    ? async () => {
+        const cfg = await baseMemoryProvider();
+        return cfg ? scopeMemoryConfigToProject(cfg, opts.memoryProjectScope!) : cfg;
+      }
+    : baseMemoryProvider;
   const sessionDeps: SessionToolDeps = { sessionManager, projects };
 
   const registry = new ToolRegistry();

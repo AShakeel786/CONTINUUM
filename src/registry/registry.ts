@@ -5,6 +5,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import os from "node:os";
 import path from "node:path";
 import { ProjectAlreadyExistsError, ProjectConflictError, ProjectNotFoundError } from "./errors.js";
 import { ProjectRegistryStore } from "./store.js";
@@ -67,18 +68,31 @@ export class ProjectRegistry {
    * Detect the project for a working directory: exact path match first, then
    * the deepest ancestor that is a registered project path. Returns undefined
    * when no project contains this CWD.
+   *
+   * A project registered at the user's home directory (or the filesystem
+   * root) is only ever an EXACT match — it is never used as an ancestor.
+   * Such a "project" is a catch-all that contains virtually every path, so
+   * ancestor-matching it silently swaps the directory the user is actually
+   * working in for `$HOME` (observed: an API-agent session whose coding
+   * tools then rooted at `/Users/<me>` instead of the real repo). An
+   * unmatched CWD must surface as "no project" so the caller can prompt,
+   * not resolve to the home catch-all.
    */
   async detect(cwd: string): Promise<ProjectRecord | undefined> {
     const reg = await this.store.load();
     const abs = normalizeProjectPath(cwd);
-    // Exact match wins.
+    // Exact match wins — including an exact match on the home dir itself.
     const exact = reg.projects.find((p) => normalizeProjectPath(p.path) === abs);
     if (exact) return exact;
-    // Deepest ancestor: longest matching path prefix on a segment boundary.
+    const home = normalizeProjectPath(os.homedir());
+    const fsRoot = path.parse(abs).root;
+    // Deepest ancestor: longest matching path prefix on a segment boundary,
+    // excluding the home dir / filesystem root as ancestors.
     let best: ProjectRecord | undefined;
     let bestLen = -1;
     for (const p of reg.projects) {
       const base = normalizeProjectPath(p.path);
+      if (base === home || base === fsRoot) continue;
       if (abs === base || abs.startsWith(base + path.sep)) {
         if (base.length > bestLen) {
           best = p;

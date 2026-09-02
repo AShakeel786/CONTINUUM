@@ -44,6 +44,7 @@ import { captureGitFingerprint, compareGitFingerprints } from "../session/git-fi
 import { resolveProviderAuthEnv } from "../auth/activation.js";
 import { buildContextEnvelope } from "../context/envelope.js";
 import { fetchDynamicRecallFromMemoryCore, fetchStableFromMemoryCore, type MemoryCoreGatewayConfig } from "../context/memorycore-client.js";
+import { scopeMemoryConfigToProject } from "../context/memorycore-config.js";
 import { allocateBudget } from "../token/budget.js";
 import { renderContextForProvider, renderedSystemToText } from "../rendering/render.js";
 import { buildResumeInstructionsBlock, buildSessionMaintenanceBlock } from "../handoff/resume-block.js";
@@ -55,7 +56,10 @@ import { buildToolSurfaceBlock, codingToolsAvailable } from "../mcp/coding-tools
 import { applyReversiblePruning } from "../context/pruning.js";
 import type { ContextBlock } from "../context/types.js";
 import type { Prompt, PromptOutput } from "../auth/prompt.js";
-import { LocalDependencyUnavailableError, ModelUnavailableError, NoAuthenticatedAgentError, NoProjectError, ProviderNotAuthenticatedError } from "./errors.js";
+import { LocalDependencyUnavailableError, LocalServiceUnavailableError, ModelUnavailableError, NoAuthenticatedAgentError, NoProjectError, ProviderNotAuthenticatedError } from "./errors.js";
+import { resolveLocalServiceDescriptor } from "../local-service/descriptor.js";
+import { LocalServiceStartupError } from "../local-service/manager.js";
+import type { LocalServiceDescriptor, LocalServiceOutcome } from "../local-service/types.js";
 import type { ProxyReadiness } from "../health/launch-guard.js";
 import { evaluateProvider, type ProviderUsability } from "./usability.js";
 import type { ApiFailoverLaunchCandidate, LaunchOptions, LaunchPlan, LaunchPreparation } from "./types.js";
@@ -91,6 +95,17 @@ export interface LauncherDeps {
    * only tightens an existing gap, it never becomes a hard requirement.
    */
   readonly ensureProxyReady?: (proxyBaseUrl: string, onProgress?: (line: string) => void) => Promise<ProxyReadiness>;
+  /**
+   * Managed local-service lifecycle gate. When the selected provider declares
+   * a `localService`, the launcher calls this to health-check → reuse →
+   * auto-start the backing server before the launch proceeds. Absent = the
+   * check is skipped (a local provider then simply connection-refuses if
+   * nothing is listening — prior behavior). Never engaged for remote providers.
+   */
+  readonly ensureLocalService?: (
+    descriptor: LocalServiceDescriptor,
+    onProgress?: (line: string) => void,
+  ) => Promise<LocalServiceOutcome>;
   /** Progress lines from `ensureProxyReady` (see above) — stateful, not raw retry spam. */
   readonly onDependencyProgress?: (line: string) => void;
   /**
@@ -344,6 +359,26 @@ export class Launcher {
       }
     }
 
+    // Managed local inference server: when the selected provider declares a
+    // `localService`, ensure it is healthy — reuse an existing/compatible
+    // server, or auto-start one and wait for readiness — BEFORE any session is
+    // created or mutated below. A local provider whose server can't be reached
+    // fails loudly here instead of opening a session where every request
+    // connection-refuses. The server is detached and stays running after this
+    // launch's session exits.
+    if (adapter.profile.localService && this.deps.ensureLocalService) {
+      const descriptor = resolveLocalServiceDescriptor(adapter.profile);
+      if (descriptor) {
+        try {
+          await this.deps.ensureLocalService(descriptor, this.deps.onDependencyProgress);
+        } catch (err) {
+          const endpoint = `${descriptor.host}:${descriptor.port}`;
+          const tail = err instanceof LocalServiceStartupError ? err.logTail : undefined;
+          throw new LocalServiceUnavailableError(providerId, endpoint, err instanceof Error ? err.message : String(err), tail);
+        }
+      }
+    }
+
     // Permission mode: bypass (full access) is the GLOBAL default for every
     // CLI-backed launch — the caller's explicit choice is the only thing that
     // can change it (`--safe` restores normal approval mode). Full access is
@@ -589,10 +624,20 @@ export class Launcher {
 
     let envelope;
     if (this.deps.memoryCore) {
+      // Project-mode sessions recall from a per-project memory bucket (scoped
+      // on the stable project registry id) so Project A's memory can never
+      // surface in Project B. General / current-directory sessions keep the
+      // base identity — that non-project behavior is intentional. The scoped
+      // config is the ONLY one used for a project session: if it fails, the
+      // launch degrades to no recalled memory, never to unscoped global memory.
+      const memoryCfg =
+        sessionMode === "project"
+          ? scopeMemoryConfigToProject(this.deps.memoryCore, project.id)
+          : this.deps.memoryCore;
       try {
         const [stable, dynamic] = await Promise.all([
-          fetchStableFromMemoryCore({ ...this.deps.memoryCore, sessionId: session.sessionId, taskId: session.sessionId }),
-          fetchDynamicRecallFromMemoryCore({ ...this.deps.memoryCore, sessionId: session.sessionId, taskId: session.sessionId }, session.taskGoal),
+          fetchStableFromMemoryCore({ ...memoryCfg, sessionId: session.sessionId, taskId: session.sessionId }),
+          fetchDynamicRecallFromMemoryCore({ ...memoryCfg, sessionId: session.sessionId, taskId: session.sessionId }, session.taskGoal),
         ]);
         envelope = buildContextEnvelope({
           sessionKey: session.sessionId,

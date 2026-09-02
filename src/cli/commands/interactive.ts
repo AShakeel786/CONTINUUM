@@ -27,7 +27,7 @@ import {
   type RecentSessionSummary,
 } from "../../launcher/session-list.js";
 import type { LaunchPreparation } from "../../launcher/types.js";
-import { LocalDependencyUnavailableError, NoAuthenticatedAgentError, NoProjectError, ProviderNotAuthenticatedError } from "../../launcher/errors.js";
+import { LocalDependencyUnavailableError, LocalServiceUnavailableError, NoAuthenticatedAgentError, NoProjectError, ProviderNotAuthenticatedError } from "../../launcher/errors.js";
 import { AgentManager, AgentValidationError } from "../../agents/index.js";
 import type { AgentAuthFacts, AgentDescriptor } from "../../agents/index.js";
 import type { ProviderAuthMethod } from "../../config/types.js";
@@ -717,7 +717,7 @@ export async function runInteractiveCommand(args: readonly string[], io: CliIo):
       out,
     );
   } catch (err) {
-    if (err instanceof NoProjectError || err instanceof ProviderNotAuthenticatedError || err instanceof NoAuthenticatedAgentError || err instanceof LocalDependencyUnavailableError) {
+    if (err instanceof NoProjectError || err instanceof ProviderNotAuthenticatedError || err instanceof NoAuthenticatedAgentError || err instanceof LocalDependencyUnavailableError || err instanceof LocalServiceUnavailableError) {
       out(`${err.message}\n`);
       return 2;
     }

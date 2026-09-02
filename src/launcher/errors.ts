@@ -65,6 +65,30 @@ export class ModelUnavailableError extends LaunchError {
   }
 }
 
+/**
+ * A provider's CONTINUUM-managed local inference server could not be made
+ * ready (health probe failed and an auto-start timed out / exited, or the
+ * port is held by an incompatible foreign process). Thrown BEFORE any
+ * session is created or mutated, so a retry after fixing the server resumes
+ * cleanly. `detail` is built from the lifecycle engine's own messages plus a
+ * bounded server-log tail — never a secret (a local server carries none).
+ */
+export class LocalServiceUnavailableError extends LaunchError {
+  readonly providerId: string;
+  readonly endpoint: string;
+  constructor(providerId: string, endpoint: string, detail: string, logTail?: string) {
+    super(
+      "local-service-unavailable",
+      `Provider "${providerId}" is backed by a local service at ${endpoint} that could not be started or reached: ${detail}\n` +
+        (logTail ? `\n--- server log (tail) ---\n${logTail.trimEnd()}\n-------------------------\n` : "") +
+        `Next step: check the model path and \`mlx_lm\` install, run \`continuum local status ${providerId}\`, then retry the launch.`,
+    );
+    this.name = "LocalServiceUnavailableError";
+    this.providerId = providerId;
+    this.endpoint = endpoint;
+  }
+}
+
 export class NoProjectError extends LaunchError {
   constructor() {
     super(

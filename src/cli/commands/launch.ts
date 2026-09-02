@@ -12,7 +12,7 @@
 import { createPrompt, noopOutput } from "../../auth/prompt.js";
 import { spawnCli } from "../../launcher/spawn.js";
 import { classifyCliFailure } from "../../launcher/cli-failure.js";
-import { LocalDependencyUnavailableError, ModelUnavailableError, NoAuthenticatedAgentError, NoProjectError, ProviderNotAuthenticatedError } from "../../launcher/errors.js";
+import { LocalDependencyUnavailableError, LocalServiceUnavailableError, ModelUnavailableError, NoAuthenticatedAgentError, NoProjectError, ProviderNotAuthenticatedError } from "../../launcher/errors.js";
 import { listRecentSessions } from "../../launcher/session-list.js";
 import { suggestHandoffOnPeakEvent } from "../../pricing/handoff-suggestion.js";
 import type { Launcher } from "../../launcher/launcher.js";
@@ -530,7 +530,7 @@ export async function runLaunchCommand(args: readonly string[], io: CliIo): Prom
     await ensureMcpRegistration();
     return launchPrepared({ launcher, providers, sessionManager, pricing, dataDir, apiFailoverPolicy }, prep, out);
   } catch (err) {
-    if (err instanceof NoProjectError || err instanceof ProviderNotAuthenticatedError || err instanceof NoAuthenticatedAgentError || err instanceof LocalDependencyUnavailableError || err instanceof ModelUnavailableError) {
+    if (err instanceof NoProjectError || err instanceof ProviderNotAuthenticatedError || err instanceof NoAuthenticatedAgentError || err instanceof LocalDependencyUnavailableError || err instanceof LocalServiceUnavailableError || err instanceof ModelUnavailableError) {
       out(`${err.message}\n`);
       return 2;
     }
@@ -589,7 +589,7 @@ export async function runResumeCommand(args: readonly string[], io: CliIo): Prom
     await ensureMcpRegistration();
     return launchPrepared({ launcher, providers, sessionManager, pricing, dataDir, apiFailoverPolicy: apiFailoverPolicyFromArgs(args) }, prep, out);
   } catch (err) {
-    if (err instanceof NoAuthenticatedAgentError || err instanceof ProviderNotAuthenticatedError || err instanceof LocalDependencyUnavailableError || err instanceof ModelUnavailableError) {
+    if (err instanceof NoAuthenticatedAgentError || err instanceof ProviderNotAuthenticatedError || err instanceof LocalDependencyUnavailableError || err instanceof LocalServiceUnavailableError || err instanceof ModelUnavailableError) {
       out(`${err.message}\n`);
       return 2;
     }
@@ -643,7 +643,7 @@ export async function runHandoffCommand(args: readonly string[], io: CliIo): Pro
     await ensureMcpRegistration();
     return launchPrepared({ launcher, providers, sessionManager, dataDir }, prep, out);
   } catch (err) {
-    if (err instanceof NoAuthenticatedAgentError || err instanceof LocalDependencyUnavailableError) {
+    if (err instanceof NoAuthenticatedAgentError || err instanceof LocalDependencyUnavailableError || err instanceof LocalServiceUnavailableError) {
       out(`${err.message}\n`);
       return 2;
     }

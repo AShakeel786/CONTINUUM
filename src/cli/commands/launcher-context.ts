@@ -27,6 +27,7 @@ import { buildContext } from "./common.js";
 import { buildRepoMap, FileRepoMapCache } from "../../repo-map/repo-map.js";
 import { FilePruneStore } from "../../context/pruning.js";
 import { makeEnsureProxyReady } from "../../health/launch-guard.js";
+import { LocalServiceManager } from "../../local-service/manager.js";
 import { DEFAULT_OPTIONS, DEFAULT_POLICY, liveRuntime } from "../../health/adapters.js";
 import path from "node:path";
 
@@ -76,6 +77,10 @@ export async function buildLauncherContext(options: { dataDir?: string; prompt: 
   const getProviderRoute = (providerId: string): "direct" | "proxy" => config.proxyRouting?.[providerId] ?? "direct";
 
   const repoMapCache = new FileRepoMapCache(path.join(dataDir, "repo-map"));
+  const localServiceManager = new LocalServiceManager({
+    dataDir,
+    ...(options.onDependencyProgress ? { onProgress: options.onDependencyProgress } : {}),
+  });
   const deps: LauncherDeps = {
     projects,
     providers,
@@ -91,6 +96,7 @@ export async function buildLauncherContext(options: { dataDir?: string; prompt: 
     repoMapBuilder: (projectPath, query, budgetTokens) => buildRepoMap(projectPath, query, { budgetTokens }, repoMapCache),
     pruneStore: new FilePruneStore(dataDir),
     ensureProxyReady: makeEnsureProxyReady({ runtime: liveRuntime, options: healthOptions, policy: DEFAULT_POLICY }),
+    ensureLocalService: (descriptor) => localServiceManager.ensureRunning(descriptor),
     getProviderRoute,
     ...(options.onDependencyProgress ? { onDependencyProgress: options.onDependencyProgress } : {}),
   };

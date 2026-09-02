@@ -547,6 +547,53 @@ export const huggingFaceFreeManifest: ProviderManifest = {
 };
 
 /**
+ * Local Ornith 1.5 (35B A3B) — a CONTINUUM-managed local MLX inference
+ * server. The provider is direct-API only (`auth: none`, loopback endpoint);
+ * its readiness is the managed local-service lifecycle's job, not a
+ * credential probe: on launch CONTINUUM health-checks 127.0.0.1:8080, reuses
+ * a healthy server (its own or a compatible foreign one), or starts
+ * `mlx_lm server` and waits for `/v1/models`. The server is deliberately
+ * detached — it keeps running after the chat/session exits — and only
+ * `continuum local stop` (or an explicit signal) ends it.
+ *
+ * `idAliases: ["local-qwen38"]` keeps the previous local-provider id
+ * resolving: a project whose saved `defaultProvider` is the retired
+ * `local-qwen38` now launches this managed Ornith server instead. (Same
+ * mechanism as `ox-alpha` → `glm-5-2-free`.)
+ */
+export const localOrnith15Manifest: ProviderManifest = {
+  schemaVersion: 1,
+  id: "local-ornith15",
+  idAliases: ["local-qwen38"],
+  displayName: "Local Ornith 1.5 35B A3B",
+  protocol: "openai-compatible",
+  baseUrl: "http://127.0.0.1:8080/v1",
+  auth: { kind: "none" },
+  billing: "free",
+  // Local, self-hosted — never part of the automatic remote free-API pool.
+  freeOnlyEligible: false,
+  models: { default: "/Users/home/Models/Coding/Ornith-1.5-35B-A3B-REAP192-mxfp4-MLX" },
+  capabilities: {
+    thinking: "supported",
+    tools: true,
+    promptCache: "none",
+    cliAvailable: false,
+    contextWindowTokens: 131_072,
+    notes:
+      "Managed local MLX server (`mlx_lm server`). CONTINUUM health-checks, reuses, or auto-starts it on launch and leaves it running when the session exits. Manage it with `continuum local status` / `continuum local stop`.",
+  },
+  environment: { owns: [] },
+  localService: {
+    command: "/Users/home/.venvs/ornith15/bin/python",
+    args: ["-m", "mlx_lm", "server", "--model", "${model}", "--host", "${host}", "--port", "${port}"],
+    host: "127.0.0.1",
+    port: 8080,
+    healthPath: "/v1/models",
+    startupTimeoutSec: 300,
+  },
+};
+
+/**
  * Automatic provider-preference chain: when a launch carries no explicit
  * provider/model selection, the launcher walks this list (skipping expired
  * promos and unusable providers) and picks the first usable one. The stable
@@ -582,4 +629,5 @@ export const bundledManifests: readonly ProviderManifest[] = [
   nvidiaFreeManifest,
   huggingFaceFreeManifest,
   cloudflareWorkersAiFreeManifest,
+  localOrnith15Manifest,
 ];
