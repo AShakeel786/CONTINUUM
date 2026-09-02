@@ -17,9 +17,9 @@
  * fake runtime — no second recovery path is exercised.
  */
 import { describe, expect, it } from "vitest";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { hostname, tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import type { HealthOptions, HealthRuntime, RecoveryPolicy } from "../types.js";
 import type { RepairLock } from "../repair-lock.js";
 import { ensureLaunchStackHealthy } from "../launch-heal.js";
@@ -562,5 +562,48 @@ describe("ensureLaunchStackHealthy — concurrency", () => {
     expect(result.recovered).toBe(true);
     expect(openedDocker(runtime)).toBe(false);
     expect(dockerCalls(runtime, "start")).toEqual([]);
+  });
+
+  it("a lock orphaned by a killed launch does NOT wedge the next launch's recovery", async () => {
+    // A previous launch was SIGKILLed mid-recovery and left its lock file
+    // behind, naming a pid that is no longer running.
+    const stateFile = tmpStateFile();
+    const lockPath = join(dirname(stateFile), "health-repair.lock");
+    writeFileSync(lockPath, JSON.stringify({ pid: 2147483646, host: hostname(), at: Date.now() - 60_000 }));
+
+    const runtime = new StackRuntime({ dockerUp: false });
+    const result = await ensureLaunchStackHealthy({
+      runtime,
+      options: options({ stateFile }),
+      policy: POLICY,
+      discoverDockerDesktop: async () => undefined,
+    });
+
+    // The dead owner's lock was reclaimed and THIS launch ran the recovery.
+    expect(openedDocker(runtime)).toBe(true);
+    expect(result.repairAttempted).toBe(true);
+    expect(existsSync(lockPath)).toBe(false); // released on the normal path
+  });
+
+  it("emits visible progress while waiting on a peer launch's repair", async () => {
+    const runtime = new StackRuntime({ dockerUp: false });
+    const progress: string[] = [];
+    const busyLock: RepairLock = {
+      acquire: async (_ms, opts) => {
+        opts?.onWait?.("another launch is recovering the stack — waiting… (2s)");
+        return { acquired: false, waited: true };
+      },
+      release: async () => {},
+    };
+    await ensureLaunchStackHealthy({
+      runtime,
+      options: options(),
+      policy: POLICY,
+      lock: busyLock,
+      onProgress: (l) => progress.push(l),
+    });
+
+    expect(progress.some((l) => /waiting/i.test(l))).toBe(true);
+    expect(progress.some((l) => /still recovering the stack/i.test(l))).toBe(true);
   });
 });

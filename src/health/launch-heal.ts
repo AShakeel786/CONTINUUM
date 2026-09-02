@@ -57,7 +57,15 @@ export interface LaunchHealResult {
   readonly recovered: boolean;
 }
 
-const DEFAULT_LOCK_WAIT_MS = 5 * 60_000;
+/**
+ * How long to wait for a concurrent launch's repair before giving up and
+ * launching with whatever state that repair has reached. Deliberately short —
+ * a second launch must never freeze for minutes; the pid-liveness reclaim in
+ * `FileRepairLock` already frees a lock left by a killed launch in
+ * milliseconds, so this only ever bounds the wait on a *genuinely running*
+ * peer repair.
+ */
+const DEFAULT_LOCK_WAIT_MS = 30_000;
 
 /** A check that is not-ok AND has an automatic recovery strategy. */
 function isRecoverable(check: HealthReport["checks"][number]): boolean {
@@ -134,11 +142,14 @@ export async function ensureLaunchStackHealthy(deps: LaunchHealDeps): Promise<La
   const lock =
     deps.lock ??
     new FileRepairLock(join(dirname(deps.options.stateFile), "health-repair.lock"), deps.runtime.now);
-  const handle = await lock.acquire(deps.lockWaitMs ?? DEFAULT_LOCK_WAIT_MS);
+  const handle = await lock.acquire(deps.lockWaitMs ?? DEFAULT_LOCK_WAIT_MS, {
+    ...(deps.onProgress ? { onWait: deps.onProgress } : {}),
+  });
 
   if (!handle.acquired) {
-    // A repair is taking longer than we're willing to wait. Use the current
-    // (possibly already-improved) state; don't start a competing repair.
+    // A peer launch's repair is still running past our short wait. Don't start
+    // a competing repair — use whatever state that repair has reached.
+    deps.onProgress?.("Another launch is still recovering the stack — continuing with its progress so far.");
     return finalize(await safeDiagnose(doctor, report), deps);
   }
 

@@ -4,9 +4,9 @@
  * the same stopped stack.
  */
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { FileRepairLock } from "../repair-lock.js";
 
@@ -78,6 +78,76 @@ describe("FileRepairLock", () => {
     await a.acquire(0);
     await b.release(); // b never held it — must be a no-op
     expect((await a.acquire(0)).acquired).toBe(false); // a still holds it
+  });
+
+  describe("orphaned-lock robustness (a killed launch must not wedge later ones)", () => {
+    const HOST = hostname();
+    /** Plant a lock file as if another launch on this host wrote it. */
+    function plant(file: string, atMs: number, pid = 4242): void {
+      writeFileSync(file, JSON.stringify({ pid, host: HOST, at: atMs }));
+    }
+
+    it("respects a lock whose owner is still alive", async () => {
+      const file = lockFile();
+      plant(file, 1_000_000);
+      const clock = fakeClock(1_000_000);
+      const lock = new FileRepairLock(file, clock.now, clock.sleep, () => true);
+      const r = await lock.acquire(4_000);
+      expect(r.acquired).toBe(false);
+      expect(r.waited).toBe(true);
+      // owner's lock file is untouched
+      expect((JSON.parse(readFileSync(file, "utf8")) as { pid: number }).pid).toBe(4242);
+    });
+
+    it("reclaims a lock whose owner process is gone — immediately, no minutes-long wait", async () => {
+      const file = lockFile();
+      plant(file, 1_000_000); // recent timestamp — age alone would NOT reclaim it
+      const clock = fakeClock(1_000_000);
+      const lock = new FileRepairLock(file, clock.now, clock.sleep, () => false); // owner dead
+      const r = await lock.acquire(30_000);
+      expect(r.acquired).toBe(true);
+      expect(r.waited).toBe(false); // reclaimed on the first pass
+      expect(clock.now() - 1_000_000).toBeLessThan(2_000); // no poll sleep happened
+      expect((JSON.parse(readFileSync(file, "utf8")) as { pid: number }).pid).toBe(process.pid);
+    });
+
+    it("a stale lock does not block a launch for minutes", async () => {
+      const file = lockFile();
+      plant(file, 1_000_000);
+      const clock = fakeClock(1_000_000);
+      const lock = new FileRepairLock(file, clock.now, clock.sleep, () => false);
+      await lock.acquire(30_000);
+      // Real wall time would have been ~0; the fake clock proves no long sleep.
+      expect(clock.now() - 1_000_000).toBeLessThan(5_000);
+    });
+
+    it("reclaims an alive-but-wedged owner past the hard ceiling", async () => {
+      const file = lockFile();
+      plant(file, 1_000_000);
+      const clock = fakeClock(1_000_000 + 13 * 60_000); // 13 min later
+      const lock = new FileRepairLock(file, clock.now, clock.sleep, () => true); // owner alive but stuck
+      const r = await lock.acquire(0);
+      expect(r.acquired).toBe(true);
+    });
+
+    it("emits progress while waiting on a live peer", async () => {
+      const file = lockFile();
+      plant(file, 1_000_000);
+      const clock = fakeClock(1_000_000);
+      const lock = new FileRepairLock(file, clock.now, clock.sleep, () => true);
+      const lines: string[] = [];
+      await lock.acquire(6_000, { onWait: (l) => lines.push(l) });
+      expect(lines.length).toBeGreaterThan(0);
+      expect(lines[0]).toMatch(/waiting/i);
+    });
+
+    it("two concurrent acquirers never both hold it", async () => {
+      const file = lockFile();
+      const a = new FileRepairLock(file);
+      const b = new FileRepairLock(file, ...clockArgs());
+      const [ra, rb] = await Promise.all([a.acquire(0), b.acquire(1_000)]);
+      expect([ra.acquired, rb.acquired].filter(Boolean)).toHaveLength(1);
+    });
   });
 });
 
