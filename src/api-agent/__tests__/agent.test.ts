@@ -119,3 +119,55 @@ describe("runAgentLoop", () => {
     expect(toolLists[0]).toBe(0); // no tools offered on the greeting turn
   });
 });
+
+describe("runAgentLoop — live status + telemetry + per-turn isolation", () => {
+  it("emits THINKING → GENERATING → DONE for a plain answer, and TOOL for a tool turn", async () => {
+    const states: string[] = [];
+    const runner: import("../runner.js").ApiRunner = {
+      call: async (_m, _t, opts) => {
+        opts?.onChunk?.("streamed");
+        return { content: "answer", toolCalls: [], finishReason: "stop", timing: { requestMs: 10, ttftMs: 5, decodeMs: 3, streamed: true } };
+      },
+    };
+    const r = await runAgentLoop([{ role: "user", content: "explain X" }], {
+      runner, tools: makeTools(),
+      onState: (s) => states.push(s.kind === "tool" ? `tool:${s.name}` : s.kind),
+    });
+    expect(states[0]).toBe("thinking");
+    expect(states).toContain("generating");
+    expect(states.at(-1)).toBe("done");
+    expect(r.telemetry.streamed).toBe(true);
+
+    const states2: string[] = [];
+    const toolRunner: import("../runner.js").ApiRunner = {
+      call: async (msgs) => msgs.some((m) => m.role === "tool")
+        ? { content: "final", toolCalls: [], finishReason: "stop" }
+        : { content: null, toolCalls: [{ id: "1", name: "echo", arguments: "{}" }], finishReason: "tool_calls" },
+    };
+    await runAgentLoop([{ role: "user", content: "run echo" }], {
+      runner: toolRunner, tools: makeTools(),
+      onState: (s) => states2.push(s.kind === "tool" ? `tool:${s.name}` : s.kind),
+    });
+    expect(states2).toContain("tool:echo");
+  });
+
+  it("stall fingerprints are isolated per runAgentLoop call (per user turn)", async () => {
+    // A runner that always repeats the identical call → stalls within a turn.
+    const stallRunner: import("../runner.js").ApiRunner = {
+      call: async () => ({ content: null, toolCalls: [{ id: `c${Math.random()}`, name: "echo", arguments: "{\"x\":1}" }], finishReason: "tool_calls" }),
+    };
+    const limits = { maxIterations: 25, timeoutMs: 60_000, stallThreshold: 3, maxStallSignals: 1 };
+    const a = await runAgentLoop([{ role: "user", content: "turn one" }], { runner: stallRunner, tools: makeTools(), limits });
+    expect(a.stopReason).toBe("stalled");
+    // A brand-new loop (next user turn) starts clean — it does not inherit
+    // turn one's stall state and terminate immediately.
+    const okRunner: import("../runner.js").ApiRunner = {
+      call: async (msgs) => msgs.some((m) => m.role === "tool")
+        ? { content: "done turn two", toolCalls: [], finishReason: "stop" }
+        : { content: null, toolCalls: [{ id: "z", name: "echo", arguments: "{\"y\":2}" }], finishReason: "tool_calls" },
+    };
+    const b = await runAgentLoop([{ role: "user", content: "turn two" }], { runner: okRunner, tools: makeTools(), limits });
+    expect(b.stopReason).toBe("final");
+    expect(b.finalContent).toBe("done turn two");
+  });
+});

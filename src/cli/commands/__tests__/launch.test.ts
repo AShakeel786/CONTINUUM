@@ -640,3 +640,34 @@ describe("launchPrepared api-agent loop-control wiring", () => {
     expect(joined).toContain("stopped early (stalled)");
   });
 });
+
+// ── interactive vs one-shot gating ──────────────────────────────────────
+import { wantsInteractive } from "../launch.js";
+describe("wantsInteractive gating", () => {
+  it("is false without a TTY (piped / CI stays one-shot & backward-compatible)", () => {
+    const origIn = process.stdin.isTTY, origOut = process.stdout.isTTY;
+    try {
+      (process.stdin as { isTTY?: boolean }).isTTY = false;
+      expect(wantsInteractive([], {})).toBe(false);
+    } finally {
+      (process.stdin as { isTTY?: boolean }).isTTY = origIn;
+      (process.stdout as { isTTY?: boolean }).isTTY = origOut;
+    }
+  });
+  it("is false when --print / --one-shot is passed even on a TTY", () => {
+    const origIn = process.stdin.isTTY, origOut = process.stdout.isTTY;
+    try {
+      (process.stdin as { isTTY?: boolean }).isTTY = true;
+      (process.stdout as { isTTY?: boolean }).isTTY = true;
+      expect(wantsInteractive(["--print"], {})).toBe(false);
+      expect(wantsInteractive(["--one-shot"], {})).toBe(false);
+      expect(wantsInteractive([], {})).toBe(true);
+    } finally {
+      (process.stdin as { isTTY?: boolean }).isTTY = origIn;
+      (process.stdout as { isTTY?: boolean }).isTTY = origOut;
+    }
+  });
+  it("is false for a nonInteractive CliIo", () => {
+    expect(wantsInteractive([], { nonInteractive: true })).toBe(false);
+  });
+});

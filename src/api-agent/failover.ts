@@ -202,7 +202,7 @@ export function createFailoverApiRunner(candidates: readonly FailoverCandidate[]
     runtime.retryAtMs = err.retryAtMs ?? now() + cooldownMs;
   }
 
-  async function call(messages: readonly AgentMessage[], tools: readonly ToolDefinition[]): Promise<AgentTurnResult> {
+  async function call(messages: readonly AgentMessage[], tools: readonly ToolDefinition[], opts?: import("./types.js").RunnerCallOptions): Promise<AgentTurnResult> {
     if (tools.length > 0) {
       for (const runtime of runtimes) {
         if (runtime.health === "healthy" && !runtime.adapter.getCapabilities().tools) {
@@ -220,7 +220,7 @@ export function createFailoverApiRunner(candidates: readonly FailoverCandidate[]
       attempted.add(index);
       activeIndex = index;
       try {
-        return await runtime.runner.call(messages, tools);
+        return await runtime.runner.call(messages, tools, opts);
       } catch (error) {
         if (!(error instanceof ApiAgentError)) throw error;
         if (error.kind === "auth") {

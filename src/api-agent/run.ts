@@ -9,13 +9,13 @@ import type { ProviderAdapter } from "../providers/types.js";
 import type { RenderedContext } from "../rendering/types.js";
 import type { ToolRegistry } from "../mcp/tools.js";
 import { createApiRunner, type ApiRunner, type FetchLike } from "./runner.js";
-import { runAgentLoop } from "./agent.js";
+import { runAgentLoop, type AgentRunState } from "./agent.js";
 import { optimizeToolOutput } from "../tool-output/optimizer.js";
 import { defaultRawStore, type RawOutputStore } from "../tool-output/store.js";
 import { DEFAULT_OPTIMIZE_OPTIONS } from "../tool-output/types.js";
 import type { OptimizedToolOutput } from "../tool-output/types.js";
 import type { ToolResultCache, ToolScopeProvider } from "../tool-cache/tool-cache.js";
-import type { AgentLoopLimits, AgentMessage, AgentStopReason, NetworkFailureKind } from "./types.js";
+import type { AgentLoopLimits, AgentMessage, AgentStopReason, NetworkFailureKind, TurnTelemetry } from "./types.js";
 
 export interface RunApiAgentDeps {
   readonly adapter: ProviderAdapter;
@@ -26,6 +26,12 @@ export interface RunApiAgentDeps {
   readonly query: string;
   readonly limits?: AgentLoopLimits;
   readonly onOutput?: (line: string) => void;
+  /** Coarse per-turn lifecycle state for a live status line. */
+  readonly onState?: (state: AgentRunState) => void;
+  /** Incremental assistant text (streaming). Absent → no streaming. */
+  readonly onStreamChunk?: (textDelta: string) => void;
+  /** Model context-window size, for the telemetry footer. */
+  readonly contextLimit?: number;
   /** Injectable fetch (tests/mocks); defaults to real fetch. */
   readonly fetch?: FetchLike;
   /** Injectable retry sleep (tests); defaults to a real timer. */
@@ -62,6 +68,7 @@ export interface RunApiAgentResult {
   readonly toolCalls: number;
   /** How the loop ended — anything but `final` means the answer is partial. */
   readonly stopReason: AgentStopReason;
+  readonly telemetry: TurnTelemetry;
 }
 
 function systemToString(system: RenderedContext["system"]): string {
@@ -108,19 +115,17 @@ export function buildInitialMessages(rendered: RenderedContext, query: string): 
   const system = systemToString(rendered.system);
   const intent = classifyTaskIntent(query);
 
+  const prefix = rendered.userPrefix ? `${rendered.userPrefix}\n\n` : "";
   let user: string;
   if (intent === "absent") {
-    user =
-      (rendered.userPrefix ? `${rendered.userPrefix}\n\n` : "") +
-      "No task has been specified for this session. Greet the user in one or two sentences and ask what they would like to work on. " +
-      "Do NOT call any tools, explore the repository, or start work until the user gives you a concrete task.";
+    // Kept deliberately short and non-standing: it applies to THIS opening
+    // turn only. A real task in a later turn must not be second-guessed
+    // against this greeting instruction.
+    user = `${prefix}(The user opened this session without stating a task.) Greet them in one sentence and ask what they'd like to work on.`;
   } else if (intent === "conversational") {
-    user =
-      (rendered.userPrefix ? `${rendered.userPrefix}\n\n` : "") +
-      `The user said: ${query}\n\n` +
-      "Reply directly and briefly. Do NOT call any tools or start work unless the user asks for something concrete.";
+    user = `${prefix}${query}\n\n(Reply directly and briefly — this is small talk, not a task yet.)`;
   } else {
-    user = rendered.userPrefix ? `${rendered.userPrefix}\n\n${query}` : query;
+    user = `${prefix}${query}`;
   }
 
   const messages: AgentMessage[] = [];
@@ -152,8 +157,11 @@ export async function runApiAgent(deps: RunApiAgentDeps): Promise<RunApiAgentRes
     cache: deps.cache,
     scopeProvider: deps.scopeProvider,
     taskIntent: classifyTaskIntent(deps.query),
+    ...(deps.onState ? { onState: deps.onState } : {}),
+    ...(deps.onStreamChunk ? { onStreamChunk: deps.onStreamChunk } : {}),
+    ...(deps.contextLimit ? { contextLimit: deps.contextLimit } : {}),
     onEvent: (event, detail) => deps.onOutput?.(`[${event}] ${detail}\n`),
     onToolActivity: deps.recordToolActivity ? (tool, summary) => deps.recordToolActivity!(tool, summary) : undefined,
   });
-  return { finalContent: result.finalContent, iterations: result.iterations, toolCalls: result.toolCalls, stopReason: result.stopReason };
+  return { finalContent: result.finalContent, iterations: result.iterations, toolCalls: result.toolCalls, stopReason: result.stopReason, telemetry: result.telemetry };
 }

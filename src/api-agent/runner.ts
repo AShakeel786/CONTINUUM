@@ -25,7 +25,8 @@ import type { ProviderAdapter } from "../providers/types.js";
 import { EndpointParamError, resolveEndpointUrl } from "../providers/endpoint.js";
 import type { ToolDefinition } from "../mcp/tools.js";
 import { toAnthropicTools, toOpenAiTools } from "./format.js";
-import { ApiAgentError, type AgentMessage, type AgentTurnResult, type NetworkFailureKind } from "./types.js";
+import { ApiAgentError, type AgentMessage, type AgentTurnResult, type NetworkFailureKind, type RunnerCallOptions } from "./types.js";
+import { consumeOpenAiStream, defaultStreamFetch, type StreamFetchLike } from "./stream.js";
 
 export type FetchLike = (
   url: string,
@@ -33,7 +34,7 @@ export type FetchLike = (
 ) => Promise<{ ok: boolean; status: number; body: string; retryAfterMs?: number; resetAtMs?: number }>;
 
 export interface ApiRunner {
-  call(messages: readonly AgentMessage[], tools: readonly ToolDefinition[]): Promise<AgentTurnResult>;
+  call(messages: readonly AgentMessage[], tools: readonly ToolDefinition[], opts?: RunnerCallOptions): Promise<AgentTurnResult>;
 }
 
 export interface RetryInfo {
@@ -46,6 +47,8 @@ export interface RetryInfo {
 
 export interface RunnerDeps {
   readonly fetch?: FetchLike;
+  /** Streaming fetch seam (tests); defaults to a real `fetch` body reader. */
+  readonly streamFetch?: StreamFetchLike;
   readonly timeoutMs?: number;
   /** Injectable sleep (tests); defaults to a real timer. */
   readonly sleep?: (ms: number) => Promise<void>;
@@ -271,6 +274,7 @@ async function callWithRetry(
 
 export function createApiRunner(adapter: ProviderAdapter, deps: RunnerDeps = {}): ApiRunner {
   const fetchImpl = deps.fetch ?? defaultFetch(deps.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  const streamFetchImpl = deps.streamFetch ?? defaultStreamFetch(deps.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   const sleep = deps.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
   const maxAttempts = deps.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
   const retry = { sleep, maxAttempts, onRetry: deps.onRetry };
@@ -282,7 +286,7 @@ export function createApiRunner(adapter: ProviderAdapter, deps: RunnerDeps = {})
   const protocol = adapter.getCapabilities().protocol;
   const model = adapter.resolveModel();
 
-  async function call(messages: readonly AgentMessage[], tools: readonly ToolDefinition[]): Promise<AgentTurnResult> {
+  async function call(messages: readonly AgentMessage[], tools: readonly ToolDefinition[], opts?: RunnerCallOptions): Promise<AgentTurnResult> {
     let baseUrl: string;
     try {
       baseUrl = resolveEndpointUrl(adapter.profile.baseUrl, adapter.profile, paramEnv).replace(/\/+$/, "");
@@ -295,27 +299,90 @@ export function createApiRunner(adapter: ProviderAdapter, deps: RunnerDeps = {})
       }
       throw err;
     }
-    if (protocol === "openai-compatible") return openAiCall(fetchImpl, retry, adapter, baseUrl, model, messages, tools, env);
-    if (protocol === "anthropic-messages") return anthropicCall(fetchImpl, retry, adapter, baseUrl, model, messages, tools, env);
-    throw new ApiAgentError(`unsupported protocol: ${protocol}`);
+    // Streaming is offered only for OpenAI-compatible providers and only when
+    // the caller wants incremental text. A stream failure degrades to the
+    // proven non-streaming path (which then emits the whole answer at once).
+    if (opts?.onChunk && protocol === "openai-compatible") {
+      try {
+        return await openAiStreamCall(streamFetchImpl, adapter, baseUrl, model, messages, tools, env, opts);
+      } catch (err) {
+        if (err instanceof ApiAgentError && err.kind === "auth") throw err;
+        // fall through to non-streaming
+      }
+    }
+    const maxOutputTokens = opts?.maxOutputTokens;
+    const nonStream =
+      protocol === "openai-compatible"
+        ? await openAiCall(fetchImpl, retry, adapter, baseUrl, model, messages, tools, env, maxOutputTokens)
+        : protocol === "anthropic-messages"
+          ? await anthropicCall(fetchImpl, retry, adapter, baseUrl, model, messages, tools, env, maxOutputTokens)
+          : (() => { throw new ApiAgentError(`unsupported protocol: ${protocol}`); })();
+    // Caller wanted streaming but the provider/path could not: hand the whole
+    // answer over as a single chunk so the UX still shows generated text.
+    if (opts?.onChunk && nonStream.content) opts.onChunk(nonStream.content);
+    return nonStream;
   }
 
   return { call };
 }
 
-type Retry = { sleep: (ms: number) => Promise<void>; maxAttempts: number; onRetry?: (info: RetryInfo) => void };
-
-async function openAiCall(
-  fetchImpl: FetchLike,
-  retry: Retry,
+async function openAiStreamCall(
+  streamFetch: StreamFetchLike,
   adapter: ProviderAdapter,
   baseUrl: string,
   model: string,
   messages: readonly AgentMessage[],
   tools: readonly ToolDefinition[],
   env: Readonly<Record<string, string | undefined>>,
+  opts: RunnerCallOptions,
 ): Promise<AgentTurnResult> {
-  const wire = messages.map((m) => {
+  const body = JSON.stringify({
+    model,
+    messages: toOpenAiWire(messages, adapter),
+    stream: true,
+    stream_options: { include_usage: true },
+    ...(opts.maxOutputTokens ? { max_tokens: opts.maxOutputTokens } : {}),
+    ...(tools.length ? { tools: toOpenAiTools(tools), tool_choice: "auto" } : {}),
+  });
+  const headers = { "content-type": "application/json", ...adapter.profile.staticHeaders, ...adapter.buildAuthHeaders(env) };
+  const url = `${baseUrl}/chat/completions`;
+  const host = hostOf(url);
+  const started = Date.now();
+  let res: Awaited<ReturnType<StreamFetchLike>>;
+  try {
+    res = await streamFetch(url, { method: "POST", headers, body, ...(opts.signal ? { signal: opts.signal } : {}) });
+  } catch (err) {
+    throw new ApiAgentError(`${host}: ${err instanceof Error ? err.message : String(err)}`, { host, retryable: true });
+  }
+  if (!res.ok) {
+    if (res.status === 401 || res.status === 403) throw new ApiAgentError(`${host} rejected credentials (HTTP ${res.status})`, { kind: "auth", host, retryable: false });
+    throw new ApiAgentError(`${host} returned HTTP ${res.status} on the streaming endpoint`, { host, retryable: res.status >= 500 });
+  }
+  const { result, firstTokenAt } = await consumeOpenAiStream(res.chunks, {
+    onText: (delta) => opts.onChunk?.(delta),
+    now: () => Date.now(),
+    sourceProviderId: adapter.profile.id,
+  });
+  const end = Date.now();
+  const requestMs = end - started;
+  // decodeMs = first generated token → end of the response stream. Using the
+  // stream end (not the last-delta timestamp) means TCP/read coalescing can
+  // only make the measured decode window LONGER, so the derived tok/s is a
+  // conservative under-estimate, never an inflated one.
+  const ttftMs = firstTokenAt !== undefined ? firstTokenAt - started : undefined;
+  return {
+    ...result,
+    timing: {
+      requestMs,
+      streamed: true,
+      ...(ttftMs !== undefined ? { ttftMs } : {}),
+      ...(firstTokenAt !== undefined ? { decodeMs: Math.max(0, end - firstTokenAt) } : {}),
+    },
+  };
+}
+
+function toOpenAiWire(messages: readonly AgentMessage[], adapter: ProviderAdapter): unknown[] {
+  return messages.map((m) => {
     switch (m.role) {
       case "system":
         return { role: "system", content: m.content };
@@ -342,18 +409,36 @@ async function openAiCall(
         return { role: "tool", tool_call_id: m.toolCallId, content: m.content };
     }
   });
+}
 
+type Retry = { sleep: (ms: number) => Promise<void>; maxAttempts: number; onRetry?: (info: RetryInfo) => void };
+
+async function openAiCall(
+  fetchImpl: FetchLike,
+  retry: Retry,
+  adapter: ProviderAdapter,
+  baseUrl: string,
+  model: string,
+  messages: readonly AgentMessage[],
+  tools: readonly ToolDefinition[],
+  env: Readonly<Record<string, string | undefined>>,
+  maxOutputTokens?: number,
+): Promise<AgentTurnResult> {
   const body = JSON.stringify({
     model,
-    messages: wire,
+    messages: toOpenAiWire(messages, adapter),
+    ...(maxOutputTokens ? { max_tokens: maxOutputTokens } : {}),
     ...(tools.length ? { tools: toOpenAiTools(tools), tool_choice: "auto" } : {}),
   });
 
   const headers = { "content-type": "application/json", ...adapter.profile.staticHeaders, ...adapter.buildAuthHeaders(env) };
+  const started = Date.now();
   const res = await callWithRetry(fetchImpl, `${baseUrl}/chat/completions`, { method: "POST", headers, body }, retry);
+  const requestMs = Date.now() - started;
 
   const parsed = JSON.parse(res.body) as {
     choices?: { message?: { content?: string | null; tool_calls?: { id: string; function: { name: string; arguments: string }; extra_content?: unknown }[] }; finish_reason?: string }[];
+    usage?: { prompt_tokens?: number; completion_tokens?: number };
   };
   const choice = parsed.choices?.[0];
   const message = choice?.message;
@@ -365,7 +450,13 @@ async function openAiCall(
       ? { providerContinuation: { sourceProviderId: adapter.profile.id, openAiExtraContent: tc.extra_content } }
       : {}),
   }));
-  return { content: message?.content ?? null, toolCalls, finishReason: choice?.finish_reason ?? "stop" };
+  return {
+    content: message?.content ?? null,
+    toolCalls,
+    finishReason: choice?.finish_reason ?? "stop",
+    ...(parsed.usage ? { usage: { promptTokens: parsed.usage.prompt_tokens, completionTokens: parsed.usage.completion_tokens } } : {}),
+    timing: { requestMs, streamed: false },
+  };
 }
 
 async function anthropicCall(
@@ -377,6 +468,7 @@ async function anthropicCall(
   messages: readonly AgentMessage[],
   tools: readonly ToolDefinition[],
   env: Readonly<Record<string, string | undefined>>,
+  maxOutputTokens?: number,
 ): Promise<AgentTurnResult> {
   // Anthropic has no system role in `messages`; system is a separate field.
   const systemParts = messages.filter((m) => m.role === "system").map((m) => (m as { content: string }).content);
@@ -402,18 +494,21 @@ async function anthropicCall(
 
   const body = JSON.stringify({
     model,
-    max_tokens: 8192,
+    max_tokens: maxOutputTokens ?? 8192,
     ...(system ? { system } : {}),
     messages: wire,
     ...(tools.length ? { tools: toAnthropicTools(tools) } : {}),
   });
 
   const headers = { "content-type": "application/json", "anthropic-version": "2023-06-01", ...adapter.profile.staticHeaders, ...adapter.buildAuthHeaders(env) };
+  const started = Date.now();
   const res = await callWithRetry(fetchImpl, `${baseUrl}/v1/messages`, { method: "POST", headers, body }, retry);
+  const requestMs = Date.now() - started;
 
   const parsed = JSON.parse(res.body) as {
     content?: { type: string; text?: string; id?: string; name?: string; input?: unknown }[];
     stop_reason?: string;
+    usage?: { input_tokens?: number; output_tokens?: number };
   };
   const textParts: string[] = [];
   const toolCalls: { id: string; name: string; arguments: string }[] = [];
@@ -423,7 +518,13 @@ async function anthropicCall(
       toolCalls.push({ id: block.id, name: block.name, arguments: JSON.stringify(block.input ?? {}) });
     }
   }
-  return { content: textParts.length ? textParts.join("\n") : null, toolCalls, finishReason: parsed.stop_reason ?? "end_turn" };
+  return {
+    content: textParts.length ? textParts.join("\n") : null,
+    toolCalls,
+    finishReason: parsed.stop_reason ?? "end_turn",
+    ...(parsed.usage ? { usage: { promptTokens: parsed.usage.input_tokens, completionTokens: parsed.usage.output_tokens } } : {}),
+    timing: { requestMs, streamed: false },
+  };
 }
 
 function safeJsonParse(s: string): unknown {

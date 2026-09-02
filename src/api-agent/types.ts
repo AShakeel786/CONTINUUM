@@ -32,6 +32,31 @@ export interface AgentTurnResult {
   readonly content: string | null;
   readonly toolCalls: readonly AgentToolCall[];
   readonly finishReason: string;
+  /** Authoritative token usage from the provider response, when it reports it. */
+  readonly usage?: { readonly promptTokens?: number; readonly completionTokens?: number };
+  /** Measured timing for this single model call. */
+  readonly timing?: {
+    readonly requestMs: number;
+    /** Streaming only: request send → first generated token. */
+    readonly ttftMs?: number;
+    /** Streaming only: first token → last token. */
+    readonly decodeMs?: number;
+    readonly streamed: boolean;
+  };
+}
+
+/** Optional per-call controls for a runner (streaming, cancellation, output bound). */
+export interface RunnerCallOptions {
+  /** When set, the runner streams and calls this with each text delta. */
+  readonly onChunk?: (textDelta: string) => void;
+  /** Cooperative cancellation for the in-flight request. */
+  readonly signal?: AbortSignal;
+  /**
+   * Upper bound on generated tokens for THIS call (wire `max_tokens`). Bounds
+   * a runaway response without capping a legitimate long coding answer;
+   * absent → the provider's own default.
+   */
+  readonly maxOutputTokens?: number;
 }
 
 export interface AgentLoopLimits {
@@ -61,6 +86,34 @@ export const DEFAULT_AGENT_LIMITS: AgentLoopLimits = {
 
 /** Why the agent loop stopped. `final` = the model produced an answer with no tool calls. */
 export type AgentStopReason = "final" | "max-iterations" | "timeout" | "stalled";
+
+/**
+ * Measured performance of one model response. Every field is optional: a
+ * value is present only when the backend/protocol makes it defensible —
+ * nothing here is estimated silently. `decodeTokPerSec` measures MODEL
+ * DECODING only (output tokens ÷ the wall time between the first and last
+ * generated token), never total request wall-clock and never including tool
+ * execution. `tokenSource` records whether counts are authoritative
+ * (provider `usage`) or a local tokenizer estimate.
+ */
+export interface TurnTelemetry {
+  readonly inputTokens?: number;
+  readonly outputTokens?: number;
+  /** Time from request send to the first generated token (streaming only). */
+  readonly ttftMs?: number;
+  /** Wall time between the first and last generated token (streaming only). */
+  readonly decodeMs?: number;
+  /** outputTokens / (decodeMs/1000). Streaming only. */
+  readonly decodeTokPerSec?: number;
+  /** Total request wall-clock for this model call (always available). */
+  readonly requestMs?: number;
+  readonly contextTokens?: number;
+  readonly contextLimit?: number;
+  /** "provider-usage" = authoritative from the response; "estimate" = local tokenizer. */
+  readonly tokenSource?: "provider-usage" | "estimate";
+  /** True when the model streamed its response token-by-token. */
+  readonly streamed?: boolean;
+}
 
 /**
  * Raised only for a genuinely unexpected loop fault. `max-iterations` /

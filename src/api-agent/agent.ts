@@ -20,11 +20,14 @@
 import { createHash } from "node:crypto";
 import type { ToolRegistry } from "../mcp/tools.js";
 import type { ApiRunner } from "./runner.js";
+import { estimateTokens } from "../token/tokenizer.js";
+import { selectToolsForTurn } from "./tool-selection.js";
 import {
   DEFAULT_AGENT_LIMITS,
   type AgentLoopLimits,
   type AgentMessage,
   type AgentStopReason,
+  type TurnTelemetry,
 } from "./types.js";
 import type { OptimizedToolOutput } from "../tool-output/types.js";
 import { ToolResultCache, computeCacheKey, type ToolScopeProvider } from "../tool-cache/tool-cache.js";
@@ -51,7 +54,20 @@ export interface AgentLoopDeps {
    * directly. `task` (default) is the normal agentic path.
    */
   readonly taskIntent?: "absent" | "conversational" | "task";
+  /** Coarse per-turn lifecycle state, for a live status line. */
+  readonly onState?: (state: AgentRunState) => void;
+  /** Incremental assistant text (streaming). Absent → no streaming requested. */
+  readonly onStreamChunk?: (textDelta: string) => void;
+  /** Model context-window size, for the telemetry footer's `ctx x/limit`. */
+  readonly contextLimit?: number;
 }
+
+export type AgentRunState =
+  | { readonly kind: "thinking" }
+  | { readonly kind: "tool"; readonly name: string }
+  | { readonly kind: "generating" }
+  | { readonly kind: "done" }
+  | { readonly kind: "error"; readonly detail: string };
 
 export interface AgentLoopResult {
   readonly finalContent: string | null;
@@ -59,6 +75,14 @@ export interface AgentLoopResult {
   readonly toolCalls: number;
   /** How the loop ended. Anything but `final` means the answer may be partial. */
   readonly stopReason: AgentStopReason;
+  /** Measured performance for this run (fields present only when defensible). */
+  readonly telemetry: TurnTelemetry;
+  /**
+   * The full message history this turn produced (system + user + every
+   * assistant/tool exchange). An interactive caller replaces its running
+   * conversation with this so the next user turn sees what tools were run.
+   */
+  readonly conversation: readonly AgentMessage[];
 }
 
 interface CallRecord {
@@ -116,31 +140,100 @@ export async function runAgentLoop(messages: readonly AgentMessage[], deps: Agen
   let stallSignals = 0;
   let lastAssistantText: string | null = null;
 
-  const partial = (reason: AgentStopReason): AgentLoopResult => ({
-    finalContent: buildPartialAnswer(reason, lastAssistantText, activity),
-    iterations,
-    toolCalls,
-    stopReason: reason,
-  });
+  // Telemetry accumulation.
+  let promptTokens: number | undefined;
+  let completionTokens: number | undefined;
+  let tokenSource: "provider-usage" | "estimate" | undefined;
+  let requestMsTotal = 0;
+  let finalTurnTiming: { requestMs: number; ttftMs?: number; decodeMs?: number; streamed: boolean } | undefined;
+  const inputEstimate = estimateTokens(conversation.map((m) => ("content" in m && typeof m.content === "string" ? m.content : "")).join("\n")).tokens;
+
+  const buildTelemetry = (): TurnTelemetry => {
+    const outStr = lastAssistantText ?? "";
+    const outTok = completionTokens ?? (outStr ? estimateTokens(outStr).tokens : undefined);
+    const inTok = promptTokens ?? inputEstimate;
+    const ctxTok = (inTok ?? 0) + (outTok ?? 0);
+    const decodeMs = finalTurnTiming?.decodeMs;
+    return {
+      ...(inTok !== undefined ? { inputTokens: inTok } : {}),
+      ...(outTok !== undefined ? { outputTokens: outTok } : {}),
+      ...(finalTurnTiming?.ttftMs !== undefined ? { ttftMs: finalTurnTiming.ttftMs } : {}),
+      ...(decodeMs !== undefined ? { decodeMs } : {}),
+      ...(decodeMs !== undefined && decodeMs > 0 && outTok
+        ? { decodeTokPerSec: Number(((outTok / decodeMs) * 1000).toFixed(1)) }
+        : {}),
+      ...(requestMsTotal > 0 ? { requestMs: requestMsTotal } : {}),
+      ...(ctxTok > 0 ? { contextTokens: ctxTok } : {}),
+      ...(deps.contextLimit ? { contextLimit: deps.contextLimit } : {}),
+      ...(tokenSource ? { tokenSource } : { tokenSource: "estimate" as const }),
+      ...(finalTurnTiming ? { streamed: finalTurnTiming.streamed } : {}),
+    };
+  };
+
+  const partial = (reason: AgentStopReason): AgentLoopResult => {
+    deps.onState?.({ kind: "done" });
+    return {
+      finalContent: buildPartialAnswer(reason, lastAssistantText, activity),
+      iterations,
+      toolCalls,
+      stopReason: reason,
+      telemetry: buildTelemetry(),
+      conversation: [...conversation],
+    };
+  };
 
   while (iterations < limits.maxIterations) {
     if (now() - started > limits.timeoutMs) return partial("timeout");
     iterations += 1;
 
-    // First turn with no real task → offer no tools so a greeting is answered
-    // directly rather than triggering autonomous exploration.
-    const withholdTools = iterations === 1 && intent !== "task";
-    const turn = await deps.runner.call(conversation, withholdTools ? [] : deps.tools.list());
+    // Per-turn tool schema: none for a greeting / no-task turn (answered
+    // directly), and a trimmed coding+retrieval+memory-read set for a task
+    // turn — the full registry's session/project bookkeeping tools are
+    // harness-driven and only bloat the prompt.
+    const turnTools = selectToolsForTurn(deps.tools.list(), intent);
+    deps.onState?.({ kind: "thinking" });
+    // Without streaming there is no first-token signal, so move to
+    // "generating" immediately — the model IS generating for the whole call.
+    if (!deps.onStreamChunk) deps.onState?.({ kind: "generating" });
+    let firstChunkSeen = false;
+    const turn = await deps.runner.call(conversation, turnTools, {
+      // Bound a runaway response without truncating a real coding answer.
+      maxOutputTokens: intent === "task" ? 8192 : 800,
+      ...(deps.onStreamChunk
+        ? {
+            onChunk: (delta: string) => {
+              if (!firstChunkSeen) {
+                firstChunkSeen = true;
+                deps.onState?.({ kind: "generating" });
+              }
+              deps.onStreamChunk!(delta);
+            },
+          }
+        : {}),
+    });
+    // Accumulate token usage / timing.
+    if (turn.usage && (turn.usage.promptTokens !== undefined || turn.usage.completionTokens !== undefined)) {
+      promptTokens = turn.usage.promptTokens ?? promptTokens;
+      completionTokens = (completionTokens ?? 0) + (turn.usage.completionTokens ?? 0);
+      tokenSource = "provider-usage";
+    }
+    if (turn.timing) {
+      requestMsTotal += turn.timing.requestMs;
+      // The final answer turn's timing is what the decode-rate footer reports.
+      if (turn.toolCalls.length === 0) finalTurnTiming = turn.timing;
+    }
     conversation.push({ role: "assistant", content: turn.content, ...(turn.toolCalls.length ? { toolCalls: turn.toolCalls } : {}) });
     if (turn.content) lastAssistantText = turn.content;
 
     if (turn.toolCalls.length === 0) {
-      return { finalContent: turn.content, iterations, toolCalls, stopReason: "final" };
+      deps.onState?.({ kind: "done" });
+      return { finalContent: turn.content, iterations, toolCalls, stopReason: "final", telemetry: buildTelemetry(), conversation: [...conversation] };
     }
 
     let stalledThisTurn = false;
     for (const tc of turn.toolCalls) {
       toolCalls += 1;
+      deps.onState?.({ kind: "tool", name: tc.name });
       const finalText = await resolveToolText(deps, tc.name, tc.arguments);
       conversation.push({ role: "tool", toolCallId: tc.id, content: finalText });
       deps.onEvent?.("tool", `${tc.name} → ${finalText.slice(0, 120)}`);

@@ -43,11 +43,12 @@ describe("classifyTaskIntent", () => {
 });
 
 describe("buildInitialMessages — no-task guardrails", () => {
-  it("an absent goal produces a do-not-explore directive", () => {
+  it("an absent goal produces a short greet-and-ask directive (not a standing no-tools order)", () => {
     const msgs = buildInitialMessages(rendered, "(untitled)");
     const user = msgs.find((m) => m.role === "user")!.content;
-    expect(user).toMatch(/no task has been specified/i);
-    expect(user).toMatch(/do not call any tools/i);
+    expect(user).toMatch(/without stating a task/i);
+    expect(user).toMatch(/ask what|what they'd like/i);
+    expect(user.length).toBeLessThan(200); // short — applies to this turn only
   });
   it("a real task passes the query through unchanged", () => {
     const msgs = buildInitialMessages(rendered, "fix the parser");

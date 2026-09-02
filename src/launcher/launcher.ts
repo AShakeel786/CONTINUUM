@@ -597,8 +597,13 @@ export class Launcher {
     // Context assembly: MemoryCore when available, degrade gracefully otherwise.
     const memoryCoreAvailable = !!this.deps.memoryCore;
     let memoryCoreNote: string | undefined;
+    // The session-maintenance block instructs the agent to drive the
+    // `session_update` MCP tool. The Direct-API harness records session
+    // activity automatically and does NOT expose `session_update` in the
+    // model's trimmed tool schema, so that block is pure prompt bloat (and a
+    // contradiction) for an API run — a native CLI still gets it.
     const callerBlocks: ContextBlock[] = [
-      buildSessionMaintenanceBlock(session),
+      ...(runtimeKind === "api" ? [] : [buildSessionMaintenanceBlock(session)]),
       buildResumeInstructionsBlock(session, { stale, reasons: staleReasons }),
     ];
     // Repo intelligence map (Token Efficiency Phase 2) — navigation-only context;

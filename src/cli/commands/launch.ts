@@ -34,6 +34,11 @@ import { codexProfile } from "../../providers/profiles/codex.js";
 import { buildToolRegistry } from "../../mcp/build.js";
 import { runApiAgent } from "../../api-agent/run.js";
 import { MemoryRawOutputStore } from "../../tool-output/store.js";
+import { runInteractiveApiSession } from "../../api-agent/interactive.js";
+import { telemetryOneLine } from "../../api-agent/telemetry.js";
+import { createReplIo } from "../repl-io.js";
+import { LocalServiceManager } from "../../local-service/manager.js";
+import { resolveLocalServiceDescriptor } from "../../local-service/descriptor.js";
 import { ApiAgentError, type NetworkFailureKind } from "../../api-agent/types.js";
 import { ApiFailoverExhaustedError, createFailoverApiRunner, type FailoverPolicy } from "../../api-agent/failover.js";
 import { isPoolFreeEligible } from "../../providers/billing.js";
@@ -257,7 +262,7 @@ const AUTO_ROUTE_STDERR_TAIL_BYTES = 8192;
  * not. Explicit provider/model selections never fall back — they keep the
  * original fail-fast behavior. Every path is bounded by the finite chain.
  */
-export async function launchPrepared(ctx: { launcher: Launcher; providers: ProviderRegistry; sessionManager: SessionManager; pricing?: PricingAwarenessService; dataDir: string; apiFailoverPolicy?: FailoverPolicy }, prep: LaunchPreparation, out: (s: string) => void, spawnFn: (plan: import("../../launcher/types.js").LaunchPlan) => Promise<{ exitCode: number | null; stderrTail?: string }> = spawnCli): Promise<number> {
+export async function launchPrepared(ctx: { launcher: Launcher; providers: ProviderRegistry; sessionManager: SessionManager; pricing?: PricingAwarenessService; dataDir: string; apiFailoverPolicy?: FailoverPolicy; interactive?: boolean }, prep: LaunchPreparation, out: (s: string) => void, spawnFn: (plan: import("../../launcher/types.js").LaunchPlan) => Promise<{ exitCode: number | null; stderrTail?: string }> = spawnCli): Promise<number> {
   if (prep.runtimeKind === "api") {
     const adapter = ctx.providers.get(prep.providerRef.providerId);
     // Run-scoped raw-output store: a `tool-output://` handle produced this run
@@ -308,11 +313,22 @@ export async function launchPrepared(ctx: { launcher: Launcher; providers: Provi
       const pool = runner.status().map((candidate) => `${candidate.displayName}:${candidate.health}`).join(", ");
       out(`[route] Active ${adapter.profile.displayName}; API pool ${pool}\n`);
     }
+
+    // Persistent interactive session — the Direct-API equivalent of a native
+    // coding CLI's REPL. Only for an explicit single provider (never the
+    // automatic free-API failover chain), and only when the caller asked for
+    // it (a real TTY, no --print). One-shot behavior is otherwise unchanged.
+    if (ctx.interactive && !runner) {
+      return runInteractiveDirectApi({ adapter, tools, rawStore, cache, scopeProvider, recordToolActivity, prep, dataDir: ctx.dataDir, sessionManager: ctx.sessionManager });
+    }
+
     try {
-      const result = await runApiAgent({ adapter, ...(runner ? { runner } : {}), tools, rawStore, rendered: prep.rendered, query: prep.session?.taskGoal ?? "", onOutput: out, cache, scopeProvider, recordToolActivity, env: prep.plan.env });
+      const result = await runApiAgent({ adapter, ...(runner ? { runner } : {}), tools, rawStore, rendered: prep.rendered, query: prep.session?.taskGoal ?? "", onOutput: out, contextLimit: adapter.getCapabilities().contextWindowTokens, cache, scopeProvider, recordToolActivity, env: prep.plan.env });
       if (result.finalContent) out(`\n${result.finalContent}\n`);
       if (result.stopReason && result.stopReason !== "final") {
         out(`\nℹ️  Agent stopped early (${result.stopReason}) after ${result.iterations} iteration(s). The response above is partial.\n`);
+      } else if (result.telemetry && (result.telemetry.outputTokens !== undefined || result.telemetry.requestMs !== undefined)) {
+        out(`\nℹ️  ${telemetryOneLine(result.telemetry)}\n`);
       }
       return 0;
     } catch (err) {
@@ -475,6 +491,68 @@ export async function launchPrepared(ctx: { launcher: Launcher; providers: Provi
 }
 
 /**
+ * Persistent interactive Direct-API session (managed local models / API-only
+ * providers). Keeps one conversation + session + project + provider + memory
+ * scope + tool state across turns until `/exit` or Ctrl-D. The managed local
+ * service is deliberately NOT stopped on exit.
+ */
+async function runInteractiveDirectApi(a: {
+  adapter: import("../../providers/types.js").ProviderAdapter;
+  tools: import("../../mcp/tools.js").ToolRegistry;
+  rawStore: MemoryRawOutputStore;
+  cache: ToolResultCache;
+  scopeProvider: import("../../tool-cache/tool-cache.js").ToolScopeProvider;
+  recordToolActivity?: (tool: string, summary: string) => Promise<void>;
+  prep: LaunchPreparation;
+  dataDir: string;
+  sessionManager: SessionManager;
+}): Promise<number> {
+  const { adapter, prep } = a;
+  const io = createReplIo();
+  const descriptor = adapter.profile.localService ? resolveLocalServiceDescriptor(adapter.profile) : undefined;
+  const serviceManager = descriptor ? new LocalServiceManager({ dataDir: a.dataDir }) : undefined;
+  try {
+    const outcome = await runInteractiveApiSession({
+      adapter,
+      tools: a.tools,
+      rendered: prep.rendered,
+      initialQuery: prep.session?.taskGoal ?? "",
+      contextLimit: adapter.getCapabilities().contextWindowTokens,
+      env: prep.plan.env,
+      cache: a.cache,
+      scopeProvider: a.scopeProvider,
+      rawStore: a.rawStore,
+      ...(a.recordToolActivity ? { recordToolActivity: a.recordToolActivity } : {}),
+      onExchange: async (userText, assistantText) => {
+        await a.tools.call("memory_capture", { user_content: userText, assistant_content: assistantText }).catch(() => {});
+      },
+      io,
+      info: {
+        sessionId: prep.session?.sessionId ?? "(none)",
+        projectLabel: prep.project.name,
+        projectPath: prep.project.path,
+        providerId: prep.providerRef.providerId,
+        model: prep.providerRef.model,
+        ...(prep.projectScope ? { memoryScope: `project-${prep.projectScope}` } : {}),
+        service: async () => {
+          if (!descriptor || !serviceManager) return { state: "n/a" };
+          const s = await serviceManager.status(descriptor).catch(() => undefined);
+          if (!s) return { state: "unknown" };
+          return {
+            state: s.state,
+            ...(s.pid !== undefined ? { pid: s.pid } : {}),
+            endpoint: `http://${s.host}:${s.port}${descriptor.healthPath}`,
+          };
+        },
+      },
+    });
+    return outcome.endedBy === "exit" || outcome.endedBy === "eof" ? 0 : 0;
+  } finally {
+    io.close();
+  }
+}
+
+/**
  * When the user granted one-time MCP auto-configure permission, ensure the
  * CONTINUUM MCP server is registered with the installed native CLIs before a
  * launch. Idempotent; never overwrites unrelated user MCP servers.
@@ -482,6 +560,18 @@ export async function launchPrepared(ctx: { launcher: Launcher; providers: Provi
 export async function ensureMcpRegistration(): Promise<void> {
   const config = await new ConfigStore(resolveDataDir()).load();
   await ensureMcpRegistered(liveRuntime, [claudeProfile.cliLaunch, codexProfile.cliLaunch], config.mcpAutoConfigure);
+}
+
+/**
+ * Whether a launch should open the persistent interactive Direct-API session.
+ * Requires a real TTY (so a piped/CI run stays one-shot and backward-
+ * compatible) and no explicit `--print` / `--one-shot` opt-out. Native-CLI
+ * providers are never affected — this only gates the API-agent branch.
+ */
+export function wantsInteractive(args: readonly string[], io: CliIo): boolean {
+  if (args.includes("--print") || args.includes("--one-shot") || args.includes("-1")) return false;
+  if (io.nonInteractive) return false;
+  return isStdinTty() && Boolean((process.stdout as NodeJS.WriteStream).isTTY);
 }
 
 export async function runLaunchCommand(args: readonly string[], io: CliIo): Promise<number> {
@@ -545,7 +635,7 @@ export async function runLaunchCommand(args: readonly string[], io: CliIo): Prom
     }
 
     await ensureMcpRegistration();
-    return launchPrepared({ launcher, providers, sessionManager, pricing, dataDir, apiFailoverPolicy }, prep, out);
+    return launchPrepared({ launcher, providers, sessionManager, pricing, dataDir, apiFailoverPolicy, interactive: wantsInteractive(args, io) }, prep, out);
   } catch (err) {
     if (err instanceof NoProjectError || err instanceof ProviderNotAuthenticatedError || err instanceof NoAuthenticatedAgentError || err instanceof LocalDependencyUnavailableError || err instanceof LocalServiceUnavailableError || err instanceof ModelUnavailableError) {
       out(`${err.message}\n`);
@@ -604,7 +694,7 @@ export async function runResumeCommand(args: readonly string[], io: CliIo): Prom
     if (prep.session) for (const line of await checkPricing(prep.session.sessionId, pricing, handoffManager)) out(line);
     printPeakProWarning(out, prep, pricing);
     await ensureMcpRegistration();
-    return launchPrepared({ launcher, providers, sessionManager, pricing, dataDir, apiFailoverPolicy: apiFailoverPolicyFromArgs(args) }, prep, out);
+    return launchPrepared({ launcher, providers, sessionManager, pricing, dataDir, apiFailoverPolicy: apiFailoverPolicyFromArgs(args), interactive: wantsInteractive(args, io) }, prep, out);
   } catch (err) {
     if (err instanceof NoAuthenticatedAgentError || err instanceof ProviderNotAuthenticatedError || err instanceof LocalDependencyUnavailableError || err instanceof LocalServiceUnavailableError || err instanceof ModelUnavailableError) {
       out(`${err.message}\n`);
