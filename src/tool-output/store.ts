@@ -105,4 +105,39 @@ export class FileRawOutputStore implements RawOutputStore {
   }
 }
 
+/**
+ * In-memory, run-scoped raw store. Created per API-agent run and thrown away
+ * with it, so a `tool-output://` handle produced during a run is guaranteed
+ * to still resolve for the rest of that run — unrelated historical output can
+ * never evict it (the `FileRawOutputStore`'s disk budget prunes globally by
+ * mtime across all sessions, which is what let a mid-run handle disappear).
+ * Bounded by a generous FIFO entry cap so a pathological run still can't grow
+ * without limit.
+ */
+export class MemoryRawOutputStore implements RawOutputStore {
+  private readonly mem = new Map<string, string>();
+  private readonly order: string[] = [];
+  constructor(private readonly maxEntries = 4000) {}
+
+  get size(): number {
+    return this.mem.size;
+  }
+
+  put(text: string): string {
+    const id = createHash("sha1").update(text).update(randomUUID()).digest("hex").slice(0, 24);
+    this.mem.set(id, text);
+    this.order.push(id);
+    while (this.mem.size > this.maxEntries) {
+      const oldest = this.order.shift();
+      if (oldest === undefined) break;
+      this.mem.delete(oldest);
+    }
+    return id;
+  }
+
+  get(id: string): string | undefined {
+    return this.mem.get(id);
+  }
+}
+
 export const defaultRawStore: RawOutputStore = new FileRawOutputStore();

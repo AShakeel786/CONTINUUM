@@ -26,20 +26,27 @@ describe("optimizers — deterministic lossless-first", () => {
     expect(dedupeRepeatedLines("a\na\na\na\na\na\na\na\na\na\nb\nc\nc\nc\nc\n")).toBe("a  (×10)\nb\nc  (×4)");
   });
 
-  it("test runner preserves FAIL + summary, collapses PASS", () => {
+  it("test runner preserves FAIL + summary + assertion context, collapses PASS", () => {
     const out = [
-      "PASS src/a.test.ts",
-      "PASS src/b.test.ts",
+      ...Array.from({ length: 20 }, (_, i) => `PASS src/mod-${i}.test.ts`),
       "FAIL src/c.test.ts",
+      "  ● renders the widget",
       "  Expected: 1",
       "  Received: 2",
-      "Tests: 3 passed, 1 failed, 4 total",
+      "    at Object.<anonymous> (src/c.test.ts:42:5)",
+      "Tests: 20 passed, 1 failed, 21 total",
     ].join("\n");
     const r = optimizeTestRunner(out)!;
+    // Complete failure identity survives.
     expect(r).toContain("FAIL src/c.test.ts");
     expect(r).toContain("Expected: 1");
+    expect(r).toContain("Received: 2");
+    expect(r).toContain("src/c.test.ts:42:5");
     expect(r).toContain("1 failed");
-    expect(r).not.toContain("PASS src/a.test.ts");
+    // Passing noise is gone, and the marker says the failure record is complete.
+    expect(r).not.toContain("PASS src/mod-0.test.ts");
+    expect(r).toContain("failures below are complete");
+    expect(r.length).toBeLessThan(out.length);
   });
 
   it("compiler preserves file:line:col diagnostics and drops compile noise", () => {

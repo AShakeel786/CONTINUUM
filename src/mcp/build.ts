@@ -10,7 +10,7 @@ import { textResult } from "./tools.js";
 import { buildMemoryTools, type MemoryCoreProvider } from "./memory-tools.js";
 import { buildSessionTools, type SessionToolDeps } from "./session-tools.js";
 import { buildCodingTools, codingToolsAvailable } from "./coding-tools.js";
-import { defaultRawStore } from "../tool-output/store.js";
+import { defaultRawStore, type RawOutputStore } from "../tool-output/store.js";
 import { FilePruneStore } from "../context/pruning.js";
 
 const defaultPruneStore = new FilePruneStore();
@@ -44,6 +44,13 @@ export interface BuildRegistryOptions {
    * is the intended behavior outside a registered project.
    */
   readonly memoryProjectScope?: string;
+  /**
+   * Raw-output retention store backing `tool_output_retrieve`. The launcher
+   * passes a run-scoped store so a `tool-output://` handle created during an
+   * API-agent run cannot be evicted before the model retrieves it. Defaults
+   * to the shared cross-session store.
+   */
+  readonly rawStore?: RawOutputStore;
 }
 
 /** Assembles the default tool registry. */
@@ -70,7 +77,7 @@ export async function buildToolRegistry(opts: BuildRegistryOptions = {}): Promis
   const registry = new ToolRegistry();
   for (const t of buildMemoryTools(memoryProvider)) registry.register(t);
   for (const t of buildSessionTools(sessionDeps)) registry.register(t);
-  for (const t of buildRetrievalTools()) registry.register(t);
+  for (const t of buildRetrievalTools(opts.rawStore ?? defaultRawStore)) registry.register(t);
   if (opts.coding && codingToolsAvailable(opts.coding.projectPath)) {
     for (const t of buildCodingTools(opts.coding.projectPath)) registry.register(t);
   }
@@ -78,7 +85,7 @@ export async function buildToolRegistry(opts: BuildRegistryOptions = {}): Promis
 }
 
 /** Raw-output retrieval tools for the Tool Output Optimizer + reversible pruning. */
-function buildRetrievalTools(): RegisteredTool[] {
+function buildRetrievalTools(rawStore: RawOutputStore): RegisteredTool[] {
   return [
     {
       definition: {
@@ -90,8 +97,13 @@ function buildRetrievalTools(): RegisteredTool[] {
       },
       handler: async (args) => {
         const id = typeof args.id === "string" ? args.id : "";
-        const raw = defaultRawStore.get(id);
-        return raw !== undefined ? textResult(raw) : textResult(`tool-output ${id} not found (may have been evicted)`, true);
+        const raw = rawStore.get(id);
+        return raw !== undefined
+          ? textResult(raw)
+          : textResult(
+              `tool-output ${id} is no longer available. Do NOT re-run the command to rediscover it — the optimized summary you already received in the conversation is the retained record. Work from that, or take a different action.`,
+              true,
+            );
       },
     },
     {

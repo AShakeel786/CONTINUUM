@@ -33,6 +33,7 @@ import { claudeProfile } from "../../providers/profiles/claude.js";
 import { codexProfile } from "../../providers/profiles/codex.js";
 import { buildToolRegistry } from "../../mcp/build.js";
 import { runApiAgent } from "../../api-agent/run.js";
+import { MemoryRawOutputStore } from "../../tool-output/store.js";
 import { ApiAgentError, type NetworkFailureKind } from "../../api-agent/types.js";
 import { ApiFailoverExhaustedError, createFailoverApiRunner, type FailoverPolicy } from "../../api-agent/failover.js";
 import { isPoolFreeEligible } from "../../providers/billing.js";
@@ -259,9 +260,14 @@ const AUTO_ROUTE_STDERR_TAIL_BYTES = 8192;
 export async function launchPrepared(ctx: { launcher: Launcher; providers: ProviderRegistry; sessionManager: SessionManager; pricing?: PricingAwarenessService; dataDir: string; apiFailoverPolicy?: FailoverPolicy }, prep: LaunchPreparation, out: (s: string) => void, spawnFn: (plan: import("../../launcher/types.js").LaunchPlan) => Promise<{ exitCode: number | null; stderrTail?: string }> = spawnCli): Promise<number> {
   if (prep.runtimeKind === "api") {
     const adapter = ctx.providers.get(prep.providerRef.providerId);
+    // Run-scoped raw-output store: a `tool-output://` handle produced this run
+    // stays retrievable for the whole run (the shared disk store prunes
+    // globally by mtime and could evict a mid-run handle).
+    const rawStore = new MemoryRawOutputStore();
     const tools = await buildToolRegistry({
       dataDir: ctx.dataDir,
       coding: { projectPath: prep.project.path },
+      rawStore,
       // Direct-API `memory_recall` / `memory_search` / `memory_capture` must hit
       // the SAME per-project MemoryCore bucket the launcher's context injection
       // uses — never the global `default` bucket. Project-mode only; general /
@@ -303,8 +309,11 @@ export async function launchPrepared(ctx: { launcher: Launcher; providers: Provi
       out(`[route] Active ${adapter.profile.displayName}; API pool ${pool}\n`);
     }
     try {
-      const result = await runApiAgent({ adapter, ...(runner ? { runner } : {}), tools, rendered: prep.rendered, query: prep.session?.taskGoal ?? "", onOutput: out, cache, scopeProvider, recordToolActivity, env: prep.plan.env });
+      const result = await runApiAgent({ adapter, ...(runner ? { runner } : {}), tools, rawStore, rendered: prep.rendered, query: prep.session?.taskGoal ?? "", onOutput: out, cache, scopeProvider, recordToolActivity, env: prep.plan.env });
       if (result.finalContent) out(`\n${result.finalContent}\n`);
+      if (result.stopReason && result.stopReason !== "final") {
+        out(`\nℹ️  Agent stopped early (${result.stopReason}) after ${result.iterations} iteration(s). The response above is partial.\n`);
+      }
       return 0;
     } catch (err) {
       if (!(err instanceof ApiAgentError)) {

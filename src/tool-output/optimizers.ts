@@ -107,7 +107,17 @@ export function optimizeTestRunner(text: string): string | undefined {
   }
 
   if (!hasPass && !hasFail) return undefined; // not test output
-  const head = hasPass ? [`[passed tests omitted — see summary]`] : [];
+  // When there are failures, this block IS the complete failure record (every
+  // FAIL line + its assertion/stack context is kept) — say so, so the model
+  // works from it instead of re-running the suite. Only passing noise is dropped.
+  // When there are failures, the kept block IS the complete failure record
+  // (every FAIL line + assertion/stack context) — only passing noise is
+  // dropped, so the model has no reason to re-run the suite.
+  const head = hasFail
+    ? [`[passing tests omitted; failures below are complete]`]
+    : hasPass
+      ? [`[all tests passed; output omitted]`]
+      : [];
   const summaryBlock = summaryLine ? [summaryLine] : [];
   const keptBlock = kept.length ? [...head, ...summaryBlock, ...kept] : [...head, ...summaryBlock, ...tail.slice(0, 20)];
   const result = keptBlock.join("\n");

@@ -598,3 +598,45 @@ describe("project defaultProvider migration (local-qwen38 → local-ornith15)", 
     expect(await registry.migrateProviderIds((id) => id)).toEqual([]);
   });
 });
+
+// ── api-agent run isolation + graceful partial (loop control) ─────────────
+describe("launchPrepared api-agent loop-control wiring", () => {
+  beforeEach(() => { process.env[MEMORY_CORE_ENV_ONLY_ENV] = "1"; });
+
+  it("hands the api-agent a run-scoped raw store (not the shared cross-session store)", async () => {
+    const { deps, registry, sessionManager, dataDir } = await buildFallbackDeps({
+      registerOrnith: true,
+      ensureLocalService: async () => ({ kind: "reused-foreign", host: "127.0.0.1", port: 8080 }),
+    });
+    const project = await registry.add({ name: "rs", path: mkdtempSync(join(tmpdir(), "cont-rs-")) });
+    const launcher = new Launcher(deps);
+    const launchPrep = await launcher.prepareLaunch({ projectKey: project.id, providerId: "local-ornith15", taskGoal: "do it" }, { permissionMode: "safe" });
+
+    mockedRun.mockResolvedValueOnce({ finalContent: "ok", iterations: 1, toolCalls: 0, stopReason: "final" } as never);
+    const { out } = collectOut();
+    await launchPrepared({ launcher, providers: deps.providers, sessionManager, dataDir }, launchPrep, out, async () => ({ exitCode: 0 }));
+
+    const call = mockedRun.mock.calls.at(-1)![0];
+    expect(call.rawStore).toBeDefined();
+    expect(call.rawStore!.constructor.name).toBe("MemoryRawOutputStore");
+  });
+
+  it("surfaces a partial-progress note when the loop stops early", async () => {
+    const { deps, registry, sessionManager, dataDir } = await buildFallbackDeps({
+      registerOrnith: true,
+      ensureLocalService: async () => ({ kind: "reused-foreign", host: "127.0.0.1", port: 8080 }),
+    });
+    const project = await registry.add({ name: "pp", path: mkdtempSync(join(tmpdir(), "cont-pp-")) });
+    const launcher = new Launcher(deps);
+    const launchPrep = await launcher.prepareLaunch({ projectKey: project.id, providerId: "local-ornith15", taskGoal: "big task" }, { permissionMode: "safe" });
+
+    mockedRun.mockResolvedValueOnce({ finalContent: "partial findings…", iterations: 25, toolCalls: 40, stopReason: "stalled" } as never);
+    const { out, lines } = collectOut();
+    const exit = await launchPrepared({ launcher, providers: deps.providers, sessionManager, dataDir }, launchPrep, out, async () => ({ exitCode: 0 }));
+
+    expect(exit).toBe(0);
+    const joined = lines.join("");
+    expect(joined).toContain("partial findings…");
+    expect(joined).toContain("stopped early (stalled)");
+  });
+});

@@ -35,15 +35,40 @@ export interface AgentTurnResult {
 }
 
 export interface AgentLoopLimits {
-  /** Maximum model→tool iterations before a forced stop. */
+  /** Maximum model→tool iterations before a forced (graceful) stop. */
   readonly maxIterations: number;
   /** Wall-clock timeout for the whole loop. */
   readonly timeoutMs: number;
+  /**
+   * How many times the same tool call (name + normalized arguments) may
+   * produce a materially-equivalent result before the loop injects a stall
+   * signal telling the model to converge. Default 3.
+   */
+  readonly stallThreshold?: number;
+  /**
+   * How many stall signals to inject before giving up and returning a partial
+   * answer rather than burning the rest of `maxIterations`. Default 2.
+   */
+  readonly maxStallSignals?: number;
 }
 
-export const DEFAULT_AGENT_LIMITS: AgentLoopLimits = { maxIterations: 25, timeoutMs: 10 * 60_000 };
+export const DEFAULT_AGENT_LIMITS: AgentLoopLimits = {
+  maxIterations: 25,
+  timeoutMs: 10 * 60_000,
+  stallThreshold: 3,
+  maxStallSignals: 2,
+};
 
-/** Raised when the loop would exceed its bounds — never an unbounded run. */
+/** Why the agent loop stopped. `final` = the model produced an answer with no tool calls. */
+export type AgentStopReason = "final" | "max-iterations" | "timeout" | "stalled";
+
+/**
+ * Raised only for a genuinely unexpected loop fault. `max-iterations` /
+ * `timeout` / `stalled` are NOT thrown — the loop returns a graceful partial
+ * result (see `AgentLoopResult.stopReason`) so the caller can surface
+ * accumulated findings instead of a bare "loop exceeded N iterations".
+ * Retained for backwards compatibility and for callers that still catch it.
+ */
 export class AgentLoopError extends Error {
   readonly reason: "max-iterations" | "timeout";
   constructor(reason: "max-iterations" | "timeout", detail: string) {
