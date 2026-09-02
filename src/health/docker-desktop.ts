@@ -10,7 +10,12 @@
  * Docker Desktop default) over the all-users Program Files path.
  */
 import { existsSync } from "node:fs";
-import { delimiter, dirname, join } from "node:path";
+import { delimiter } from "node:path";
+// These are always Windows filesystem paths (the function early-returns for
+// every other platform), so build them with Windows semantics regardless of
+// the host OS running the code — otherwise discovery is only correct when the
+// dev machine is also Windows.
+import { win32 as winpath } from "node:path";
 
 export interface DockerDesktopDiscoveryDeps {
   readonly platform: NodeJS.Platform;
@@ -23,12 +28,12 @@ export function discoverDockerDesktop(deps: DockerDesktopDiscoveryDeps): string 
   if (deps.platform !== "win32") return undefined;
   const candidates: string[] = [];
   const local = deps.env.LOCALAPPDATA;
-  if (local) candidates.push(join(local, "Programs", "DockerDesktop", "Docker Desktop.exe"));
+  if (local) candidates.push(winpath.join(local, "Programs", "DockerDesktop", "Docker Desktop.exe"));
   for (const root of [deps.env.ProgramFiles, deps.env.ProgramW6432]) {
-    if (root) candidates.push(join(root, "Docker", "Docker", "Docker Desktop.exe"));
+    if (root) candidates.push(winpath.join(root, "Docker", "Docker", "Docker Desktop.exe"));
   }
   const cli = deps.findOnPath("docker");
-  if (cli) candidates.push(join(dirname(cli), "..", "..", "Docker Desktop.exe"));
+  if (cli) candidates.push(winpath.join(winpath.dirname(cli), "..", "..", "Docker Desktop.exe"));
   return candidates.find((c) => deps.exists(c));
 }
 
@@ -37,7 +42,7 @@ function dockerCliOnPath(exe: string): string | undefined {
   for (const dir of (process.env.PATH ?? "").split(delimiter)) {
     if (!dir) continue;
     for (const ext of extensions) {
-      const p = join(dir, exe + ext);
+      const p = winpath.join(dir, exe + ext);
       try {
         if (existsSync(p)) return p;
       } catch {
