@@ -54,6 +54,13 @@ export interface HealthRuntime {
   readonly now: () => number;
   /** Run a shell command; resolves {code, stdout, stderr}. Never prints directly. */
   readonly run: (cmd: string, args: readonly string[], opts?: { timeoutMs?: number; cwd?: string }) => Promise<{ code: number | null; stdout: string; stderr: string }>;
+  /**
+   * Launch a GUI application (e.g. Docker Desktop) detached from our own
+   * console/pipes and do NOT wait for it to exit. Resolves once the process
+   * has spawned. `run` is unsuitable here: execFile/cmd-start on Windows hang
+   * while a GUI child inherits the pipe handles.
+   */
+  readonly start: (cmd: string, args: readonly string[]) => Promise<{ ok: boolean; error?: string }>;
   /** HTTP probe (used for gateway + functional auth-path health). GET by default;
    *  method/headers/body enable the non-secret POST probes that distinguish a
    *  degraded-but-"healthy" proxy from a genuinely working auth path. */
@@ -72,6 +79,22 @@ export interface HealthOptions {
   readonly memoryCoreUrl?: string;
   /** True when the user has explicitly configured the optional Tencent memory stack (CONTINUUM_MEMORY_CORE_URL set). */
   readonly tencentConfigured?: boolean;
+  /**
+   * True when the Tencent stack's containers were observed on a previous
+   * launch/doctor pass (persisted in the state file). Lets the docker-desktop
+   * repair arm even when the engine is stopped — the daemon is exactly what
+   * must be started, so container detection can't be allowed to hide it.
+   */
+  readonly stackSeen?: boolean;
+  /**
+   * On Windows, probe for an installed Docker Desktop. Consulted only while the
+   * engine is unreachable AND no config/container/marker signal exists: an
+   * installed Docker Desktop is the remaining opt-in sign that the optional
+   * Tencent stack is deployed (its containers are just invisible through the
+   * stopped engine), so the docker-desktop repair can arm. Injectable so tests
+   * stay deterministic regardless of the test host's Docker install.
+   */
+  readonly dockerDesktopDiscovery?: () => Promise<string | undefined>;
   /** MemoryProxy health URL. */
   readonly proxyHealthUrl: string;
   /** Container names used by the canonical Mac stack. */

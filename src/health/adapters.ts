@@ -4,7 +4,7 @@
  * credential/session/providers modules for the store checks. These adapters
  * are what the CLI constructs; tests inject fakes instead.
  */
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { constants as fsConstants, promises as fsPromises } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -75,10 +75,29 @@ async function fetchProbe(url: string, init?: { timeoutMs?: number; method?: str
   }
 }
 
+function startDetached(cmd: string, args: readonly string[]): Promise<{ ok: boolean; error?: string }> {
+  return new Promise((resolve) => {
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(cmd, [...args], { detached: true, stdio: "ignore", windowsHide: true });
+    } catch (err) {
+      resolve({ ok: false, error: err instanceof Error ? err.message : String(err) });
+      return;
+    }
+    child.on("error", (err) => resolve({ ok: false, error: err.message }));
+    // Resolve on 'spawn', not 'exit': a GUI app lives beyond this process.
+    child.on("spawn", () => {
+      child.unref();
+      resolve({ ok: true });
+    });
+  });
+}
+
 /** The live runtime: real shells, real HTTP. No printing, no secrets. */
 export const liveRuntime: HealthRuntime = {
   now: () => Date.now(),
   run: (cmd, args, opts) => execFileAsync(cmd, args, opts?.timeoutMs ?? 30_000),
+  start: (cmd, args) => startDetached(cmd, args),
   fetch: fetchProbe,
   sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
 };

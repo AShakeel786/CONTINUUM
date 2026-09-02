@@ -74,6 +74,11 @@ class FakeRuntime implements HealthRuntime {
     const r = h(args);
     return { code: r.code, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
   }
+  /** Detached GUI launch: recorded as a call, assumed to have spawned. */
+  async start(cmd: string, args: readonly string[]): Promise<{ ok: boolean; error?: string }> {
+    this.calls.push({ cmd, args });
+    return { ok: true };
+  }
   async fetch(url: string, _init?: { timeoutMs?: number; method?: string; headers?: Record<string, string>; body?: string }): Promise<{ ok: boolean; status: number; body?: string }> {
     return this.fetchResults.get(url) ?? { ok: false, status: 0 };
   }
@@ -102,8 +107,21 @@ function makeOptions(overrides?: Partial<HealthOptions>): HealthOptions {
 
 const POLICY = { cooldownMs: 30_000, breakerFailureThreshold: 3, breakerOpenMs: 5 * 60_000 };
 
-function makeDoctor(runtime: FakeRuntime, options?: Partial<HealthOptions>, readPinnedEnv?: () => Promise<string | undefined>) {
-  return new HealthDoctor({ runtime, options: makeOptions(options), policy: POLICY, readPinnedEnv });
+function makeDoctor(
+  runtime: FakeRuntime,
+  options?: Partial<HealthOptions>,
+  readPinnedEnv?: () => Promise<string | undefined>,
+  discoverDockerDesktop?: () => Promise<string | undefined>,
+) {
+  return new HealthDoctor({
+    runtime,
+    options: makeOptions(options),
+    policy: POLICY,
+    readPinnedEnv,
+    // Default to the mac/`open -a Docker` path so existing tests stay
+    // deterministic even on a Windows host that HAS Docker Desktop installed.
+    discoverDockerDesktop: discoverDockerDesktop ?? (async () => undefined),
+  });
 }
 
 // ── 1. All healthy → no-op ────────────────────────────────────────────────
@@ -281,6 +299,48 @@ describe("docker unavailable", () => {
     await doctor.repair(); // attempt 1
     const second = await doctor.repair(); // immediately after → cooldown
     expect(second.outcomes.some((o) => o.status === "skipped-cooldown")).toBe(true);
+  });
+
+  it("Windows: starts the discovered Docker Desktop executable, never `open -a Docker`", async () => {
+    const runtime = new FakeRuntime();
+    let infoCalls = 0;
+    runtime.on("docker", (args) => {
+      if (args[0] === "info") {
+        infoCalls += 1;
+        return { code: infoCalls >= 3 ? 0 : 1, stderr: "Cannot connect to the Docker daemon" };
+      }
+      return { code: 0 };
+    });
+    const exe = "C:\\Program Files\\Docker\\Docker\\Docker Desktop.exe";
+    const doctor = makeDoctor(runtime, undefined, undefined, async () => exe);
+
+    const report = await doctor.diagnose();
+    expect(report.checks.find((c) => c.name === "docker")?.status).toBe("down");
+
+    const { outcomes } = await doctor.repair();
+    expect(outcomes.some((o) => o.target === "docker-desktop" && o.status === "repaired")).toBe(true);
+    // The discovered exe was launched detached, with no arguments.
+    const startCall = runtime.calls.find((c) => c.cmd === exe);
+    expect(startCall?.args).toEqual([]);
+    // The mac-only `open` path was NOT used on Windows.
+    expect(runtime.calls.some((c) => c.cmd === "open")).toBe(false);
+  });
+
+  it("Windows: falls back to `open -a Docker` when no install is discovered (degraded)", async () => {
+    const runtime = new FakeRuntime();
+    let infoCalls = 0;
+    runtime.on("docker", (args) => {
+      if (args[0] === "info") {
+        infoCalls += 1;
+        return { code: infoCalls >= 3 ? 0 : 1, stderr: "Cannot connect to the Docker daemon" };
+      }
+      return { code: 0 };
+    });
+    runtime.on("open", () => ({ code: 0 }));
+    const doctor = makeDoctor(runtime, undefined, undefined, async () => undefined);
+    const { outcomes } = await doctor.repair();
+    expect(outcomes.some((o) => o.target === "docker-desktop" && o.status === "repaired")).toBe(true);
+    expect(runtime.calls.some((c) => c.cmd === "open" && c.args[0] === "-a" && c.args[1] === "Docker")).toBe(true);
   });
 });
 

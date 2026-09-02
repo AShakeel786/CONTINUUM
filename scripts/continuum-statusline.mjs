@@ -10,6 +10,10 @@ try { input = JSON.parse(fs.readFileSync(0, "utf8")); } catch {}
 const provider = process.env.CONTINUUM_STATUS_PROVIDER || "DeepSeek";
 const model = process.env.CONTINUUM_STATUS_MODEL || "deepseek-v4-flash";
 const handoff = process.env.CONTINUUM_STATUS_HANDOFF || "ready";
+// Optional context fields the launcher sets on redirected/proxy launches.
+const workspace = process.env.CONTINUUM_STATUS_WORKSPACE;
+const route = process.env.CONTINUUM_STATUS_ROUTE;
+const access = process.env.CONTINUUM_STATUS_ACCESS; // "full" when full-access is enabled
 const tz = process.env.CONTINUUM_TIMEZONE || Intl.DateTimeFormat().resolvedOptions().timeZone;
 const windows = [[1, 4], [6, 10]];
 // CONTINUUM_STATUS_NOW is intentionally an opt-in test hook; production
@@ -56,4 +60,13 @@ if (peakWindow) {
   const next = nextPeak();
   pricing = next ? `OFF-PEAK | next peak ${localTime(next.candidate)}–${localTime(next.end)} | ${dailyPeak}` : `OFF-PEAK | ${dailyPeak}`;
 }
-process.stdout.write(`CONTINUUM | ${provider} | ${model} | ${pricing} | ${ctx} | handoff ${handoff}`);
+// Order mirrors the launch HUD (CONTINUUM | workspace | FULL ACCESS | provider
+// | model | route | pricing | ctx | handoff) so the persistent footer and the
+// HUD agree, on every platform — the CLI's shell drops nothing we emit.
+const parts = ["CONTINUUM"];
+if (workspace) parts.push(workspace);
+if (access === "full") parts.push("FULL ACCESS");
+parts.push(provider, model);
+if (route) parts.push(route);
+parts.push(pricing, ctx, `handoff ${handoff}`);
+process.stdout.write(parts.join(" | "));

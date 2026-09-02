@@ -20,8 +20,30 @@ import type {
   ProviderCapabilities,
   ProviderProfile,
 } from "./types.js";
-import { dirname, join } from "node:path";
+import { basename, dirname, join, sep } from "node:path";
+import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
+
+/**
+ * Normalize a Windows path to forward slashes. The statusline command is run
+ * through the CLI's shell (Git Bash on Windows), where `C:\...` would be
+ * mangled — forward slashes parse identically in bash, cmd, and PowerShell.
+ */
+const toPosix = (p: string): string => p.replace(/\\/g, "/");
+
+/**
+ * Compact workspace label for the persistent statusline footer: `~` for the
+ * home dir, `~/...` for anything under it, else the directory basename. Mirrors
+ * the HUD's own workspace formatting (single formatter, shared across
+ * platforms) so the in-TUI footer and the launch HUD agree.
+ */
+function statusWorkspaceLabel(workingDir: string): string {
+  const home = homedir();
+  if (workingDir === home) return "~";
+  const prefix = `${home}${sep}`;
+  if (workingDir.startsWith(prefix)) return `~${workingDir.slice(home.length)}`;
+  return basename(workingDir);
+}
 
 function resolveSecretFromCtx(providerId: string, ref: SecretRef, ctx?: CliLaunchContext): string {
   // Prefer the caller-injected secret env (credential backend), falling back
@@ -127,7 +149,7 @@ class DataDrivenProviderAdapter implements ProviderAdapter {
           env: {
             ANTHROPIC_BASE_URL: launch.baseUrl,
             ANTHROPIC_AUTH_TOKEN: token,
-            ...(launch.statusLineCommand ? { CONTINUUM_STATUS_PROVIDER: this.profile.displayName, CONTINUUM_STATUS_MODEL: this.resolveModel(ctx.modelAlias), CONTINUUM_STATUS_HANDOFF: "ready" } : {}),
+            ...(launch.statusLineCommand ? this.statusEnv(ctx) : {}),
             ...this.modelIdentityEnv(launch.modelTierMap, ctx),
           },
           clearEnvVars: launch.clearEnvVars,
@@ -152,7 +174,7 @@ class DataDrivenProviderAdapter implements ProviderAdapter {
           env: {
             ANTHROPIC_BASE_URL: `${launch.proxyBaseUrl}${launch.proxyPathSuffix}`,
             ANTHROPIC_AUTH_TOKEN: token,
-            ...(launch.statusLineCommand ? { CONTINUUM_STATUS_PROVIDER: this.profile.displayName, CONTINUUM_STATUS_MODEL: this.resolveModel(ctx.modelAlias), CONTINUUM_STATUS_HANDOFF: "ready" } : {}),
+            ...(launch.statusLineCommand ? this.statusEnv(ctx) : {}),
             ...this.modelIdentityEnv(launch.modelTierMap, ctx),
           },
           clearEnvVars: launch.clearEnvVars,
@@ -259,12 +281,33 @@ class DataDrivenProviderAdapter implements ProviderAdapter {
     return [supply.flag, ctx.mcpConfig];
   }
 
+  /**
+   * Env vars the statusline script reads to render the persistent in-TUI
+   * footer. Always secret-free: provider, resolved model, workspace label,
+   * route, and (only when full-access is enabled) a "full" marker.
+   */
+  private statusEnv(ctx: CliLaunchContext): Record<string, string> {
+    return {
+      CONTINUUM_STATUS_PROVIDER: this.profile.displayName,
+      CONTINUUM_STATUS_MODEL: this.resolveModel(ctx.modelAlias),
+      CONTINUUM_STATUS_HANDOFF: "ready",
+      CONTINUUM_STATUS_WORKSPACE: statusWorkspaceLabel(ctx.workingDir),
+      CONTINUUM_STATUS_ROUTE: ctx.route === "proxy" ? "proxy" : "direct",
+      ...(ctx.permissionMode === "bypass" ? { CONTINUUM_STATUS_ACCESS: "full" } : {}),
+    };
+  }
+
   /** Claude Code's supported statusLine setting is a persistent in-TUI HUD. */
   private statusLineArgs(launch: CliLaunchDescriptor, ctx: CliLaunchContext): readonly string[] {
     if (launch.kind === "native" || !launch.statusLineCommand) return [];
     const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
     const script = join(root, "scripts", "continuum-statusline.mjs");
-    const command = `${process.execPath} ${JSON.stringify(script)}`;
+    // Quote BOTH paths. On Windows the CLI's statusline executor runs the
+    // command through Git Bash: an unquoted process.execPath (which contains a
+    // space) split on whitespace → `C:Program: command not found` (exit 127)
+    // and the footer silently vanished. Forward slashes parse identically in
+    // bash/cmd/PowerShell, so quote + normalize for every host.
+    const command = `${JSON.stringify(toPosix(process.execPath))} ${JSON.stringify(toPosix(script))}`;
     return ["--settings", JSON.stringify({
       statusLine: { type: "command", command, refreshInterval: 5, padding: 0 },
       // Claude validates these catalog IDs locally, then uses the documented

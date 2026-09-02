@@ -25,7 +25,7 @@
  * the lock instead of racing several.
  */
 import { dirname, join } from "node:path";
-import type { HealthOptions, HealthReport, HealthRuntime, RecoveryPolicy } from "./types.js";
+import type { HealthOptions, HealthReport, HealthRuntime, RecoveryPolicy, RepairOutcome } from "./types.js";
 import { HealthDoctor } from "./doctor.js";
 import { buildPreflightWarnings } from "./preflight.js";
 import { FileRepairLock, type RepairLock } from "./repair-lock.js";
@@ -34,13 +34,6 @@ export interface LaunchHealDeps {
   readonly runtime: HealthRuntime;
   readonly options: HealthOptions;
   readonly policy: RecoveryPolicy;
-  /**
-   * True when the user has opted into the optional Tencent memory stack
-   * (gateway endpoint + service token both resolved). Recovery only ever runs
-   * for an opted-in stack; an unconfigured machine keeps the old warn-only
-   * behavior.
-   */
-  readonly memoryConfigured: boolean;
   /** Stale-process probe (same one `runLaunchPreflight` passed). Optional. */
   readonly staleProcesses?: () => Promise<readonly { pid: number; executable: string }[]>;
   /** Cross-process repair lock; defaults to a file lock beside the health-state file. */
@@ -49,6 +42,10 @@ export interface LaunchHealDeps {
   readonly lockWaitMs?: number;
   /** Short, stateful progress lines (never a raw retry-spam stream). */
   readonly onProgress?: (line: string) => void;
+  /** Injectable Docker Desktop path discovery; default reads the live machine. */
+  readonly discoverDockerDesktop?: () => Promise<string | undefined>;
+  /** Injectable engine-prerequisite probe; default runs `wsl --status` on Windows. */
+  readonly probeEnginePrerequisite?: (runtime: HealthRuntime) => Promise<{ ok: boolean; detail: string }>;
 }
 
 export interface LaunchHealResult {
@@ -73,6 +70,9 @@ function buildDoctor(deps: LaunchHealDeps): HealthDoctor {
     options: deps.options,
     policy: deps.policy,
     ...(deps.staleProcesses ? { probes: { staleProcesses: deps.staleProcesses } } : {}),
+    discoverDockerDesktop: deps.discoverDockerDesktop,
+    onProgress: deps.onProgress,
+    probeEnginePrerequisite: deps.probeEnginePrerequisite,
   });
 }
 
@@ -84,20 +84,24 @@ async function safeDiagnose(doctor: HealthDoctor, fallback: HealthReport): Promi
   }
 }
 
-function finalize(report: HealthReport, deps: LaunchHealDeps): LaunchHealResult {
+function finalize(report: HealthReport, deps: LaunchHealDeps, outcomes?: readonly RepairOutcome[]): LaunchHealResult {
   if (report.overall === "healthy") {
     deps.onProgress?.("Tencent memory stack recovered — launching with full memory.");
     return { warnings: [], repairAttempted: true, recovered: true };
   }
   // Still degraded after recovery — ONE concise, actionable line (not the full
-  // multi-line preflight dump, which would read as stale noise here).
+  // multi-line preflight dump, which would read as stale noise here). When a
+  // repair failed, its detail carries the exact reason (e.g. Docker's engine
+  // could not boot) — thread it through so the user is not left guessing.
+  const failed = outcomes?.find((o) => o.status === "failed") ?? outcomes?.find((o) => o.status === "aborted");
+  const reason = failed ? ` ${failed.checkName}: ${failed.detail}.` : "";
   const unhealthy = report.checks
     .filter((c) => c.status === "down" || c.status === "degraded")
     .map((c) => c.name);
   const summary = unhealthy.length > 0 ? unhealthy.join(", ") : "stack unhealthy";
   return {
     warnings: [
-      `Tencent memory auto-recovery incomplete (${summary}) — launching with local session context only. Run \`continuum doctor --repair\` for details.`,
+      `Tencent memory auto-recovery incomplete (${summary}).${reason} Launching with local session context only. Run \`continuum doctor --repair\` for details.`,
     ],
     repairAttempted: true,
     recovered: false,
@@ -119,10 +123,11 @@ export async function ensureLaunchStackHealthy(deps: LaunchHealDeps): Promise<La
     return { warnings: [], repairAttempted: false, recovered: false };
   }
 
-  // Nothing to do the expensive way: already healthy, the user never opted
-  // into the Tencent stack, or every failed check is a manual directive with
-  // no automatic recovery. Behave exactly like the old warn-only preflight.
-  if (!deps.memoryConfigured || !report.checks.some(isRecoverable)) {
+  // Nothing to do the expensive way: already healthy, the stack was never
+  // opted into (its checks read "skipped", so no recoverable check exists
+  // here), or every failed check is a manual directive with no automatic
+  // recovery. Behave exactly like the old warn-only preflight.
+  if (!report.checks.some(isRecoverable)) {
     return { warnings: buildPreflightWarnings(report), repairAttempted: false, recovered: false };
   }
 
@@ -148,8 +153,8 @@ export async function ensureLaunchStackHealthy(deps: LaunchHealDeps): Promise<La
     }
 
     deps.onProgress?.("Tencent memory stack degraded — attempting automatic recovery…");
-    const { after } = await doctor.repair();
-    return finalize(after, deps);
+    const { outcomes, after } = await doctor.repair();
+    return finalize(after, deps, outcomes);
   } finally {
     await lock.release();
   }

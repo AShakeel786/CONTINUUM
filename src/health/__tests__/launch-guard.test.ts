@@ -40,6 +40,11 @@ class FakeRuntime implements HealthRuntime {
     const r = h(args);
     return { code: r.code, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
   }
+  /** Detached GUI launch (Windows Docker Desktop.exe). */
+  async start(cmd: string, args: readonly string[]): Promise<{ ok: boolean; error?: string }> {
+    this.calls.push({ cmd, args });
+    return { ok: true };
+  }
   async fetch(url: string): Promise<{ ok: boolean; status: number; body?: string }> {
     return this.fetchResults.get(url) ?? { ok: false, status: 0 };
   }
@@ -180,7 +185,10 @@ describe("ensureProxyReady — self-heal", () => {
     runtime.on("docker", () => ({ code: 1, stderr: "Cannot connect to the Docker daemon" }));
     const options = makeOptions({ tencentConfigured: false }); // matches "never deployed", not "temporarily down"
 
-    const ensureProxyReady = makeEnsureProxyReady({ runtime, options, policy: POLICY });
+    // Hermetic: no Docker Desktop installed — otherwise the discovery fallback
+    // would read a Windows test host's Docker install as a deployed stack and
+    // arm the docker-desktop repair, breaking this test's "never deployed" premise.
+    const ensureProxyReady = makeEnsureProxyReady({ runtime, options, policy: POLICY, discoverDockerDesktop: async () => undefined });
     const result = await ensureProxyReady("http://127.0.0.1:8096");
 
     expect(result.ready).toBe(false);

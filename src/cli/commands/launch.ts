@@ -76,7 +76,6 @@ export async function runLaunchPreflight(
         tencentConfigured: memoryCoreConfigured,
       },
       policy: { ...DEFAULT_POLICY },
-      memoryConfigured: memoryCoreConfigured,
       staleProcesses: async () => scanStaleProviderProcesses([...DEFAULT_OPTIONS.providerExecutables]),
       ...(onProgress ? { onProgress } : {}),
     });
