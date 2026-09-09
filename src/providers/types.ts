@@ -286,6 +286,14 @@ export interface ProxyRoutedCliLaunch {
   readonly modelTierMap?: ModelTierMap;
   /** Optional pre-launch wire-model verification (see `ModelVerifyDescriptor`). */
   readonly modelVerify?: ModelVerifyDescriptor;
+  /**
+   * Optional local schema-sanitizing proxy this launch must go through
+   * (see `CompatProxySpec`). When declared, ANTHROPIC_BASE_URL points at the
+   * loopback proxy instead of the remote endpoint, and the launcher ensures
+   * the proxy is healthy before spawning — a missing proxy fails the launch
+   * loudly, never a silent direct fallback.
+   */
+  readonly compatProxy?: CompatProxySpec;
 }
 
 /**
@@ -331,6 +339,42 @@ export interface RedirectedCliLaunch {
    * preflight is data, exactly like every other launch behavior.
    */
   readonly modelVerify?: ModelVerifyDescriptor;
+  /**
+   * Optional local schema-sanitizing proxy this launch must go through
+   * (see `CompatProxySpec`). When declared, ANTHROPIC_BASE_URL points at the
+   * loopback proxy instead of the remote `baseUrl`, and the launcher ensures
+   * the proxy is healthy before spawning — a missing proxy fails the launch
+   * loudly, never a silent direct fallback.
+   */
+  readonly compatProxy?: CompatProxySpec;
+}
+
+// ── Local compatibility proxy (data, not behavior) ──────────────────────
+//
+// A local, loopback-bound pass-through proxy that sanitizes Claude Code tool
+// schemas before they reach a strict upstream validator (DeepSeek rejects
+// ECMA-262 patterns Claude Code 2.1.265+ emits — the Artifact-schema
+// HTTP 400 regression; see deepseek-schema-sanitizer.ts). Declared on a
+// launch descriptor as pure data: the adapter points ANTHROPIC_BASE_URL at
+// it, and the launcher ensures it is healthy (reusing an existing instance
+// or starting one) before the CLI spawns. `upstreamBaseUrl` is the ORIGIN
+// (no mount suffix) because the proxy forwards the full request path.
+
+export interface CompatProxySpec {
+  /** Local bind host (always loopback — never a LAN interface). */
+  readonly host: string;
+  /** Local bind port. */
+  readonly port: number;
+  /** Mount suffix the CLI sees on the local base URL (e.g. "/anthropic"). */
+  readonly cliPathSuffix: string;
+  /** Origin the proxy forwards to (e.g. "https://api.deepseek.com"). */
+  readonly upstreamBaseUrl: string;
+  /** Health path answered by the proxy (default "/health"). */
+  readonly healthPath: string;
+  /** Proxy entry script path (its basename is the entry, colocated with the compat-proxy module in the built package; e.g. "providers/deepseek-proxy-bin.js"). */
+  readonly scriptPath: string;
+  /** Identity marker the proxy reports on its health path — a caller only reuses a listener that proves it is this proxy. */
+  readonly serviceId: string;
 }
 
 // ── Model tier identity (data, not behavior) ────────────────────────────

@@ -1,7 +1,7 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
-import { createDeepSeekProxy } from "../deepseek-proxy.js";
+import { createDeepSeekProxy, DEEPSEEK_PROXY_SERVICE_ID } from "../deepseek-proxy.js";
 
 const ARTIFACT_PATTERN = "^(?!__.*__$)[^\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}\"\\\\./[\\]]{1,200}$";
 const ARTIFACT_PATTERN_SANITIZED = "^(?!__.*__$)[^\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}\"\\\\./\\[\\]]{1,200}$";
@@ -66,7 +66,11 @@ describe("deepseek-proxy", () => {
     openServers.push(proxy);
     const res = await fetch(`http://127.0.0.1:${portOf(proxy)}/health`);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, upstream: `http://127.0.0.1:${portOf(upstream.server)}` });
+    expect(await res.json()).toEqual({
+      ok: true,
+      service: DEEPSEEK_PROXY_SERVICE_ID,
+      upstream: `http://127.0.0.1:${portOf(upstream.server)}`,
+    });
     expect(upstream.captured).toHaveLength(0);
   });
 

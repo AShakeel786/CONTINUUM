@@ -190,14 +190,15 @@ describe("no secrets", () => {
     expect(mcpConfigJson(prep.plan.args)).not.toMatch(SECRET_SHAPED);
   });
 
-  it("direct launch env uses the upstream key as the auth token and never points at the proxy", async () => {
+  it("direct launch env uses the upstream key as the auth token and routes through the compat proxy (never the Tencent proxy or the remote upstream)", async () => {
     const { deps, registry } = await buildDeps();
     const p = await registry.add({ name: "CARS", path: "/work/CARS", defaultProvider: "deepseek" });
     const launcher = new Launcher(deps);
     const prep = await launcher.prepareLaunch({ projectKey: p.id, taskGoal: "x" }, { permissionMode: "safe" });
     expect(prep.plan.env.ANTHROPIC_AUTH_TOKEN).toBe("sk-test");
-    expect(prep.plan.env.ANTHROPIC_BASE_URL).toBe("https://api.deepseek.com/anthropic");
-    expect(JSON.stringify(prep.plan.env)).not.toContain("127.0.0.1");
+    expect(prep.plan.env.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:8177/anthropic");
+    expect(JSON.stringify(prep.plan.env)).not.toContain("127.0.0.1:8096");
+    expect(JSON.stringify(prep.plan.env)).not.toContain("api.deepseek.com");
   });
 
   it("proxy launch env never leaks the upstream API key alongside the proxy key", async () => {

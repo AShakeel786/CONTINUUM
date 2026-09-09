@@ -38,6 +38,14 @@ export interface DeepSeekProxyOptions {
 const DEFAULT_PORT = 8177;
 const DEFAULT_UPSTREAM = "https://api.deepseek.com";
 
+/**
+ * Identity marker reported by `/health` and verified by callers before they
+ * reuse (or trust) a listener on the proxy port. Guards against an unrelated
+ * local service squatting the port and receiving Claude Code traffic —
+ * including its auth headers.
+ */
+export const DEEPSEEK_PROXY_SERVICE_ID = "continuum-deepseek-proxy";
+
 // Hop-by-hop / connection-scoped headers that must not be forwarded verbatim.
 const STRIPPED_REQUEST_HEADERS = new Set([
   "host",
@@ -80,7 +88,7 @@ async function handleRequest(
 
   if (method === "GET" && (reqUrl === "/health" || reqUrl.startsWith("/health?"))) {
     res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify({ ok: true, upstream }));
+    res.end(JSON.stringify({ ok: true, service: DEEPSEEK_PROXY_SERVICE_ID, upstream }));
     return;
   }
 

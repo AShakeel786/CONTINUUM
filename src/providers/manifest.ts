@@ -83,6 +83,8 @@ export type ManifestCliLaunch =
       readonly authTokenEnvVar: string;
       /** Maps Claude Code's internal model tiers to this provider's own models (see `ModelTierMap`). */
       readonly modelTierMap?: ModelTierMap;
+      /** Optional local schema-sanitizing proxy (see `ManifestCompatProxySpec`). */
+      readonly compatProxy?: ManifestCompatProxySpec;
     })
   | (ManifestCliLaunchCommon & {
       readonly kind: "proxy-routed";
@@ -91,6 +93,8 @@ export type ManifestCliLaunch =
       readonly proxyUserKeyEnvVar: string;
       /** Maps Claude Code's internal model tiers to this provider's own models (see `ModelTierMap`). */
       readonly modelTierMap?: ModelTierMap;
+      /** Optional local schema-sanitizing proxy (see `ManifestCompatProxySpec`). */
+      readonly compatProxy?: ManifestCompatProxySpec;
     });
 
 /**
@@ -106,7 +110,24 @@ export type ManifestProxyCliLaunch = ManifestCliLaunchCommon & {
   readonly proxyUserKeyEnvVar: string;
   /** Maps Claude Code's internal model tiers to this provider's own models (see `ModelTierMap`). */
   readonly modelTierMap?: ModelTierMap;
+  /** Optional local schema-sanitizing proxy (see `ManifestCompatProxySpec`). */
+  readonly compatProxy?: ManifestCompatProxySpec;
 };
+
+/**
+ * Optional local schema-sanitizing proxy declaration for a Claude Code
+ * launch (see types.ts `CompatProxySpec`). Pure data — loopback endpoint,
+ * upstream origin, and the proxy's own entry script. Never a credential.
+ */
+export interface ManifestCompatProxySpec {
+  readonly host: string;
+  readonly port: number;
+  readonly cliPathSuffix: string;
+  readonly upstreamBaseUrl: string;
+  readonly healthPath: string;
+  readonly scriptPath: string;
+  readonly serviceId: string;
+}
 
 export interface ManifestCli {
   readonly supported: true;
@@ -300,6 +321,25 @@ export function validateManifest(input: unknown): readonly string[] {
     }
   }
 
+  // Local compatibility-proxy declarations: loopback-only, structurally
+  // complete — the launcher will refuse to launch through a proxy whose
+  // health/identity cannot be proven, so a malformed declaration must fail
+  // at manifest validation time instead.
+  const compatProxies: readonly (readonly [string, ManifestCompatProxySpec | undefined])[] = [
+    ["cliLaunch.compatProxy", (m.cliLaunch as { compatProxy?: ManifestCompatProxySpec } | undefined)?.compatProxy],
+    ["proxyCliLaunch.compatProxy", m.proxyCliLaunch?.compatProxy],
+  ];
+  for (const [label, cp] of compatProxies) {
+    if (cp === undefined) continue;
+    if (cp.host !== "127.0.0.1" && cp.host !== "localhost") errors.push(`${label}.host must be 127.0.0.1 or localhost (loopback only)`);
+    if (!Number.isInteger(cp.port) || cp.port < 1 || cp.port > 65535) errors.push(`${label}.port must be an integer between 1 and 65535`);
+    if (typeof cp.cliPathSuffix !== "string" || !cp.cliPathSuffix.startsWith("/")) errors.push(`${label}.cliPathSuffix must be a path starting with "/"`);
+    if (typeof cp.upstreamBaseUrl !== "string" || !/^https?:\/\/[^\s]+$/.test(cp.upstreamBaseUrl.trim())) errors.push(`${label}.upstreamBaseUrl must be a valid http(s) URL`);
+    if (typeof cp.healthPath !== "string" || !cp.healthPath.startsWith("/")) errors.push(`${label}.healthPath must be a path starting with "/"`);
+    if (typeof cp.scriptPath !== "string" || cp.scriptPath.trim().length === 0) errors.push(`${label}.scriptPath is required`);
+    if (typeof cp.serviceId !== "string" || !/^[A-Za-z0-9-]+$/.test(cp.serviceId)) errors.push(`${label}.serviceId must be a simple identifier`);
+  }
+
   // Safety: reject anything that looks like an inline secret in a manifest field.
   const serialized = JSON.stringify(input);
   if (/sk-[a-zA-Z0-9_-]{8,}|AKID[a-zA-Z0-9]{8,}|-----BEGIN/i.test(serialized)) {
@@ -359,6 +399,7 @@ function toCliLaunch(m: ProviderManifest): CliLaunchDescriptor {
       ...(l.statusLineCommand ? { statusLineCommand: l.statusLineCommand } : {}),
       ...(l.modelTierMap ? { modelTierMap: l.modelTierMap } : {}),
     ...(l.modelVerify ? { modelVerify: l.modelVerify } : {}),
+      ...(l.compatProxy ? { compatProxy: l.compatProxy } : {}),
     };
   }
   return {
@@ -377,6 +418,7 @@ function toCliLaunch(m: ProviderManifest): CliLaunchDescriptor {
     ...(l.statusLineCommand ? { statusLineCommand: l.statusLineCommand } : {}),
     ...(l.modelTierMap ? { modelTierMap: l.modelTierMap } : {}),
     ...(l.modelVerify ? { modelVerify: l.modelVerify } : {}),
+    ...(l.compatProxy ? { compatProxy: l.compatProxy } : {}),
   };
 }
 
@@ -400,6 +442,7 @@ function toProxyCliLaunch(m: ProviderManifest): ProxyRoutedCliLaunch | undefined
     ...(l.statusLineCommand ? { statusLineCommand: l.statusLineCommand } : {}),
     ...(l.modelTierMap ? { modelTierMap: l.modelTierMap } : {}),
     ...(l.modelVerify ? { modelVerify: l.modelVerify } : {}),
+    ...(l.compatProxy ? { compatProxy: l.compatProxy } : {}),
   };
 }
 

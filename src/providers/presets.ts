@@ -6,6 +6,7 @@
  */
 
 import type { ProviderManifest } from "./manifest.js";
+import { DEEPSEEK_PROXY_SERVICE_ID } from "./deepseek-proxy.js";
 
 /**
  * The model-identity env vars Claude Code reads to label its primary and
@@ -186,6 +187,21 @@ export const deepseekManifest: ProviderManifest = {
     // an explicit user model choice and is never inferred from the opus alias,
     // task difficulty, retries, or context size.
     modelTierMap: { opus: "flash", sonnet: "flash", haiku: "flash", fable: "flash", subagent: "flash" },
+    // Claude Code 2.1.265+ emits Artifact tool schemas DeepSeek's validator
+    // rejects (HTTP 400 — raw `[` inside a character class). Every Claude
+    // Code → DeepSeek session MUST go through the local sanitizing proxy
+    // (src/providers/deepseek-proxy-bin.js); the launcher ensures it is
+    // healthy before spawning and fails loudly instead of falling back to
+    // the direct endpoint, which would reintroduce the regression.
+    compatProxy: {
+      host: "127.0.0.1",
+      port: 8177,
+      cliPathSuffix: "/anthropic",
+      upstreamBaseUrl: "https://api.deepseek.com",
+      healthPath: "/health",
+      scriptPath: "providers/deepseek-proxy-bin.js",
+      serviceId: DEEPSEEK_PROXY_SERVICE_ID,
+    },
   },
   // Optional Tencent MemoryProxy route — only used when explicitly enabled
   // (`continuum auth deepseek --proxy`, or config.proxyRouting.deepseek="proxy").
@@ -213,6 +229,19 @@ export const deepseekManifest: ProviderManifest = {
     mcpLaunch: { kind: "mcp-config-flag", flag: "--mcp-config" },
     // Same Flash-only implicit tier mapping as the direct route.
     modelTierMap: { opus: "flash", sonnet: "flash", haiku: "flash", fable: "flash", subagent: "flash" },
+    // The MemoryProxy "changes no protocol" — Claude tool schemas travel
+    // unchanged to DeepSeek upstream, so this opt-in route goes through a
+    // second sanitizing-proxy instance (port 8178) in front of the
+    // MemoryProxy. Same boundary rule as the direct route.
+    compatProxy: {
+      host: "127.0.0.1",
+      port: 8178,
+      cliPathSuffix: "/claude-code/default",
+      upstreamBaseUrl: "http://127.0.0.1:8096",
+      healthPath: "/health",
+      scriptPath: "providers/deepseek-proxy-bin.js",
+      serviceId: DEEPSEEK_PROXY_SERVICE_ID,
+    },
   },
   proxyUserKey: { envVar: "CONTINUUM_TENCENT_PROXY_USER_KEY", credentialName: "proxy-user-key" },
 };

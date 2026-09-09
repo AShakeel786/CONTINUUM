@@ -8,6 +8,7 @@ import {
 } from "../manifest.js";
 import { createProviderAdapter } from "../adapter.js";
 import { createProviderRegistry } from "../index.js";
+import { deepseekManifest } from "../presets.js";
 
 const grokManifest: ProviderManifest = {
   schemaVersion: MANIFEST_SCHEMA_VERSION,
@@ -142,5 +143,50 @@ describe("manifestToProfile + manifestToAuthMetadata (Grok/GLM proof)", () => {
     expect(registry.has("claude")).toBe(true); // bundled still present
     expect(registry.get("grok").resolveModel()).toBe("grok-3");
     expect(registry.get("glm").resolveModel()).toBe("glm-4-plus");
+  });
+});
+
+describe("validateManifest — compatProxy declarations", () => {
+  const valid = deepseekManifest;
+
+  it("accepts the bundled DeepSeek compatProxy declarations (direct + Tencent routes)", () => {
+    expect(validateManifest(valid)).toEqual([]);
+  });
+
+  it("rejects a non-loopback host (a compat proxy must never bind a LAN interface)", () => {
+    const direct = deepseekManifest.cliLaunch;
+    if (!direct || direct.kind !== "redirected" || !direct.compatProxy) throw new Error("expected redirected launch with compatProxy");
+    const cp = { ...direct, compatProxy: { ...direct.compatProxy, host: "0.0.0.0" } };
+    expect(validateManifest({ ...valid, cliLaunch: cp })).toEqual([
+      "cliLaunch.compatProxy.host must be 127.0.0.1 or localhost (loopback only)",
+    ]);
+  });
+
+  it("rejects a malformed port, path suffix, upstream URL, and service id", () => {
+    const direct = deepseekManifest.cliLaunch;
+    if (!direct || direct.kind !== "redirected" || !direct.compatProxy) throw new Error("expected redirected launch with compatProxy");
+    const base = direct.compatProxy;
+    const cases: Array<[Partial<typeof base>, string]> = [
+      [{ port: 0 }, "cliLaunch.compatProxy.port"],
+      [{ port: 70000 }, "cliLaunch.compatProxy.port"],
+      [{ cliPathSuffix: "anthropic" }, "cliLaunch.compatProxy.cliPathSuffix"],
+      [{ upstreamBaseUrl: "not a url" }, "cliLaunch.compatProxy.upstreamBaseUrl"],
+      [{ healthPath: "health" }, "cliLaunch.compatProxy.healthPath"],
+      [{ scriptPath: "  " }, "cliLaunch.compatProxy.scriptPath"],
+      [{ serviceId: "has space" }, "cliLaunch.compatProxy.serviceId"],
+    ];
+    for (const [patch, expected] of cases) {
+      const cp = { ...direct, compatProxy: { ...base, ...patch } };
+      const errors = validateManifest({ ...valid, cliLaunch: cp });
+      expect(errors.some((e) => e.includes(expected)), `patch ${JSON.stringify(patch)} → ${errors.join("; ")}`).toBe(true);
+    }
+  });
+
+  it("validates proxyCliLaunch.compatProxy with the same rules", () => {
+    const proxy = deepseekManifest.proxyCliLaunch;
+    if (!proxy || !proxy.compatProxy) throw new Error("expected proxy-routed launch with compatProxy");
+    const cp = { ...proxy, compatProxy: { ...proxy.compatProxy, host: "10.0.0.1" } };
+    const errors = validateManifest({ ...valid, proxyCliLaunch: cp });
+    expect(errors.some((e) => e.includes("proxyCliLaunch.compatProxy.host"))).toBe(true);
   });
 });

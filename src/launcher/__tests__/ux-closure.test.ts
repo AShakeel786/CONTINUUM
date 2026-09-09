@@ -102,7 +102,7 @@ describe("7.1 — deepseek direct vs proxy credential via CredentialManager", ()
     const prep = await launcher.prepareLaunch({ projectKey: "p" }, { permissionMode: "safe" });
     expect(prep.plan.providerId).toBe("deepseek");
     expect(prep.plan.env.ANTHROPIC_AUTH_TOKEN).toBe("sk-ds-api");
-    expect(prep.plan.env.ANTHROPIC_BASE_URL).toBe("https://api.deepseek.com/anthropic");
+    expect(prep.plan.env.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:8177/anthropic");
   });
 
   it("resolves deepseek proxy key (proxy mode) into the launch plan, and never leaks the upstream key", async () => {
@@ -233,12 +233,16 @@ describe("7.1 — no secret leakage", () => {
     expect(prep.plan.env.ANTHROPIC_AUTH_TOKEN).toBe("sk-ds-proxy");
   });
 
-  it("direct launch plan env never points at the local proxy URL", async () => {
+  it("direct launch plan env routes through the compat proxy and never at the Tencent proxy or the remote upstream", async () => {
     const { deps, registry, repoDir } = await setup({ deepseekApiKey: true, deepseekProxyKey: true });
     await registry.add({ name: "p", path: repoDir, defaultProvider: "deepseek" });
     const launcher = new Launcher(deps);
     const prep = await launcher.prepareLaunch({ projectKey: "p" }, { permissionMode: "safe" });
-    expect(JSON.stringify(prep.plan)).not.toContain("127.0.0.1");
+    // The compat proxy (8177) is the direct route's boundary; the plan must
+    // never target the Tencent MemoryProxy (8096) or the remote upstream.
+    expect(prep.plan.env.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:8177/anthropic");
+    expect(JSON.stringify(prep.plan)).not.toContain("127.0.0.1:8096");
+    expect(JSON.stringify(prep.plan)).not.toContain("api.deepseek.com/anthropic");
     expect(prep.plan.env.ANTHROPIC_AUTH_TOKEN).toBe("sk-ds-api");
   });
 });

@@ -27,18 +27,18 @@ describe("native resume args (data-driven, no provider switch)", () => {
     expect(plan.args).toEqual(["-m", "gpt-5.6-sol", "resume", "codex-123"]);
   });
 
-  it("DeepSeek direct path builds --resume <id> (Claude Code semantics) and injects the upstream key env", () => {
+  it("DeepSeek direct path builds --resume <id> (Claude Code semantics) and routes through the compat proxy", () => {
     process.env.DEEPSEEK_API_KEY = "sk-ds-api-test";
     const plan = createProviderAdapter(deepseekProfile).buildCliLaunchPlan({ workingDir: "/x", resumeNativeSessionId: "ds-123" });
     expect(plan.args.slice(0, 2)).toEqual(["--resume", "ds-123"]);
-    expect(plan.env.ANTHROPIC_BASE_URL).toBe("https://api.deepseek.com/anthropic");
+    expect(plan.env.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:8177/anthropic");
   });
 
-  it("DeepSeek proxy path (route=proxy) builds --resume <id> and injects proxy env", () => {
+  it("DeepSeek proxy path (route=proxy) builds --resume <id> and routes through the compat proxy in front of the MemoryProxy", () => {
     process.env.CONTINUUM_TENCENT_PROXY_USER_KEY = "sk-proxy-test";
     const plan = createProviderAdapter(deepseekProfile).buildCliLaunchPlan({ workingDir: "/x", resumeNativeSessionId: "ds-123", route: "proxy" });
     expect(plan.args.slice(0, 2)).toEqual(["--resume", "ds-123"]);
-    expect(plan.env.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:8096/claude-code/default");
+    expect(plan.env.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:8178/claude-code/default");
   });
 
   it("builds empty args when no resume id is requested (fresh native session)", () => {

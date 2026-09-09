@@ -31,14 +31,24 @@ function parseArgs(argv: readonly string[]): { port: number; upstream: string } 
 
 const { port, upstream } = parseArgs(process.argv.slice(2));
 
-const server = await createDeepSeekProxy({
-  port,
-  upstreamBaseUrl: upstream,
-  onActivity: ({ method, path, statusCode, patternsChanged }) => {
-    const changed = patternsChanged > 0 ? ` (${patternsChanged} pattern(s) sanitized)` : "";
-    console.log(`[deepseek-proxy] ${method} ${path} → ${statusCode}${changed}`);
-  },
-});
+// A graceful, one-line failure when the port is already taken (e.g. a racing
+// second launcher lost the bind): exit non-zero instead of an unhandled
+// rejection. The winner keeps serving; callers poll /health and only need
+// one healthy instance.
+let server;
+try {
+  server = await createDeepSeekProxy({
+    port,
+    upstreamBaseUrl: upstream,
+    onActivity: ({ method, path, statusCode, patternsChanged }) => {
+      const changed = patternsChanged > 0 ? ` (${patternsChanged} pattern(s) sanitized)` : "";
+      console.log(`[deepseek-proxy] ${method} ${path} → ${statusCode}${changed}`);
+    },
+  });
+} catch (err) {
+  console.error(`[deepseek-proxy] failed to start on http://127.0.0.1:${port}: ${err instanceof Error ? err.message : String(err)}`);
+  process.exit(1);
+}
 
 console.log(`[deepseek-proxy] listening on http://127.0.0.1:${port} → ${upstream}`);
 

@@ -76,6 +76,31 @@ export class NoProjectError extends LaunchError {
 }
 
 /**
+ * The local DeepSeek compatibility proxy (the schema-sanitizing boundary a
+ * Claude Code session must route through) could not be reused or started —
+ * thrown BEFORE any session is created or mutated (see
+ * Launcher.prepareLaunch), so a retry after fixing the proxy resumes
+ * cleanly. There is deliberately NO silent fallback to the direct DeepSeek
+ * endpoint: that path reintroduces the known Artifact-schema HTTP 400.
+ * `detail` is built entirely from proxy health/spawn text — no secrets.
+ */
+export class CompatProxyUnavailableError extends LaunchError {
+  readonly providerId: string;
+  readonly endpoint: string;
+  constructor(providerId: string, endpoint: string, detail: string) {
+    super(
+      "compat-proxy-unavailable",
+      `Provider "${providerId}" requires the local DeepSeek compatibility proxy at ${endpoint} (it sanitizes tool schemas DeepSeek rejects), ` +
+        `but it is unavailable: ${detail}\n` +
+        `Launching directly would reintroduce the known HTTP 400 Artifact-schema failure, so this launch is blocked. Retry the launch (the proxy self-starts), or run \`continuum doctor\`.`,
+    );
+    this.name = "CompatProxyUnavailableError";
+    this.providerId = providerId;
+    this.endpoint = endpoint;
+  }
+}
+
+/**
  * A proxy-routed provider's local dependency (the Tencent MemoryProxy) is
  * unreachable even after CONTINUUM's own bounded self-heal attempt — thrown
  * BEFORE any session is created or mutated (see Launcher.prepareLaunch), so

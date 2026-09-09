@@ -96,7 +96,7 @@ describe("spawnCli — actual spawned executable/env, not just the LaunchPlan", 
       providerId: "deepseek",
       executable: "claude",
       env: {
-        ANTHROPIC_BASE_URL: "https://api.deepseek.com/anthropic",
+        ANTHROPIC_BASE_URL: "http://127.0.0.1:8177/anthropic",
         ANTHROPIC_AUTH_TOKEN: "sk-deepseek-fixture-token",
       },
       clearEnvVars: ["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"],
@@ -108,7 +108,7 @@ describe("spawnCli — actual spawned executable/env, not just the LaunchPlan", 
     expect(lastSpawnCall?.command).toBe("claude");
     // The whole point of a redirected launch: these must survive to the
     // actually-spawned child, not just to the intermediate LaunchPlan.
-    expect(lastSpawnCall?.options.env?.ANTHROPIC_BASE_URL).toBe("https://api.deepseek.com/anthropic");
+    expect(lastSpawnCall?.options.env?.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:8177/anthropic");
     expect(lastSpawnCall?.options.env?.ANTHROPIC_AUTH_TOKEN).toBe("sk-deepseek-fixture-token");
   });
 
@@ -117,7 +117,7 @@ describe("spawnCli — actual spawned executable/env, not just the LaunchPlan", 
       providerId: "deepseek",
       executable: "claude",
       env: {
-        ANTHROPIC_BASE_URL: "http://127.0.0.1:8096/claude-code/default",
+        ANTHROPIC_BASE_URL: "http://127.0.0.1:8178/claude-code/default",
         ANTHROPIC_AUTH_TOKEN: "sk-mem-fixture-proxy-key",
       },
       clearEnvVars: ["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"],
@@ -126,7 +126,7 @@ describe("spawnCli — actual spawned executable/env, not just the LaunchPlan", 
 
     await spawnCli(proxyPlan);
 
-    expect(lastSpawnCall?.options.env?.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:8096/claude-code/default");
+    expect(lastSpawnCall?.options.env?.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:8178/claude-code/default");
     expect(lastSpawnCall?.options.env?.ANTHROPIC_AUTH_TOKEN).toBe("sk-mem-fixture-proxy-key");
   });
 
@@ -152,13 +152,13 @@ describe("spawnCli — actual spawned executable/env, not just the LaunchPlan", 
     const deepseekPlan = plan({
       providerId: "deepseek",
       executable: "claude",
-      env: { ANTHROPIC_BASE_URL: "https://api.deepseek.com/anthropic", ANTHROPIC_AUTH_TOKEN: "sk-deepseek-fixture" },
+      env: { ANTHROPIC_BASE_URL: "http://127.0.0.1:8177/anthropic", ANTHROPIC_AUTH_TOKEN: "sk-deepseek-fixture" },
       clearEnvVars: ["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"],
     });
 
     await spawnCli(deepseekPlan);
 
-    expect(lastSpawnCall?.options.env?.ANTHROPIC_BASE_URL).toBe("https://api.deepseek.com/anthropic");
+    expect(lastSpawnCall?.options.env?.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:8177/anthropic");
   });
 });
 
@@ -260,7 +260,7 @@ describe("spawnCli — full launcher-to-spawn pipeline (real adapters, real prep
     await spawnCli(prep.plan);
 
     expect(lastSpawnCall?.command).toBe("claude");
-    expect(lastSpawnCall?.options.env?.ANTHROPIC_BASE_URL).toBe("https://api.deepseek.com/anthropic");
+    expect(lastSpawnCall?.options.env?.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:8177/anthropic");
     expect(lastSpawnCall?.options.env?.ANTHROPIC_AUTH_TOKEN).toBe("sk-deepseek-real-fixture-key");
     expect(lastSpawnCall?.options.env?.CLAUDE_CONFIG_DIR).toContain(".claude-deepseek");
     // Model identity: without these, Claude Code's own default tier models
@@ -288,7 +288,7 @@ describe("spawnCli — full launcher-to-spawn pipeline (real adapters, real prep
 
     expect(resumed.providerRef.providerId).toBe("deepseek");
     expect(resumed.providerRef.model).toBe("deepseek-v4-flash");
-    expect(lastSpawnCall?.options.env?.ANTHROPIC_BASE_URL).toBe("https://api.deepseek.com/anthropic");
+    expect(lastSpawnCall?.options.env?.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:8177/anthropic");
     expect(lastSpawnCall?.options.env?.ANTHROPIC_AUTH_TOKEN).toBe("sk-deepseek-real-fixture-key");
     expect(lastSpawnCall?.options.env?.ANTHROPIC_MODEL).toBe("sonnet");
     expect(lastSpawnCall?.options.env?.CLAUDE_CODE_SUBAGENT_MODEL).toBe("deepseek-v4-flash");
@@ -327,7 +327,7 @@ describe("spawnCli — full launcher-to-spawn pipeline (real adapters, real prep
     await spawnCli(handedOff.plan);
 
     expect(handedOff.providerRef.providerId).toBe("deepseek");
-    expect(lastSpawnCall?.options.env?.ANTHROPIC_BASE_URL).toBe("https://api.deepseek.com/anthropic");
+    expect(lastSpawnCall?.options.env?.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:8177/anthropic");
     expect(lastSpawnCall?.options.env?.ANTHROPIC_AUTH_TOKEN).toBe("sk-deepseek-real-fixture-key");
     expect(lastSpawnCall?.options.env?.CLAUDE_CONFIG_DIR).toContain(".claude-deepseek");
     expect(lastSpawnCall?.options.env?.ANTHROPIC_MODEL).toBe("sonnet");
@@ -342,7 +342,7 @@ describe("spawnCli — full launcher-to-spawn pipeline (real adapters, real prep
     const launcher = await buildRealLauncher();
     const deepseekLaunch = await launcher.prepareLaunch({ mode: "current-directory", providerId: "deepseek", cwd: "/tmp" }, { permissionMode: "safe" });
     await spawnCli(deepseekLaunch.plan);
-    expect(lastSpawnCall?.options.env?.ANTHROPIC_BASE_URL).toBe("https://api.deepseek.com/anthropic");
+    expect(lastSpawnCall?.options.env?.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:8177/anthropic");
     expect(lastSpawnCall?.options.env?.ANTHROPIC_MODEL).toBe("sonnet");
 
     const handedOff = await launcher.prepareLaunch(

@@ -7,6 +7,7 @@ import { createProviderAdapter } from "../adapter.js";
 import { deepseekProfile } from "../profiles/deepseek.js";
 import { claudeProfile } from "../profiles/claude.js";
 import { MissingSecretError, ProviderAuthError, UnknownModelAliasError } from "../errors.js";
+import { DEEPSEEK_PROXY_SERVICE_ID } from "../deepseek-proxy.js";
 
 /**
  * Locate a Git Bash on win32 — the shell the Claude Code statusline executor
@@ -108,15 +109,33 @@ describe("DeepSeek adapter", () => {
     expect(adapter.resolveCliLaunch("proxy").kind).toBe("proxy-routed");
   });
 
-  it("direct CLI launch targets DeepSeek's own Anthropic endpoint and injects the upstream API key (never the Tencent proxy URL)", () => {
+  it("direct CLI launch routes through the local compatibility proxy and injects the upstream API key (never the Tencent proxy URL)", () => {
     process.env.DEEPSEEK_API_KEY = "sk-deepseek-direct-fixture-key";
     const adapter = createProviderAdapter(deepseekProfile);
     const plan = adapter.buildCliLaunchPlan({ workingDir: "C:\\fake\\project" });
     expect(plan.executable).toBe("claude");
-    expect(plan.env.ANTHROPIC_BASE_URL).toBe("https://api.deepseek.com/anthropic");
+    // The compat proxy is the ONLY Claude Code → DeepSeek boundary: the CLI
+    // points at the loopback sanitizer (which forwards to
+    // https://api.deepseek.com), never at the remote endpoint directly.
+    expect(plan.env.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:8177/anthropic");
     expect(plan.env.ANTHROPIC_AUTH_TOKEN).toBe("sk-deepseek-direct-fixture-key");
-    expect(plan.env.ANTHROPIC_BASE_URL).not.toContain("127.0.0.1");
+    expect(plan.env.ANTHROPIC_BASE_URL).not.toContain("api.deepseek.com");
     expect(plan.configDir).toBe(".claude-deepseek");
+  });
+
+  it("the direct launch descriptor still declares the real upstream for the compat proxy to forward to", () => {
+    const adapter = createProviderAdapter(deepseekProfile);
+    const launch = adapter.resolveCliLaunch("direct");
+    expect(launch.kind).toBe("redirected");
+    if (launch.kind !== "redirected") throw new Error("unreachable");
+    expect(launch.baseUrl).toBe("https://api.deepseek.com/anthropic"); // upstream, kept as data
+    expect(launch.compatProxy).toMatchObject({
+      host: "127.0.0.1",
+      port: 8177,
+      cliPathSuffix: "/anthropic",
+      upstreamBaseUrl: "https://api.deepseek.com",
+      serviceId: DEEPSEEK_PROXY_SERVICE_ID,
+    });
   });
 
   it("configures Claude's supported persistent statusLine HUD for redirected launches", () => {
@@ -195,14 +214,31 @@ describe("DeepSeek adapter", () => {
     expect(plan.env.ANTHROPIC_AUTH_TOKEN).toBe("sk-deepseek-direct-fixture-key");
   });
 
-  it("proxy-routed CLI launch (route=proxy) targets the default proxy and injects the proxy-local key, not DeepSeek's own key", () => {
+  it("proxy-routed CLI launch (route=proxy) routes through the compat proxy in front of the MemoryProxy and injects the proxy-local key, not DeepSeek's own key", () => {
     process.env.CONTINUUM_TENCENT_PROXY_USER_KEY = "sk-mem-test-fixture-proxy-key";
     const adapter = createProviderAdapter(deepseekProfile);
     const plan = adapter.buildCliLaunchPlan({ workingDir: "C:\\fake\\project", route: "proxy" });
     expect(plan.executable).toBe("claude");
-    expect(plan.env.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:8096/claude-code/default");
+    // Boundary for the opt-in Tencent route: a second sanitizing-proxy
+    // instance (port 8178) forwards unchanged to the MemoryProxy at 8096.
+    expect(plan.env.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:8178/claude-code/default");
     expect(plan.env.ANTHROPIC_AUTH_TOKEN).toBe("sk-mem-test-fixture-proxy-key");
     expect(plan.configDir).toBe(".claude-tencent");
+  });
+
+  it("the proxy-routed launch descriptor keeps the MemoryProxy URL as data (compat proxy forwards to it)", () => {
+    const adapter = createProviderAdapter(deepseekProfile);
+    const launch = adapter.resolveCliLaunch("proxy");
+    expect(launch.kind).toBe("proxy-routed");
+    if (launch.kind !== "proxy-routed") throw new Error("unreachable");
+    expect(launch.proxyBaseUrl).toBe("http://127.0.0.1:8096"); // MemoryProxy, kept as data
+    expect(launch.compatProxy).toMatchObject({
+      host: "127.0.0.1",
+      port: 8178,
+      cliPathSuffix: "/claude-code/default",
+      upstreamBaseUrl: "http://127.0.0.1:8096",
+      serviceId: DEEPSEEK_PROXY_SERVICE_ID,
+    });
   });
 
   it("a provider-specific failure: missing proxy key surfaces as ProviderAuthError in proxy mode, not a generic error", () => {

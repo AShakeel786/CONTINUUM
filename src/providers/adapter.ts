@@ -143,7 +143,14 @@ class DataDrivenProviderAdapter implements ProviderAdapter {
           executable: launch.executable,
           args,
           env: {
-            ANTHROPIC_BASE_URL: launch.baseUrl,
+            // With a declared compatibility proxy the CLI is pointed at the
+            // loopback sanitizer instead of the remote endpoint; the proxy
+            // forwards to `compatProxy.upstreamBaseUrl` + the full request
+            // path. The launcher guarantees the proxy is healthy before the
+            // plan is ever spawned.
+            ANTHROPIC_BASE_URL: launch.compatProxy
+              ? `http://${launch.compatProxy.host}:${launch.compatProxy.port}${launch.compatProxy.cliPathSuffix}`
+              : launch.baseUrl,
             ANTHROPIC_AUTH_TOKEN: token,
             ...(launch.statusLineCommand ? this.statusEnv(ctx) : {}),
             ...this.modelIdentityEnv(launch.modelTierMap, ctx),
@@ -168,7 +175,12 @@ class DataDrivenProviderAdapter implements ProviderAdapter {
           executable: launch.executable,
           args,
           env: {
-            ANTHROPIC_BASE_URL: `${launch.proxyBaseUrl}${launch.proxyPathSuffix}`,
+            // Same boundary rule as `redirected`: when declared, the CLI
+            // talks to the loopback sanitizing proxy (which forwards to the
+            // MemoryProxy unchanged) rather than the proxy directly.
+            ANTHROPIC_BASE_URL: launch.compatProxy
+              ? `http://${launch.compatProxy.host}:${launch.compatProxy.port}${launch.compatProxy.cliPathSuffix}`
+              : `${launch.proxyBaseUrl}${launch.proxyPathSuffix}`,
             ANTHROPIC_AUTH_TOKEN: token,
             ...(launch.statusLineCommand ? this.statusEnv(ctx) : {}),
             ...this.modelIdentityEnv(launch.modelTierMap, ctx),

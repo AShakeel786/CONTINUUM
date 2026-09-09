@@ -16,8 +16,10 @@ export {
   sanitizeToolsForProvider,
 } from "./deepseek-schema-sanitizer.js";
 export type { SanitizedToolSchema } from "./deepseek-schema-sanitizer.js";
-export { createDeepSeekProxy } from "./deepseek-proxy.js";
+export { createDeepSeekProxy, DEEPSEEK_PROXY_SERVICE_ID } from "./deepseek-proxy.js";
 export type { DeepSeekProxyActivity, DeepSeekProxyOptions } from "./deepseek-proxy.js";
+export { makeEnsureCompatProxy } from "./deepseek-compat-proxy.js";
+export type { CompatProxyReadiness, EnsureCompatProxyOptions, HealthProbe, SpawnState } from "./deepseek-compat-proxy.js";
 export { discoverModelsFor, parseCliModelsOutput, parseCodexModelsCache, type DiscoveredModel, type ModelDiscoveryOptions } from "./model-discovery.js";
 export * from "./manifest.js";
 export * from "./manifest-store.js";

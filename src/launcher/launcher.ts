@@ -27,7 +27,8 @@ import { dirname } from "node:path";
 import type { ProjectRegistry } from "../registry/registry.js";
 import type { ProjectRecord } from "../registry/types.js";
 import type { ProviderRegistry } from "../providers/registry.js";
-import type { CliLaunchDescriptor, LaunchRoute, ProviderAdapter, ProviderProfile } from "../providers/types.js";
+import type { CliLaunchDescriptor, CompatProxySpec, LaunchRoute, ProviderAdapter, ProviderProfile } from "../providers/types.js";
+import type { CompatProxyReadiness } from "../providers/deepseek-compat-proxy.js";
 import type { DiscoveredModel } from "../providers/model-discovery.js";
 import { discoverModelsFor } from "../providers/model-discovery.js";
 import { isPromoActive } from "../providers/promo.js";
@@ -55,7 +56,7 @@ import { buildToolSurfaceBlock, codingToolsAvailable } from "../mcp/coding-tools
 import { applyReversiblePruning } from "../context/pruning.js";
 import type { ContextBlock } from "../context/types.js";
 import type { Prompt, PromptOutput } from "../auth/prompt.js";
-import { LocalDependencyUnavailableError, ModelUnavailableError, NoAuthenticatedAgentError, NoProjectError, ProviderNotAuthenticatedError } from "./errors.js";
+import { CompatProxyUnavailableError, LocalDependencyUnavailableError, ModelUnavailableError, NoAuthenticatedAgentError, NoProjectError, ProviderNotAuthenticatedError } from "./errors.js";
 import type { ProxyReadiness } from "../health/launch-guard.js";
 import { evaluateProvider, type ProviderUsability } from "./usability.js";
 import type { ApiFailoverLaunchCandidate, LaunchOptions, LaunchPlan, LaunchPreparation } from "./types.js";
@@ -91,6 +92,14 @@ export interface LauncherDeps {
    * only tightens an existing gap, it never becomes a hard requirement.
    */
   readonly ensureProxyReady?: (proxyBaseUrl: string, onProgress?: (line: string) => void) => Promise<ProxyReadiness>;
+  /**
+   * Optional DeepSeek compatibility-proxy readiness gate for CLI launches
+   * whose resolved descriptor declares a `compatProxy` (see
+   * providers/deepseek-compat-proxy.ts). When absent, declared compat
+   * proxies proceed unchecked (test seam / prior behavior) — this only
+   * tightens the boundary, it never becomes a hard requirement on its own.
+   */
+  readonly ensureCompatProxy?: (spec: CompatProxySpec, onProgress?: (line: string) => void) => Promise<CompatProxyReadiness>;
   /** Progress lines from `ensureProxyReady` (see above) — stateful, not raw retry spam. */
   readonly onDependencyProgress?: (line: string) => void;
   /**
@@ -341,6 +350,31 @@ export class Launcher {
       const readiness = await this.deps.ensureProxyReady(effectiveLaunch.proxyBaseUrl, this.deps.onDependencyProgress);
       if (!readiness.ready) {
         throw new LocalDependencyUnavailableError(providerId, effectiveLaunch.proxyBaseUrl, sessionMode, readiness.detail, readiness.repairAttempted);
+      }
+    }
+    // DeepSeek compatibility boundary: every Claude Code session that can
+    // send Claude tool schemas upstream must pass through the local
+    // sanitizing proxy (Claude Code 2.1.265+ emits Artifact patterns
+    // DeepSeek rejects with HTTP 400). When the resolved launch declares a
+    // `compatProxy`, ensure it is healthy — reusing an existing instance or
+    // starting one — BEFORE any session is created or mutated below. A
+    // failure hard-blocks the launch: a silent direct fallback would
+    // reintroduce the regression. CLI harness only — the direct API agent
+    // sends CONTINUUM's own tool schemas, which the boundary does not own.
+    if (runtimeKind === "cli" && this.deps.ensureCompatProxy) {
+      const compatProxy =
+        (effectiveLaunch.kind === "redirected" || effectiveLaunch.kind === "proxy-routed") && effectiveLaunch.compatProxy
+          ? effectiveLaunch.compatProxy
+          : undefined;
+      if (compatProxy) {
+        const ensured = await this.deps.ensureCompatProxy(compatProxy, this.deps.onDependencyProgress);
+        if (!ensured.ready) {
+          throw new CompatProxyUnavailableError(
+            providerId,
+            `http://${compatProxy.host}:${compatProxy.port}${compatProxy.cliPathSuffix}`,
+            ensured.detail ?? "unknown failure",
+          );
+        }
       }
     }
 
