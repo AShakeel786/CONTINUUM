@@ -9,6 +9,15 @@ export { deepseekProfile } from "./profiles/deepseek.js";
 export { codexProfile } from "./profiles/codex.js";
 export { antigravityProfile } from "./profiles/antigravity.js";
 export { glm52FreeProfile } from "./profiles/glm-5-2-free.js";
+export {
+  hasUnsupportedDeepSeekPattern,
+  sanitizePatternForDeepSeek,
+  sanitizeToolSchemaForDeepSeek,
+  sanitizeToolsForProvider,
+} from "./deepseek-schema-sanitizer.js";
+export type { SanitizedToolSchema } from "./deepseek-schema-sanitizer.js";
+export { createDeepSeekProxy } from "./deepseek-proxy.js";
+export type { DeepSeekProxyActivity, DeepSeekProxyOptions } from "./deepseek-proxy.js";
 export { discoverModelsFor, parseCliModelsOutput, parseCodexModelsCache, type DiscoveredModel, type ModelDiscoveryOptions } from "./model-discovery.js";
 export * from "./manifest.js";
 export * from "./manifest-store.js";

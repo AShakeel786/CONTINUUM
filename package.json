@@ -10,7 +10,8 @@
   },
   "bin": {
     "continuum": "./dist/cli/bin.js",
-    "continuum-mcp": "./dist/mcp/bin.js"
+    "continuum-mcp": "./dist/mcp/bin.js",
+    "continuum-deepseek-proxy": "./dist/providers/deepseek-proxy-bin.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
