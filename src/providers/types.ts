@@ -334,6 +334,14 @@ export interface RedirectedCliLaunch {
   /** Maps Claude Code's internal model tiers to this provider's own models (see `ModelTierMap` below). */
   readonly modelTierMap?: ModelTierMap;
   /**
+   * Optional Claude Code `CLAUDE_STREAM_IDLE_TIMEOUT_MS` value (ms) for this
+   * launch — set when the provider documents holding queued streams open
+   * (with keep-alive frames) longer than Claude Code's default watchdog
+   * window, so the client watchdog never aborts a stream the provider still
+   * considers alive.
+   */
+  readonly streamIdleTimeoutMs?: number;
+  /**
    * Optional pre-launch check that the wire model still exists upstream
    * (see `ModelVerifyDescriptor`). Declared on the launch so the fail-loudly
    * preflight is data, exactly like every other launch behavior.

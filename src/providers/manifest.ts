@@ -85,6 +85,15 @@ export type ManifestCliLaunch =
       readonly modelTierMap?: ModelTierMap;
       /** Optional local schema-sanitizing proxy (see `ManifestCompatProxySpec`). */
       readonly compatProxy?: ManifestCompatProxySpec;
+      /**
+       * Optional Claude Code `CLAUDE_STREAM_IDLE_TIMEOUT_MS` value (ms) for
+       * this launch. DeepSeek documents holding connections with keep-alive
+       * frames while inference is pending (closing only after ~10 minutes
+       * without inference, and hard-capping around 30 minutes), so a
+       * provider-aligned value keeps Claude Code's stream watchdog from
+       * aborting queued streams that DeepSeek itself still considers alive.
+       */
+      readonly streamIdleTimeoutMs?: number;
     })
   | (ManifestCliLaunchCommon & {
       readonly kind: "proxy-routed";
@@ -398,7 +407,8 @@ function toCliLaunch(m: ProviderManifest): CliLaunchDescriptor {
       ...(l.mcpLaunch ? { mcpLaunch: l.mcpLaunch } : {}),
       ...(l.statusLineCommand ? { statusLineCommand: l.statusLineCommand } : {}),
       ...(l.modelTierMap ? { modelTierMap: l.modelTierMap } : {}),
-    ...(l.modelVerify ? { modelVerify: l.modelVerify } : {}),
+      ...(l.streamIdleTimeoutMs !== undefined ? { streamIdleTimeoutMs: l.streamIdleTimeoutMs } : {}),
+      ...(l.modelVerify ? { modelVerify: l.modelVerify } : {}),
       ...(l.compatProxy ? { compatProxy: l.compatProxy } : {}),
     };
   }

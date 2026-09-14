@@ -154,6 +154,11 @@ class DataDrivenProviderAdapter implements ProviderAdapter {
             ANTHROPIC_AUTH_TOKEN: token,
             ...(launch.statusLineCommand ? this.statusEnv(ctx) : {}),
             ...this.modelIdentityEnv(launch.modelTierMap, ctx),
+            // Provider-declared stream-idle alignment (e.g. DeepSeek's
+            // documented queued-stream hold) — see RedirectedCliLaunch.
+            ...(launch.streamIdleTimeoutMs !== undefined
+              ? { CLAUDE_STREAM_IDLE_TIMEOUT_MS: String(launch.streamIdleTimeoutMs) }
+              : {}),
           },
           clearEnvVars: launch.clearEnvVars,
           configDir: launch.configDirName,

@@ -187,6 +187,13 @@ export const deepseekManifest: ProviderManifest = {
     // an explicit user model choice and is never inferred from the opus alias,
     // task difficulty, retries, or context size.
     modelTierMap: { opus: "flash", sonnet: "flash", haiku: "flash", fable: "flash", subagent: "flash" },
+    // DeepSeek documents holding queued streams open with SSE keep-alive
+    // frames while inference is pending (closing after ~10 minutes without
+    // inference, hard cap ~30 minutes). Claude Code 2.1.270's stream-idle
+    // watchdog otherwise aborts such streams at ~10 minutes even while
+    // keep-alives flow (verified empirically 2026-09-14), so the client
+    // window is aligned with the provider's documented hold.
+    streamIdleTimeoutMs: 1_800_000,
     // Claude Code 2.1.265+ emits Artifact tool schemas DeepSeek's validator
     // rejects (HTTP 400 — raw `[` inside a character class). Every Claude
     // Code → DeepSeek session MUST go through the local sanitizing proxy

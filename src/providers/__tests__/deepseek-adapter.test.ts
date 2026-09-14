@@ -89,6 +89,21 @@ describe("DeepSeek adapter", () => {
     expect(plan.env.CLAUDE_CODE_SUBAGENT_MODEL).toBe("deepseek-v4-flash");
   });
 
+  it("aligns Claude Code's stream-idle watchdog with DeepSeek's documented queued-stream hold (direct route)", () => {
+    process.env.DEEPSEEK_API_KEY = "sk-deepseek-tier-fixture";
+    const adapter = createProviderAdapter(deepseekProfile);
+    const plan = adapter.buildCliLaunchPlan({ workingDir: "/tmp" });
+    // DeepSeek keeps queued streams alive with keep-alive frames for up to
+    // ~10 minutes (hard cap ~30); Claude Code 2.1.270's default stream-idle
+    // window aborts them at ~10 minutes even while keep-alives flow
+    // (verified empirically 2026-09-14). The launch must carry the
+    // provider-aligned window.
+    expect(plan.env.CLAUDE_STREAM_IDLE_TIMEOUT_MS).toBe("1800000");
+    // The optional Tencent proxy route is deliberately left on the client
+    // default — this launch did not opt into it.
+    expect(plan.env.ANTHROPIC_BASE_URL).toContain("127.0.0.1:8177");
+  });
+
   it("throws UnknownModelAliasError for an unmapped alias", () => {
     const adapter = createProviderAdapter(deepseekProfile);
     expect(() => adapter.resolveModel("opus")).toThrowError(UnknownModelAliasError);
