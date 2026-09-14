@@ -36,13 +36,14 @@ import { runApiAgent } from "../../api-agent/run.js";
 import { ApiAgentError, type NetworkFailureKind } from "../../api-agent/types.js";
 import { ApiFailoverExhaustedError, createFailoverApiRunner, type FailoverPolicy } from "../../api-agent/failover.js";
 import { isPoolFreeEligible } from "../../providers/billing.js";
+import { deepSeekModelDisplay } from "../../providers/presets.js";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { resolveDataDir } from "../../config/paths.js";
 import { getTerminalColumns, isStdinTty } from "./common.js";
 import { buildHudData, formatTerminalTitle, printHud, printProviderIdentity } from "./hud.js";
 import { CostTelemetryStore } from "../../cost/telemetry.js";
-import { estimateCostUsd, DEFAULT_ROLLOVER_POLICY, evaluateRollover } from "../../cost/calculator.js";
+import { estimateCostUsd, effectivePricingModel, DEFAULT_ROLLOVER_POLICY, evaluateRollover } from "../../cost/calculator.js";
 import { nativeSessionFile, readClaudeTurns, readClaudeUsage } from "../../cost/native-usage.js";
 
 /**
@@ -106,7 +107,10 @@ function printPeakProWarning(out: (s: string) => void, prep: LaunchPreparation, 
   const peak = pricing.status(prep.providerRef.providerId);
   if (prep.providerRef.model !== "deepseek-v4-pro" || peak?.tier !== "peak") return;
   const end = peak.endsAt ? new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(peak.endsAt) : "unknown";
-  out(`⚠️  Pro is selected during DeepSeek peak pricing (${peak.multiplier}×), ending ${end} local. Confirm this escalation is necessary before continuing.\n`);
+  // Honest current reality: DeepSeek routes the Pro alias to V4.1 Flash
+  // (billed at Flash rates) until V4.1 Pro launches — so selecting Pro now
+  // buys no distinct model, only peak-period Flash billing.
+  out(`⚠️  Pro alias (deepseek-v4-pro) is currently served and billed as DeepSeek V4.1 Flash. Peak pricing (${peak.multiplier}×) until ${end} local — consider defaulting to deepseek-flash.\n`);
 }
 
 /**
@@ -127,8 +131,14 @@ async function recordLaunchDecisions(prep: LaunchPreparation, dataDir: string, p
   if (!prep.session) return;
   const store = new CostTelemetryStore(dataDir);
   const peak = pricing.status(prep.providerRef.providerId);
-  if (prep.modelDecision) await store.append({ schemaVersion: 1, at: new Date().toISOString(), logicalSessionId: prep.session.sessionId, providerId: prep.providerRef.providerId, model: prep.providerRef.model, kind: "model-tier", estimate: true, peak: peak?.tier === "peak", multiplier: peak?.multiplier ?? 1, reason: prep.modelDecision.reason });
-  if (prep.rollover) await store.append({ schemaVersion: 1, at: new Date().toISOString(), logicalSessionId: prep.session.sessionId, nativeSessionId: prep.rollover.toNativeSessionId, providerId: prep.providerRef.providerId, model: prep.providerRef.model, kind: "rollover", estimate: true, peak: peak?.tier === "peak", multiplier: peak?.multiplier ?? 1, reason: prep.rollover.reason, estimatedCostAvoidedUsd: prep.rollover.estimatedCostAvoidedUsd });
+  // DeepSeek's current upstream routing is recorded alongside the requested
+  // model id so cost attribution stays auditable when routing changes again.
+  const deepseekAttribution =
+    prep.providerRef.providerId === "deepseek"
+      ? { effectiveModel: deepSeekModelDisplay(prep.providerRef.model), pricingModel: effectivePricingModel(prep.providerRef.model) }
+      : {};
+  if (prep.modelDecision) await store.append({ schemaVersion: 1, at: new Date().toISOString(), logicalSessionId: prep.session.sessionId, providerId: prep.providerRef.providerId, model: prep.providerRef.model, kind: "model-tier", estimate: true, peak: peak?.tier === "peak", multiplier: peak?.multiplier ?? 1, reason: prep.modelDecision.reason, ...deepseekAttribution });
+  if (prep.rollover) await store.append({ schemaVersion: 1, at: new Date().toISOString(), logicalSessionId: prep.session.sessionId, nativeSessionId: prep.rollover.toNativeSessionId, providerId: prep.providerRef.providerId, model: prep.providerRef.model, kind: "rollover", estimate: true, peak: peak?.tier === "peak", multiplier: peak?.multiplier ?? 1, reason: prep.rollover.reason, estimatedCostAvoidedUsd: prep.rollover.estimatedCostAvoidedUsd, ...deepseekAttribution });
 }
 
 /**
@@ -412,7 +422,10 @@ export async function launchPrepared(ctx: { launcher: Launcher; providers: Provi
             const at = turn.at ?? new Date().toISOString();
             const peak = ctx.pricing?.status("deepseek", new Date(at));
             const multiplier = peak?.multiplier ?? 1;
-            await store.append({ schemaVersion: 1, at, logicalSessionId: prep.session.sessionId, nativeSessionId: nativeId, providerId: "deepseek", model: prep.providerRef.model, kind: "turn", estimate: true, peak: peak?.tier === "peak", multiplier, usage: turn.usage, estimatedUsd: estimateCostUsd(turn.usage, prep.providerRef.model, multiplier) });
+            // The requested model id is preserved verbatim; effectiveModel /
+            // pricingModel record what upstream actually served and which
+            // tariff applied (e.g. deepseek-v4-pro → V4.1 Flash rates today).
+            await store.append({ schemaVersion: 1, at, logicalSessionId: prep.session.sessionId, nativeSessionId: nativeId, providerId: "deepseek", model: prep.providerRef.model, kind: "turn", estimate: true, peak: peak?.tier === "peak", multiplier, usage: turn.usage, estimatedUsd: estimateCostUsd(turn.usage, prep.providerRef.model, multiplier), effectiveModel: deepSeekModelDisplay(prep.providerRef.model), pricingModel: effectivePricingModel(prep.providerRef.model) });
           }
         }
       }

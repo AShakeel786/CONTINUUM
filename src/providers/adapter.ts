@@ -62,12 +62,17 @@ class DataDrivenProviderAdapter implements ProviderAdapter {
 
   resolveModel(alias?: string, knownIds?: ReadonlySet<string>): string {
     if (!alias || alias === "default") return this.profile.models.default;
-    if (alias === this.profile.models.default || Object.values(this.profile.models.aliases ?? {}).includes(alias)) return alias;
-    const mapped = this.profile.models.aliases?.[alias];
+    // Claude Code's `[1m]` context-window suffix is client metadata, not
+    // part of the provider model id — strip it before any resolution so a
+    // stored "deepseek-v4-flash[1m]" normalizes like the bare id and the
+    // provider always receives exactly the id DeepSeek accepts.
+    const bare = alias.replace(/\[1m\]$/, "");
+    if (bare === this.profile.models.default || Object.values(this.profile.models.aliases ?? {}).includes(bare)) return bare;
+    const mapped = this.profile.models.aliases?.[bare];
     if (mapped) return mapped;
     // A live model id discovered from the installed CLI passes through verbatim
     // (never silently remapped or dropped); anything else is an unknown alias.
-    if (knownIds?.has(alias)) return alias;
+    if (knownIds?.has(bare)) return bare;
     throw new UnknownModelAliasError(this.profile.id, alias, Object.keys(this.profile.models.aliases ?? {}));
   }
 

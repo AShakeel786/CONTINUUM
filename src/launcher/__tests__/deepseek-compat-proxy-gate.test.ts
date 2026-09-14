@@ -167,17 +167,17 @@ describe("DeepSeek compatibility-proxy launch gate", () => {
     const { deps } = await setup();
     const launcher = new Launcher(deps);
     const prep = await launcher.prepareLaunch({ projectKey: "p" }, { permissionMode: "safe" });
-    expect(prep.plan.model).toBe("deepseek-v4-flash");
+    expect(prep.plan.model).toBe("deepseek-flash");
     const settingsIndex = prep.plan.args.indexOf("--settings");
     const settings = JSON.parse(prep.plan.args[settingsIndex + 1] ?? "{}");
     expect(settings.modelOverrides).toEqual({
-      "claude-sonnet-5": "deepseek-v4-flash",
-      "claude-opus-5": "deepseek-v4-flash",
-      "claude-haiku-4-5": "deepseek-v4-flash",
-      "claude-fable-5": "deepseek-v4-flash",
+      "claude-sonnet-5": "deepseek-flash",
+      "claude-opus-5": "deepseek-flash",
+      "claude-haiku-4-5": "deepseek-flash",
+      "claude-fable-5": "deepseek-flash",
     });
     expect(prep.plan.env.ANTHROPIC_MODEL).toBe("sonnet");
-    expect(prep.plan.env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("deepseek-v4-flash");
-    expect(prep.plan.env.CLAUDE_CODE_SUBAGENT_MODEL).toBe("deepseek-v4-flash");
+    expect(prep.plan.env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("deepseek-flash");
+    expect(prep.plan.env.CLAUDE_CODE_SUBAGENT_MODEL).toBe("deepseek-flash");
   });
 });

@@ -53,7 +53,7 @@ export async function runDeepSeekSmokeCommand(args: readonly string[], io: CliIo
   }
   const peak = ctx.pricing.status("deepseek");
   const projected = estimateCostUsd({ inputTokens: prep.contextTokensUsed, cacheHitTokens: 0, cacheMissTokens: prep.contextTokensUsed, outputTokens: 64, contextTokens: prep.contextTokensUsed, turns: 1 }, prep.providerRef.model, peak?.multiplier ?? 1);
-  if (prep.providerRef.model !== "deepseek-v4-flash") { out("DeepSeek live check: FAIL\nStage: routing\nReason: default model was not deepseek-v4-flash.\n"); return 1; }
+  if (prep.providerRef.model !== "deepseek-flash") { out("DeepSeek live check: FAIL\nStage: routing\nReason: default model was not the canonical deepseek-flash.\n"); return 1; }
   if (projected > ceiling) { out(`DeepSeek live check: ABORTED\nStage: ceiling\nProjected estimate: $${projected.toFixed(4)} > $${ceiling.toFixed(4)}\n`); return 2; }
   const smokePrep = printPlan(prep);
   const code = await launchPrepared(ctx, smokePrep, out, async (plan) => {
@@ -67,7 +67,7 @@ export async function runDeepSeekSmokeCommand(args: readonly string[], io: CliIo
   }
 
   const resumed = await ctx.launcher.prepareLaunch({ sessionId: prep.session!.sessionId }, { permissionMode: "safe" });
-  if (resumed.providerRef.model !== "deepseek-v4-flash") { out("DeepSeek live check: FAIL\nStage: resume-routing\nReason: resumed model was not Flash.\n"); return 1; }
+  if (resumed.providerRef.model !== "deepseek-flash") { out("DeepSeek live check: FAIL\nStage: resume-routing\nReason: resumed model was not Flash.\n"); return 1; }
   const resumeCode = await launchPrepared(ctx, printPlan(resumed), out, async (plan) => {
     const result = await spawnCliCaptured(plan);
     return { exitCode: result.exitCode };
@@ -78,6 +78,6 @@ export async function runDeepSeekSmokeCommand(args: readonly string[], io: CliIo
   const estimated = events.reduce((sum, e) => sum + (e.estimatedUsd ?? 0), 0);
   const withinCeiling = estimated <= ceiling;
   out(`DeepSeek live check: ${resumeCode === 0 && second.turns > first.turns && withinCeiling ? "PASS" : "FAIL"}\n`);
-  out(`Auth:       OK\nRoute:      ${prep.route}\nModel:      ${prep.providerRef.model}\nResponse:   OK\nTelemetry:  ${second.turns > first.turns ? "OK" : "FAIL"}\nResume:     ${resumeCode === 0 && resumed.providerRef.model === "deepseek-v4-flash" ? "OK" : "FAIL"}\nPeak:       ${peak?.tier === "peak" ? `peak ${peak.multiplier}×` : "off-peak"}\nEst. cost:  $${estimated.toFixed(4)}\nSession:    ${prep.session!.sessionId}\n`);
+  out(`Auth:       OK\nRoute:      ${prep.route}\nModel:      ${prep.providerRef.model}\nResponse:   OK\nTelemetry:  ${second.turns > first.turns ? "OK" : "FAIL"}\nResume:     ${resumeCode === 0 && resumed.providerRef.model === "deepseek-flash" ? "OK" : "FAIL"}\nPeak:       ${peak?.tier === "peak" ? `peak ${peak.multiplier}×` : "off-peak"}\nEst. cost:  $${estimated.toFixed(4)}\nSession:    ${prep.session!.sessionId}\n`);
   return resumeCode === 0 && second.turns > first.turns && withinCeiling ? 0 : 1;
 }

@@ -28,6 +28,13 @@ export interface ProviderPricingSchedule {
   readonly providerId: string;
   /** All times in this schedule are UTC — the brief's "keep all scheduling calculations timezone-safe using UTC internally." */
   readonly peakWindows: readonly PricingWindow[];
+  /**
+   * UTC weekdays the peak windows apply to, as `Date.getUTCDay()` values
+   * (0=Sunday … 6=Saturday). Absent = the windows repeat every day
+   * (backward-compatible with daily-only schedules). DeepSeek's current
+   * official schedule is Monday–Friday only: `[1, 2, 3, 4, 5]`.
+   */
+  readonly peakDaysUTC?: readonly number[];
   /** Applied to estimates during a configured peak window. */
   readonly peakMultiplier?: number;
   /** Free-form note on where this schedule came from / when it was last checked against the provider's real published pricing — not consumed by any logic, just kept honest and traceable. */

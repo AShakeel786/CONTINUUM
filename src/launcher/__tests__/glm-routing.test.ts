@@ -168,7 +168,7 @@ describe("automatic provider-preference chain (GLM 5.2 Free → DeepSeek)", () =
     const launcher = new Launcher(deps);
     const prep = await launcher.prepareLaunch({ projectKey: p.id, taskGoal: "x" }, { permissionMode: "safe" });
     expect(prep.providerRef.providerId).toBe("deepseek");
-    expect(prep.providerRef.model).toBe("deepseek-v4-flash");
+    expect(prep.providerRef.model).toBe("deepseek-flash");
     expect(prep.autoRoute).toEqual({ chain: ["glm-5-2-free", "deepseek"], index: 1 });
     expect(prep.modelDecision.reason).toContain("automatic-default-flash");
   });
@@ -297,7 +297,7 @@ describe("automatic provider-preference chain (GLM 5.2 Free → DeepSeek)", () =
     const launcher = new Launcher(deps);
     const prep = await launcher.prepareLaunch({ projectKey: p.id, modelAlias: "flash", taskGoal: "x" }, { permissionMode: "safe" });
     expect(prep.providerRef.providerId).toBe("deepseek");
-    expect(prep.providerRef.model).toBe("deepseek-v4-flash");
+    expect(prep.providerRef.model).toBe("deepseek-flash");
     expect(prep.autoRoute).toBeUndefined();
   });
 

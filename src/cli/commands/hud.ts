@@ -36,6 +36,7 @@ import type { Launcher } from "../../launcher/launcher.js";
 import type { ProviderRegistry } from "../../providers/registry.js";
 import type { PricingAwarenessService } from "../../pricing/service.js";
 import { formatPromoLabel } from "../../providers/promo.js";
+import { deepSeekModelDisplay } from "../../providers/presets.js";
 import { codingToolsAvailable } from "../../mcp/coding-tools.js";
 
 export type HandoffHudState = "ready" | "pending" | "off";
@@ -108,7 +109,10 @@ export async function buildHudData(
   return {
     workspace: formatWorkspace(prep),
     providerLabel,
-    model: prep.providerRef.model,
+    // Non-DeepSeek ids pass through unchanged (the map only knows DeepSeek
+    // ids); DeepSeek ids render as their current user-facing names, e.g.
+    // "DeepSeek V4.1 Flash" for the canonical deepseek-flash.
+    model: deepSeekModelDisplay(prep.providerRef.model),
     contextUsed: prep.contextTokensUsed,
     contextMax: prep.contextWindowTokens,
     handoff: await resolveHandoffState(prep, deps.launcher),

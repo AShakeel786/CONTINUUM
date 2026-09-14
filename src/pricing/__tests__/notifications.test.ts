@@ -7,7 +7,7 @@ const schedule = deepseekPricingSchedule;
 
 describe("computeNotificationEvents — pre-peak notification", () => {
   it("fires a pre-peak event exactly at the configured lead time before peak starts", () => {
-    const now = new Date("2026-08-16T00:45:00.000Z"); // 15 min before 01:00 UTC peak start
+    const now = new Date("2026-08-17T00:45:00.000Z"); // 15 min before 01:00 UTC peak start
     const { events, updatedRecord } = computeNotificationEvents({
       schedule,
       providerDisplayName: "DeepSeek",
@@ -24,7 +24,7 @@ describe("computeNotificationEvents — pre-peak notification", () => {
   });
 
   it("does not fire a pre-peak event before the lead-time window opens", () => {
-    const now = new Date("2026-08-16T00:30:00.000Z"); // 30 min before, lead time is 15
+    const now = new Date("2026-08-17T00:30:00.000Z"); // 30 min before, lead time is 15
     const { events } = computeNotificationEvents({
       schedule,
       providerDisplayName: "DeepSeek",
@@ -35,7 +35,7 @@ describe("computeNotificationEvents — pre-peak notification", () => {
   });
 
   it("respects a configurable lead time other than the default", () => {
-    const now = new Date("2026-08-16T00:30:00.000Z"); // 30 min before
+    const now = new Date("2026-08-17T00:30:00.000Z"); // 30 min before
     const { events } = computeNotificationEvents({
       schedule,
       providerDisplayName: "DeepSeek",
@@ -49,7 +49,7 @@ describe("computeNotificationEvents — pre-peak notification", () => {
 
 describe("computeNotificationEvents — peak-start notification", () => {
   it("fires a peak-started event exactly at the transition instant", () => {
-    const now = new Date("2026-08-16T01:00:00.000Z");
+    const now = new Date("2026-08-17T01:00:00.000Z");
     const { events, updatedRecord } = computeNotificationEvents({
       schedule,
       providerDisplayName: "DeepSeek",
@@ -64,7 +64,7 @@ describe("computeNotificationEvents — peak-start notification", () => {
   });
 
   it("does not fire a peak-started event before the transition", () => {
-    const now = new Date("2026-08-16T00:59:00.000Z");
+    const now = new Date("2026-08-17T00:59:00.000Z");
     const { events } = computeNotificationEvents({
       schedule,
       providerDisplayName: "DeepSeek",
@@ -80,7 +80,7 @@ describe("computeNotificationEvents — no duplicate notifications within the sa
     const first = computeNotificationEvents({
       schedule,
       providerDisplayName: "DeepSeek",
-      now: new Date("2026-08-16T00:50:00.000Z"),
+      now: new Date("2026-08-17T00:50:00.000Z"),
       config: DEFAULT_NOTIFICATION_CONFIG,
     });
     expect(first.events).toHaveLength(1);
@@ -88,7 +88,7 @@ describe("computeNotificationEvents — no duplicate notifications within the sa
     const second = computeNotificationEvents({
       schedule,
       providerDisplayName: "DeepSeek",
-      now: new Date("2026-08-16T00:55:00.000Z"),
+      now: new Date("2026-08-17T00:55:00.000Z"),
       config: DEFAULT_NOTIFICATION_CONFIG,
       priorRecord: first.updatedRecord,
     });
@@ -100,11 +100,11 @@ describe("computeNotificationEvents — no duplicate notifications within the sa
     const allEvents: string[] = [];
 
     const checkpoints = [
-      "2026-08-16T00:30:00.000Z", // before lead time
-      "2026-08-16T00:50:00.000Z", // pre-peak fires
-      "2026-08-16T00:58:00.000Z", // no dup
-      "2026-08-16T01:00:00.000Z", // peak-started fires
-      "2026-08-16T02:00:00.000Z", // no dup (still tracking the 04:00 off-peak transition, no events for that)
+      "2026-08-17T00:30:00.000Z", // before lead time
+      "2026-08-17T00:50:00.000Z", // pre-peak fires
+      "2026-08-17T00:58:00.000Z", // no dup
+      "2026-08-17T01:00:00.000Z", // peak-started fires
+      "2026-08-17T02:00:00.000Z", // no dup (still tracking the 04:00 off-peak transition, no events for that)
     ];
     for (const iso of checkpoints) {
       const result = computeNotificationEvents({
@@ -126,7 +126,7 @@ describe("computeNotificationEvents — no duplicate notifications within the sa
     const nextCycle = computeNotificationEvents({
       schedule,
       providerDisplayName: "DeepSeek",
-      now: new Date("2026-08-16T05:50:00.000Z"),
+      now: new Date("2026-08-17T05:50:00.000Z"),
       config: DEFAULT_NOTIFICATION_CONFIG,
       priorRecord: record,
     });
@@ -136,7 +136,7 @@ describe("computeNotificationEvents — no duplicate notifications within the sa
 
 describe("computeNotificationEvents — only peak-bound transitions produce notifications", () => {
   it("produces no events when the next tracked transition is INTO off-peak", () => {
-    const now = new Date("2026-08-16T01:30:00.000Z"); // inside peak window, next transition is off-peak at 04:00
+    const now = new Date("2026-08-17T01:30:00.000Z"); // inside peak window, next transition is off-peak at 04:00
     const { events } = computeNotificationEvents({
       schedule,
       providerDisplayName: "DeepSeek",

@@ -88,7 +88,7 @@ function fakeLauncher(authenticated: readonly { providerId: string; model: strin
 
 describe("buildHudData", () => {
   it("formats a terminal title that survives native Claude redraws", () => {
-    expect(formatTerminalTitle({ workspace: "General", providerLabel: "DeepSeek", model: "deepseek-v4-flash", contextUsed: 1200, contextMax: 200000, handoff: "ready", memoryOff: false, bypass: false, peak: { multiplier: 2, endsAt: new Date("2026-08-19T10:00:00Z") } })).toContain("DeepSeek | deepseek-v4-flash | ctx 1k/200k | handoff ready | PEAK 2×");
+    expect(formatTerminalTitle({ workspace: "General", providerLabel: "DeepSeek", model: "deepseek-flash", contextUsed: 1200, contextMax: 200000, handoff: "ready", memoryOff: false, bypass: false, peak: { multiplier: 2, endsAt: new Date("2026-08-19T10:00:00Z") } })).toContain("DeepSeek | deepseek-flash | ctx 1k/200k | handoff ready | PEAK 2×");
   });
   it("flags FULL ACCESS in the terminal title when bypass is active", () => {
     const title = formatTerminalTitle({ workspace: "General", providerLabel: "Codex", model: "gpt-5.6-sol", contextUsed: 1200, contextMax: 200000, handoff: "ready", memoryOff: false, bypass: true, peak: undefined });

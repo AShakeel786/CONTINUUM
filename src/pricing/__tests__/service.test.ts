@@ -44,7 +44,7 @@ describe("PricingAwarenessService — persisted pricing-window state", () => {
     const { sessionManager, service } = await makeService(dir);
     await seedDeepSeekSession(sessionManager);
 
-    const { session } = await service.check("sess-1", new Date("2026-08-16T02:00:00.000Z"));
+    const { session } = await service.check("sess-1", new Date("2026-08-17T02:00:00.000Z"));
 
     expect(session.pricingAwareness?.providerId).toBe("deepseek");
     expect(session.pricingAwareness?.currentTier).toBe("peak");
@@ -62,7 +62,7 @@ describe("PricingAwarenessService — persisted pricing-window state", () => {
       taskGoal: "Ship the feature",
     });
 
-    const { session, events } = await service.check("sess-1", new Date("2026-08-16T02:00:00.000Z"));
+    const { session, events } = await service.check("sess-1", new Date("2026-08-17T02:00:00.000Z"));
     expect(events).toEqual([]);
     expect(session.pricingAwareness).toBeUndefined();
   });
@@ -71,7 +71,7 @@ describe("PricingAwarenessService — persisted pricing-window state", () => {
     const dir = await makeTmpDir();
     const { sessionManager, service } = await makeService(dir);
     await seedDeepSeekSession(sessionManager);
-    const now = new Date("2026-08-16T02:00:00.000Z");
+    const now = new Date("2026-08-17T02:00:00.000Z");
     const { session } = await service.check("sess-1", now);
 
     const diagnostics = service.diagnostics(session, now, "UTC");
@@ -87,14 +87,14 @@ describe("PricingAwarenessService — no duplicate notification after restart", 
     const first = await makeService(dir);
     await seedDeepSeekSession(first.sessionManager);
 
-    const preTime = new Date("2026-08-16T00:50:00.000Z"); // 10 min before 01:00 peak
+    const preTime = new Date("2026-08-17T00:50:00.000Z"); // 10 min before 01:00 peak
     const firstCheck = await first.service.check("sess-1", preTime);
     expect(firstCheck.events.map((e) => e.kind)).toEqual(["pre-peak"]);
 
     // Simulate a full process restart: brand-new SessionManager/PricingAwarenessService
     // instances, sharing only the on-disk directory.
     const second = await makeService(dir);
-    const secondCheckTime = new Date("2026-08-16T00:55:00.000Z"); // still before the transition
+    const secondCheckTime = new Date("2026-08-17T00:55:00.000Z"); // still before the transition
     const secondCheck = await second.service.check("sess-1", secondCheckTime);
     expect(secondCheck.events).toEqual([]); // no duplicate
   });
@@ -103,10 +103,10 @@ describe("PricingAwarenessService — no duplicate notification after restart", 
     const dir = await makeTmpDir();
     const first = await makeService(dir);
     await seedDeepSeekSession(first.sessionManager);
-    await first.service.check("sess-1", new Date("2026-08-16T01:00:00.000Z")); // fires peak-started
+    await first.service.check("sess-1", new Date("2026-08-17T01:00:00.000Z")); // fires peak-started
 
     const second = await makeService(dir);
-    const secondCheck = await second.service.check("sess-1", new Date("2026-08-16T01:05:00.000Z"));
+    const secondCheck = await second.service.check("sess-1", new Date("2026-08-17T01:05:00.000Z"));
     expect(secondCheck.events).toEqual([]);
   });
 });
@@ -118,7 +118,7 @@ describe("suggestHandoffOnPeakEvent — user-selectable handoff, never automatic
     await seedDeepSeekSession(sessionManager);
     const handoffManager = new HandoffManager(sessionManager, registry);
 
-    const { events } = await service.check("sess-1", new Date("2026-08-16T01:00:00.000Z"));
+    const { events } = await service.check("sess-1", new Date("2026-08-17T01:00:00.000Z"));
     const peakStarted = events.find((e) => e.kind === "peak-started");
     expect(peakStarted).toBeDefined();
 
@@ -164,7 +164,7 @@ describe("suggestHandoffOnPeakEvent — user-selectable handoff, never automatic
     await seedDeepSeekSession(sessionManager);
     const handoffManager = new HandoffManager(sessionManager, registry);
 
-    const { events } = await service.check("sess-1", new Date("2026-08-16T01:00:00.000Z"));
+    const { events } = await service.check("sess-1", new Date("2026-08-17T01:00:00.000Z"));
     const peakStarted = events.find((e) => e.kind === "peak-started")!;
     const suggestion = suggestHandoffOnPeakEvent(peakStarted, handoffManager)!;
     const chosen = suggestion.availableProviders.find((p) => p.providerId !== "deepseek")!;

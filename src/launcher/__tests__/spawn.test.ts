@@ -275,8 +275,8 @@ describe("spawnCli — full launcher-to-spawn pipeline (real adapters, real prep
     // haiku + subagent tiers: Claude Code does NOT honor modelOverrides for
     // these (v2.1.251), so the env var itself carries the provider model —
     // a claude-* id here would leak upstream on those internal calls.
-    expect(lastSpawnCall?.options.env?.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("deepseek-v4-flash");
-    expect(lastSpawnCall?.options.env?.CLAUDE_CODE_SUBAGENT_MODEL).toBe("deepseek-v4-flash");
+    expect(lastSpawnCall?.options.env?.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("deepseek-flash");
+    expect(lastSpawnCall?.options.env?.CLAUDE_CODE_SUBAGENT_MODEL).toBe("deepseek-flash");
   });
 
   it("DeepSeek existing-session resume: same redirect AND model identity survive to spawn on the resume path", async () => {
@@ -287,11 +287,11 @@ describe("spawnCli — full launcher-to-spawn pipeline (real adapters, real prep
     await spawnCli(resumed.plan);
 
     expect(resumed.providerRef.providerId).toBe("deepseek");
-    expect(resumed.providerRef.model).toBe("deepseek-v4-flash");
+    expect(resumed.providerRef.model).toBe("deepseek-flash");
     expect(lastSpawnCall?.options.env?.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:8177/anthropic");
     expect(lastSpawnCall?.options.env?.ANTHROPIC_AUTH_TOKEN).toBe("sk-deepseek-real-fixture-key");
     expect(lastSpawnCall?.options.env?.ANTHROPIC_MODEL).toBe("sonnet");
-    expect(lastSpawnCall?.options.env?.CLAUDE_CODE_SUBAGENT_MODEL).toBe("deepseek-v4-flash");
+    expect(lastSpawnCall?.options.env?.CLAUDE_CODE_SUBAGENT_MODEL).toBe("deepseek-flash");
   });
 
   it("Claude fresh launch: real spawnCli receives no redirect and NO DeepSeek model overrides (native tiers stay native)", async () => {
@@ -334,8 +334,8 @@ describe("spawnCli — full launcher-to-spawn pipeline (real adapters, real prep
     expect(lastSpawnCall?.options.env?.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("claude-opus-5");
     expect(lastSpawnCall?.options.env?.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe("claude-sonnet-5");
     expect(lastSpawnCall?.options.env?.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe("claude-fable-5");
-    expect(lastSpawnCall?.options.env?.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("deepseek-v4-flash");
-    expect(lastSpawnCall?.options.env?.CLAUDE_CODE_SUBAGENT_MODEL).toBe("deepseek-v4-flash");
+    expect(lastSpawnCall?.options.env?.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("deepseek-flash");
+    expect(lastSpawnCall?.options.env?.CLAUDE_CODE_SUBAGENT_MODEL).toBe("deepseek-flash");
   });
 
   it("DeepSeek → Claude handoff: the same session, resumed onto Claude, spawns with NO leftover DeepSeek redirect or model overrides", async () => {
@@ -379,8 +379,8 @@ describe("spawnCli — full launcher-to-spawn pipeline (real adapters, real prep
     expect(plan.env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe("claude-sonnet-5");
     expect(plan.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("claude-opus-5");
     expect(plan.env.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe("claude-fable-5");
-    expect(plan.env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("deepseek-v4-flash");
-    expect(plan.env.CLAUDE_CODE_SUBAGENT_MODEL).toBe("deepseek-v4-flash");
+    expect(plan.env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("deepseek-flash");
+    expect(plan.env.CLAUDE_CODE_SUBAGENT_MODEL).toBe("deepseek-flash");
   });
 
   it("DeepSeek config dir isolation: DeepSeek and Claude never share a CLAUDE_CONFIG_DIR across spawns", async () => {

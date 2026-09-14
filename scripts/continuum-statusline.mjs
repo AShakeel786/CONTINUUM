@@ -8,19 +8,32 @@ let input = {};
 try { input = JSON.parse(fs.readFileSync(0, "utf8")); } catch {}
 
 const provider = process.env.CONTINUUM_STATUS_PROVIDER || "DeepSeek";
-const model = process.env.CONTINUUM_STATUS_MODEL || "deepseek-v4-flash";
+const model = process.env.CONTINUUM_STATUS_MODEL || "deepseek-flash";
+// User-facing model names (mirrors src/providers/presets.ts
+// DEEPSEEK_MODEL_DISPLAY_LABELS — this script is standalone, so it keeps its
+// own tiny copy).
+const modelDisplay = {
+  "deepseek-flash": "DeepSeek V4.1 Flash",
+  "deepseek-v4-flash": "DeepSeek V4.1 Flash (legacy alias)",
+  "deepseek-v4-pro": "DeepSeek V4 Pro (currently served by V4.1 Flash)",
+};
+const shownModel = modelDisplay[model.replace(/\[1m\]$/, "")] ?? model;
 const handoff = process.env.CONTINUUM_STATUS_HANDOFF || "ready";
 // Optional context fields the launcher sets on redirected/proxy launches.
 const workspace = process.env.CONTINUUM_STATUS_WORKSPACE;
 const route = process.env.CONTINUUM_STATUS_ROUTE;
 const access = process.env.CONTINUUM_STATUS_ACCESS; // "full" when full-access is enabled
 const tz = process.env.CONTINUUM_TIMEZONE || Intl.DateTimeFormat().resolvedOptions().timeZone;
+// Official DeepSeek peak windows (UTC hours, Monday–Friday ONLY) — the same
+// data as src/pricing/schedules/deepseek.ts. Never store local equivalents.
 const windows = [[1, 4], [6, 10]];
+const PEAK_DAYS = new Set([1, 2, 3, 4, 5]); // getUTCDay(): Mon..Fri
 // CONTINUUM_STATUS_NOW is intentionally an opt-in test hook; production
 // statusline renders use the real clock.
 const now = process.env.CONTINUUM_STATUS_NOW ? new Date(process.env.CONTINUUM_STATUS_NOW) : new Date();
 const hour = now.getUTCHours() + now.getUTCMinutes() / 60;
-const peakWindow = windows.find(([start, end]) => hour >= start && hour < end);
+const isPeakDay = PEAK_DAYS.has(now.getUTCDay());
+const peakWindow = isPeakDay ? windows.find(([start, end]) => hour >= start && hour < end) : undefined;
 
 function localTime(date) {
   return new Intl.DateTimeFormat(undefined, { timeZone: tz, hour: "numeric", minute: "2-digit" }).format(date);
@@ -31,9 +44,14 @@ function localRange(startHour, endHour, dayOffset = 0) {
   return `${localTime(d)}–${localTime(e)}`;
 }
 function nextPeak() {
-  for (let day = 0; day <= 2; day++) for (const [start, end] of windows) {
-    const candidate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + day, start));
-    if (candidate > now) return { candidate, end: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + day, end)), range: localRange(start, end, day) };
+  // Weekday-gated: skip candidates that fall on Saturday/Sunday (the widest
+  // gap is the whole weekend, so scan up to 6 days ahead).
+  for (let day = 0; day <= 6; day++) {
+    for (const [start, end] of windows) {
+      const candidate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + day, start));
+      if (candidate <= now || !PEAK_DAYS.has(candidate.getUTCDay())) continue;
+      return { candidate, end: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + day, end)), range: localRange(start, end, day) };
+    }
   }
   return undefined;
 }
@@ -41,7 +59,7 @@ function nextPeak() {
 // Keep the complete local schedule available in the HUD. The dates are
 // derived from UTC windows at render time, so the display follows the
 // user's timezone and DST rules instead of embedding Toronto-specific hours.
-const dailyPeak = `Peak windows (local): ${localRange(1, 4)}; ${localRange(6, 10)}`;
+const dailyPeak = `Peak windows (local, Mon–Fri): ${localRange(1, 4)}; ${localRange(6, 10)}`;
 
 const context = input.context_window ?? {};
 const size = Number(context.context_window_size ?? context.contextWindowSize ?? 200000);
@@ -66,7 +84,7 @@ if (peakWindow) {
 const parts = ["CONTINUUM"];
 if (workspace) parts.push(workspace);
 if (access === "full") parts.push("FULL ACCESS");
-parts.push(provider, model);
+parts.push(provider, shownModel);
 if (route) parts.push(route);
 parts.push(pricing, ctx, `handoff ${handoff}`);
 process.stdout.write(parts.join(" | "));

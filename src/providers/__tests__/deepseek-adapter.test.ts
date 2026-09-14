@@ -55,15 +55,24 @@ afterEach(() => {
 });
 
 describe("DeepSeek adapter", () => {
-  it("resolves the default model and the pro/flash aliases", () => {
+  it("resolves the canonical deepseek-flash default and the pro/flash/legacy aliases", () => {
     const adapter = createProviderAdapter(deepseekProfile);
-    expect(adapter.resolveModel()).toBe("deepseek-v4-flash");
-    expect(adapter.resolveModel("flash")).toBe("deepseek-v4-flash");
+    expect(adapter.resolveModel()).toBe("deepseek-flash");
+    expect(adapter.resolveModel("flash")).toBe("deepseek-flash");
     expect(adapter.resolveModel("pro")).toBe("deepseek-v4-pro");
     expect(adapter.resolveModel("deepseek-v4-pro")).toBe("deepseek-v4-pro");
+    // Legacy ids normalize to the canonical current model id.
+    expect(adapter.resolveModel("deepseek-v4-flash")).toBe("deepseek-flash");
+    expect(adapter.resolveModel("v4-flash")).toBe("deepseek-flash");
+    // The Claude Code [1m] context suffix is client metadata, stripped before resolution.
+    expect(adapter.resolveModel("deepseek-v4-flash[1m]")).toBe("deepseek-flash");
+    expect(adapter.resolveModel("deepseek-flash[1m]")).toBe("deepseek-flash");
+    expect(adapter.resolveModel("deepseek-v4-pro[1m]")).toBe("deepseek-v4-pro");
+    // A nonexistent production id is refused, never silently routed.
+    expect(() => adapter.resolveModel("deepseek-v4.1-flash")).toThrowError(UnknownModelAliasError);
   });
 
-  it("keeps every implicit Claude tier on Flash, including Opus", () => {
+  it("keeps every implicit Claude tier on the canonical Flash, including Opus", () => {
     process.env.DEEPSEEK_API_KEY = "sk-deepseek-tier-fixture";
     const adapter = createProviderAdapter(deepseekProfile);
     const plan = adapter.buildCliLaunchPlan({ workingDir: "/tmp" });
@@ -73,8 +82,8 @@ describe("DeepSeek adapter", () => {
     expect(plan.env.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe("claude-fable-5");
     // haiku + subagent are not override-able by Claude Code — env carries the
     // provider model directly so no claude-* id leaks upstream.
-    expect(plan.env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("deepseek-v4-flash");
-    expect(plan.env.CLAUDE_CODE_SUBAGENT_MODEL).toBe("deepseek-v4-flash");
+    expect(plan.env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("deepseek-flash");
+    expect(plan.env.CLAUDE_CODE_SUBAGENT_MODEL).toBe("deepseek-flash");
   });
 
   it("allows Pro only as an explicit primary model and never via implicit tier mapping", () => {
@@ -85,8 +94,8 @@ describe("DeepSeek adapter", () => {
     expect(plan.env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe("claude-sonnet-5");
     expect(plan.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("claude-opus-5");
     expect(plan.env.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe("claude-fable-5");
-    expect(plan.env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("deepseek-v4-flash");
-    expect(plan.env.CLAUDE_CODE_SUBAGENT_MODEL).toBe("deepseek-v4-flash");
+    expect(plan.env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("deepseek-flash");
+    expect(plan.env.CLAUDE_CODE_SUBAGENT_MODEL).toBe("deepseek-flash");
   });
 
   it("aligns Claude Code's stream-idle watchdog with DeepSeek's documented queued-stream hold (direct route)", () => {
@@ -168,10 +177,10 @@ describe("DeepSeek adapter", () => {
     // footer silently vanished (`C:Program: command not found`, exit 127).
     expect(settings.statusLine.command).toMatch(/^"[^"]*node[^"]*" "[^"]*continuum-statusline\.mjs"$/);
     expect(settings.statusLine.command).not.toContain("\\");
-    expect(settings.modelOverrides["claude-sonnet-5"]).toBe("deepseek-v4-flash");
-    expect(settings.modelOverrides["claude-opus-5"]).toBe("deepseek-v4-flash");
+    expect(settings.modelOverrides["claude-sonnet-5"]).toBe("deepseek-flash");
+    expect(settings.modelOverrides["claude-opus-5"]).toBe("deepseek-flash");
     expect(plan.env.CONTINUUM_STATUS_PROVIDER).toBe("DeepSeek");
-    expect(plan.env.CONTINUUM_STATUS_MODEL).toBe("deepseek-v4-flash");
+    expect(plan.env.CONTINUUM_STATUS_MODEL).toBe("deepseek-flash");
     // Authoritative footer context: workspace label, route indicator, and
     // (absent here) the FULL ACCESS marker for safe mode.
     expect(plan.env.CONTINUUM_STATUS_WORKSPACE).toBe("tmp");
@@ -214,10 +223,21 @@ describe("DeepSeek adapter", () => {
       expect(footer).toContain("project"); // workspace label
       expect(footer).toContain("FULL ACCESS");
       expect(footer).toContain("DeepSeek");
-      expect(footer).toContain("deepseek-v4-flash");
+      expect(footer).toContain("DeepSeek V4.1 Flash"); // canonical model shown by its user-facing name
       expect(footer).toContain("direct"); // route indicator
       expect(footer).toContain("ctx");
       expect(footer).toContain("handoff");
+      expect(footer).toContain("Mon–Fri"); // weekday-gated schedule surfaced
+
+      // Weekend gating: Saturday inside the would-be 06:00–10:00 UTC window
+      // must render OFF-PEAK (the official schedule is Monday–Friday only).
+      const weekend = await execBash(bash, settings.statusLine.command, {
+        ...plan.env,
+        CONTINUUM_STATUS_NOW: "2026-01-03T08:00:00Z", // Saturday
+      });
+      expect(weekend.code).toBe(0);
+      expect(weekend.stdout).toContain("OFF-PEAK");
+      expect(weekend.stdout).not.toContain("PEAK 2×");
     },
   );
 

@@ -43,7 +43,15 @@ function windowContains(window: PricingWindow, minuteOfDay: number): boolean {
   return minuteOfDay >= start || minuteOfDay < end;
 }
 
+/** True if the schedule's peak windows apply on `date`'s UTC weekday. */
+function isPeakDay(schedule: ProviderPricingSchedule, date: Date): boolean {
+  const days = schedule.peakDaysUTC;
+  if (days === undefined) return true; // daily-repeating schedule (backward compatible)
+  return days.includes(date.getUTCDay());
+}
+
 export function getCurrentTier(schedule: ProviderPricingSchedule, now: Date): PricingTier {
+  if (!isPeakDay(schedule, now)) return "off-peak";
   const minuteOfDay = utcMinuteOfDay(now);
   const isPeak = schedule.peakWindows.some((w) => windowContains(w, minuteOfDay));
   return isPeak ? "peak" : "off-peak";
@@ -74,9 +82,10 @@ export function getNextTransition(schedule: ProviderPricingSchedule, now: Date):
   if (schedule.peakWindows.length === 0) return undefined;
 
   const candidates: Date[] = [];
-  // 3 days of boundaries is comfortably enough for any single window <=
-  // 24h wide on a daily-repeating schedule; cheap to compute regardless.
-  for (let dayOffset = -1; dayOffset <= 2; dayOffset++) {
+  // 10 days of boundaries comfortably covers any window on a weekday-gated
+  // schedule (the widest gap is a whole weekend: Friday 10:00 UTC →
+  // Monday 01:00 UTC, up to ~3 days); cheap to compute regardless.
+  for (let dayOffset = -1; dayOffset <= 9; dayOffset++) {
     for (const w of schedule.peakWindows) {
       candidates.push(boundaryDateOnDay(w.startUTC, now, dayOffset));
       candidates.push(boundaryDateOnDay(w.endUTC, now, dayOffset));

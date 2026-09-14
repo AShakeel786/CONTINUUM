@@ -145,6 +145,23 @@ export const claudeManifest: ProviderManifest = {
   },
 };
 
+/**
+ * User-facing labels for DeepSeek model ids (September 2026 routing):
+ * `deepseek-flash` IS DeepSeek V4.1 Flash; the `deepseek-v4-pro` alias is
+ * currently routed to (and billed as) V4.1 Flash until V4.1 Pro launches.
+ * Shared by the HUD, telemetry, and the launcher's Pro warning so every
+ * surface states the same upstream reality.
+ */
+export const DEEPSEEK_MODEL_DISPLAY_LABELS: Readonly<Record<string, string>> = {
+  "deepseek-flash": "DeepSeek V4.1 Flash",
+  "deepseek-v4-flash": "DeepSeek V4.1 Flash (legacy alias)",
+  "deepseek-v4-pro": "DeepSeek V4 Pro (currently served by V4.1 Flash)",
+};
+
+export function deepSeekModelDisplay(model: string): string {
+  return DEEPSEEK_MODEL_DISPLAY_LABELS[model.replace(/\[1m\]$/, "")] ?? model;
+}
+
 export const deepseekManifest: ProviderManifest = {
   schemaVersion: 1,
   id: "deepseek",
@@ -153,13 +170,28 @@ export const deepseekManifest: ProviderManifest = {
   baseUrl: "https://api.deepseek.com",
   auth: { kind: "api-key", envVar: "DEEPSEEK_API_KEY" },
   billing: "paid",
-  models: { default: "deepseek-v4-flash", aliases: { flash: "deepseek-v4-flash", pro: "deepseek-v4-pro" } },
+  // Canonical current model: `deepseek-flash` (DeepSeek V4.1 Flash).
+  // `deepseek-v4-flash` is a retired legacy alias that DeepSeek still
+  // accepts and serves with V4.1 Flash — normalized to the canonical id.
+  // `pro` stays an explicit opt-in alias pointing at `deepseek-v4-pro`;
+  // DeepSeek currently routes that id to V4.1 Flash (billed at Flash
+  // rates) until V4.1 Pro launches, which the launch/HUD surfaces say.
+  models: {
+    default: "deepseek-flash",
+    aliases: {
+      flash: "deepseek-flash",
+      "v4-flash": "deepseek-flash",
+      "deepseek-v4-flash": "deepseek-flash",
+      pro: "deepseek-v4-pro",
+    },
+  },
   capabilities: {
     thinking: "supported",
     tools: true,
     promptCache: "openai-automatic",
     cliAvailable: true,
-    notes: "Claude Code redirected to DeepSeek's own Anthropic-compatible endpoint (https://api.deepseek.com/anthropic). Requires only DEEPSEEK_API_KEY — no Docker/Tencent/MemoryProxy. An optional Tencent MemoryProxy route is available via `continuum auth deepseek --proxy`.",
+    notes:
+      "Claude Code redirected to DeepSeek's own Anthropic-compatible endpoint (https://api.deepseek.com/anthropic). Canonical model: deepseek-flash (DeepSeek V4.1 Flash); the deepseek-v4-pro alias is currently routed to and billed as V4.1 Flash until V4.1 Pro launches. Requires only DEEPSEEK_API_KEY — no Docker/Tencent/MemoryProxy. An optional Tencent MemoryProxy route is available via `continuum auth deepseek --proxy`.",
   },
   environment: { owns: ["DEEPSEEK_API_KEY", "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"] },
   cliLaunch: {

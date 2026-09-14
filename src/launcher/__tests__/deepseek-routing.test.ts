@@ -3,7 +3,7 @@
  *
  * Proves the economic policy end-to-end through the Launcher (not just the
  * adapter): with no explicit choice the resolved model is always
- * deepseek-v4-flash, task size/difficulty never escalates, and Pro is reachable
+ * deepseek-flash, task size/difficulty never escalates, and Pro is reachable
  * ONLY through an explicit user/project/session preference. These are the
  * regression guards against any future reintroduction of automatic Pro.
  */
@@ -99,11 +99,11 @@ async function deepseekProject(defaultModel?: string) {
 }
 
 describe("DeepSeek Flash-by-default routing (launcher level)", () => {
-  it("1. no model provided → deepseek-v4-flash, labelled automatic", async () => {
+  it("1. no model provided → deepseek-flash, labelled automatic", async () => {
     const { deps, project } = await deepseekProject();
     const launcher = new Launcher(deps);
     const prep = await launcher.prepareLaunch({ projectKey: project.id, taskGoal: "hello" }, { permissionMode: "safe" });
-    expect(prep.providerRef.model).toBe("deepseek-v4-flash");
+    expect(prep.providerRef.model).toBe("deepseek-flash");
     expect(prep.modelDecision.automatic).toBe(true);
     expect(prep.modelDecision.reason).toContain("automatic-default-flash");
   });
@@ -113,7 +113,7 @@ describe("DeepSeek Flash-by-default routing (launcher level)", () => {
     const launcher = new Launcher(deps);
     const hugeGoal = "audit this".repeat(10_000) + " " + "reason deeply about it";
     const prep = await launcher.prepareLaunch({ projectKey: project.id, taskGoal: hugeGoal }, { permissionMode: "safe" });
-    expect(prep.providerRef.model).toBe("deepseek-v4-flash");
+    expect(prep.providerRef.model).toBe("deepseek-flash");
     expect(prep.modelDecision.automatic).toBe(true);
   });
 
@@ -147,9 +147,9 @@ describe("DeepSeek Flash-by-default routing (launcher level)", () => {
     const { deps, project } = await deepseekProject();
     const launcher = new Launcher(deps);
     const first = await launcher.prepareLaunch({ projectKey: project.id, taskGoal: "first" }, { permissionMode: "safe" });
-    expect(first.providerRef.model).toBe("deepseek-v4-flash");
+    expect(first.providerRef.model).toBe("deepseek-flash");
     const resumed = await launcher.prepareLaunch({ projectKey: project.id, sessionId: first.session!.sessionId }, { permissionMode: "safe" });
-    expect(resumed.providerRef.model).toBe("deepseek-v4-flash");
+    expect(resumed.providerRef.model).toBe("deepseek-flash");
     expect(resumed.modelDecision.automatic).toBe(true);
   });
 
@@ -173,10 +173,10 @@ describe("DeepSeek Flash-by-default routing (launcher level)", () => {
       { projectKey: project.id, sessionId: first.session!.sessionId, modelAlias: "flash" },
       { permissionMode: "safe" },
     );
-    expect(switched.providerRef.model).toBe("deepseek-v4-flash");
+    expect(switched.providerRef.model).toBe("deepseek-flash");
     // A further resume with no override is Flash again.
     const again = await launcher.prepareLaunch({ projectKey: project.id, sessionId: first.session!.sessionId }, { permissionMode: "safe" });
-    expect(again.providerRef.model).toBe("deepseek-v4-flash");
+    expect(again.providerRef.model).toBe("deepseek-flash");
   });
 
   it("7. an unauthenticated/failed DeepSeek launch never silently retries on Pro", async () => {
@@ -185,7 +185,7 @@ describe("DeepSeek Flash-by-default routing (launcher level)", () => {
     // The routing decision is made BEFORE any network attempt; a "failure" is
     // surfaced as an error (or a Flash plan), never an escalated Pro plan.
     const prep = await launcher.prepareLaunch({ projectKey: project.id, taskGoal: "x" }, { permissionMode: "safe" });
-    expect(prep.providerRef.model).toBe("deepseek-v4-flash");
+    expect(prep.providerRef.model).toBe("deepseek-flash");
     // No retry/fallback tier is present on the plan.
     expect(prep.plan.env.ANTHROPIC_MODEL).toBe("sonnet");
     expect(prep.plan.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("claude-opus-5");
@@ -193,7 +193,46 @@ describe("DeepSeek Flash-by-default routing (launcher level)", () => {
     expect(prep.plan.env.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe("claude-fable-5");
     // haiku + subagent are not override-able by Claude Code — env carries the
     // provider model directly so no claude-* id leaks upstream.
-    expect(prep.plan.env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("deepseek-v4-flash");
-    expect(prep.plan.env.CLAUDE_CODE_SUBAGENT_MODEL).toBe("deepseek-v4-flash");
+    expect(prep.plan.env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("deepseek-flash");
+    expect(prep.plan.env.CLAUDE_CODE_SUBAGENT_MODEL).toBe("deepseek-flash");
+  });
+});
+
+describe("DeepSeek legacy-model normalization (September 2026)", () => {
+  it("a project saved with the legacy deepseek-v4-flash default normalizes to the canonical deepseek-flash", async () => {
+    const { deps, project } = await deepseekProject("deepseek-v4-flash");
+    const launcher = new Launcher(deps);
+    const prep = await launcher.prepareLaunch({ projectKey: project.id, taskGoal: "x" }, { permissionMode: "safe" });
+    expect(prep.providerRef.model).toBe("deepseek-flash");
+    expect(prep.modelDecision.automatic).toBe(false); // explicit (stored) preference, normalized
+  });
+
+  it("a project saved with a [1m]-suffixed legacy id normalizes too", async () => {
+    const { deps, project } = await deepseekProject("deepseek-v4-flash[1m]");
+    const launcher = new Launcher(deps);
+    const prep = await launcher.prepareLaunch({ projectKey: project.id, taskGoal: "x" }, { permissionMode: "safe" });
+    expect(prep.providerRef.model).toBe("deepseek-flash");
+  });
+
+  it("an explicit legacy alias selection normalizes to the canonical id", async () => {
+    const { deps, project } = await deepseekProject();
+    const launcher = new Launcher(deps);
+    const prep = await launcher.prepareLaunch({ projectKey: project.id, modelAlias: "deepseek-v4-flash", taskGoal: "x" }, { permissionMode: "safe" });
+    expect(prep.providerRef.model).toBe("deepseek-flash");
+  });
+
+  it("explicit Pro selections keep the pro alias (DeepSeek serves it as V4.1 Flash today)", async () => {
+    const { deps, project } = await deepseekProject();
+    const launcher = new Launcher(deps);
+    const prep = await launcher.prepareLaunch({ projectKey: project.id, modelAlias: "deepseek-v4-pro", taskGoal: "x" }, { permissionMode: "safe" });
+    expect(prep.providerRef.model).toBe("deepseek-v4-pro");
+    const flash = await launcher.prepareLaunch({ projectKey: project.id, modelAlias: "pro[1m]", taskGoal: "x" }, { permissionMode: "safe" });
+    expect(flash.providerRef.model).toBe("deepseek-v4-pro");
+  });
+
+  it("the nonexistent deepseek-v4.1-flash id is refused, never silently routed", async () => {
+    const { deps, project } = await deepseekProject();
+    const launcher = new Launcher(deps);
+    await expect(launcher.prepareLaunch({ projectKey: project.id, modelAlias: "deepseek-v4.1-flash", taskGoal: "x" }, { permissionMode: "safe" })).rejects.toThrowError(/has no model mapping for alias "deepseek-v4\.1-flash"/);
   });
 });
